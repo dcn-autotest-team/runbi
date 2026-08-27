@@ -1,0 +1,46 @@
+{
+  "name": "runbi-chrome-extension",
+  "version": "1.0.0",
+  "description": "润笔 (Runbi) - AI-powered browser text polishing Chrome Extension (Manifest V3)",
+  "type": "module",
+  "workspaces": [
+    "shared",
+    "desktop"
+  ],
+  "scripts": {
+    "dev": "vite",
+    "dev:desktop": "npm --prefix desktop run tauri dev",
+    "build": "npm run build:shared && npm run build:extension",
+    "build:shared": "tsc -p shared/tsconfig.json --noEmit",
+    "build:extension": "tsc && vite build",
+    "build:desktop": "npm --prefix desktop run build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "generate-icons": "python scripts/generate_icons.py"
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "diff": "^7.0.0",
+    "lucide-react": "^0.475.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tailwind-merge": "^3.0.1"
+  },
+  "devDependencies": {
+    "@crxjs/vite-plugin": "^2.0.0-beta.28",
+    "@types/chrome": "^0.0.306",
+    "@types/diff": "^7.0.0",
+    "@types/node": "^22.13.4",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "jsdom": "^26.0.0",
+    "postcss": "^8.5.2",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.7.3",
+    "vite": "^5.4.14",
+    "vitest": "^3.0.5"
+  }
+}

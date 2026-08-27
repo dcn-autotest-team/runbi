@@ -1,0 +1,40 @@
+{
+  "name": "@runbi/shared",
+  "version": "1.0.0",
+  "description": "100% Platform-Agnostic Shared Core, Algorithms & UI Components for Runbi",
+  "type": "module",
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "exports": {
+    ".": {
+      "types": "./index.ts",
+      "import": "./index.ts"
+    },
+    "./components": {
+      "types": "./components/index.ts",
+      "import": "./components/index.ts"
+    },
+    "./core": {
+      "types": "./core/index.ts",
+      "import": "./core/index.ts"
+    },
+    "./adapters": {
+      "types": "./adapters/index.ts",
+      "import": "./adapters/index.ts"
+    },
+    "./types": {
+      "types": "./types/index.ts",
+      "import": "./types/index.ts"
+    }
+  },
+  "peerDependencies": {
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0"
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "diff": "^7.0.0",
+    "lucide-react": "^0.475.0",
+    "tailwind-merge": "^3.0.1"
+  }
+}

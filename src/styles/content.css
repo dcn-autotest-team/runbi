@@ -1,0 +1,125 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Reset styles inside Shadow DOM */
+:host {
+  all: initial;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #1e293b;
+  box-sizing: border-box;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* Custom Scrollbar for Shadow DOM panels */
+.runbi-scrollbar::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+.runbi-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.runbi-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.4);
+  border-radius: 9999px;
+}
+
+.runbi-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.7);
+}
+
+/* Jade glow animation */
+@keyframes runbi-pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 10px rgba(0, 191, 165, 0.4), 0 0 20px rgba(0, 191, 165, 0.2);
+  }
+  50% {
+    box-shadow: 0 0 16px rgba(0, 191, 165, 0.7), 0 0 30px rgba(0, 191, 165, 0.4);
+  }
+}
+
+.animate-pulse-glow {
+  animation: runbi-pulse-glow 2s infinite ease-in-out;
+}
+
+/* Capsule pop-in animation */
+@keyframes runbi-pop-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.7);
+  }
+  70% {
+    transform: scale(1.08);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-pop-in {
+  animation: runbi-pop-in 0.18s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Panel fade/scale in */
+@keyframes runbi-panel-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.96) translateY(4px);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.animate-panel-in {
+  animation: runbi-panel-in 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Toast fade in / slide up */
+@keyframes runbi-toast-in {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, 8px);
+  }
+  100% {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+.animate-toast-in {
+  animation: runbi-toast-in 0.2s ease-out forwards;
+}
+
+/* Cursor blink for typewriter */
+@keyframes runbi-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.animate-cursor-blink {
+  animation: runbi-blink 0.8s infinite;
+}
+
+/* Replacement feedback flash */
+@keyframes runbi-flash-green {
+  0% { background-color: rgba(0, 191, 165, 0.3); }
+  100% { background-color: transparent; }
+}
+
+.animate-replace-flash {
+  animation: runbi-flash-green 0.6s ease-out;
+}

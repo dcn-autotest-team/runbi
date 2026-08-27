@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>润笔 (Runbi) - Hostile CSS Isolation & Validation Testbed</title>
+
+  <!-- Aggressive Hostile CSS Resets specified in M5 requirements -->
+  <style>
+    * {
+      margin: 0 !important;
+      padding: 0 !important;
+      font-size: 8px !important;
+      font-family: 'Comic Sans MS', cursive !important;
+      line-height: 0.5 !important;
+      color: #ff0000 !important;
+      box-sizing: content-box !important;
+      text-transform: uppercase !important;
+      letter-spacing: -2px !important;
+    }
+
+    /* Container layout to organize the testbed visually while host styles remain hostile */
+    html, body {
+      background-color: #0f172a !important;
+      color: #ff0000 !important;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    .testbed-wrapper {
+      display: flex !important;
+      flex-direction: column !important;
+      gap: 16px !important;
+      padding: 10px !important;
+      max-width: 1200px !important;
+      margin: 0 auto !important;
+    }
+
+    .test-card {
+      border: 2px dashed #ff0000 !important;
+      background: rgba(255, 0, 0, 0.05) !important;
+      padding: 8px !important;
+      position: relative !important;
+    }
+
+    .test-card-title {
+      font-weight: bold !important;
+      display: block !important;
+      margin-bottom: 4px !important;
+    }
+
+    .test-actions {
+      display: flex !important;
+      gap: 6px !important;
+      margin-top: 6px !important;
+      flex-wrap: wrap !important;
+    }
+
+    button.test-btn {
+      background: #330000 !important;
+      border: 1px solid #ff0000 !important;
+      cursor: pointer !important;
+      padding: 4px 8px !important;
+    }
+
+    button.test-btn:hover {
+      background: #660000 !important;
+    }
+
+    /* Interactive editable controls */
+    textarea.hostile-textarea {
+      width: 95% !important;
+      height: 60px !important;
+      background: #1e1e1e !important;
+      border: 1px solid #ff0000 !important;
+      display: block !important;
+    }
+
+    input.hostile-input {
+      width: 95% !important;
+      height: 24px !important;
+      background: #1e1e1e !important;
+      border: 1px solid #ff0000 !important;
+      display: block !important;
+    }
+
+    .hostile-contenteditable {
+      width: 95% !important;
+      min-height: 50px !important;
+      background: #1e1e1e !important;
+      border: 1px solid #ff0000 !important;
+      display: block !important;
+    }
+
+    /* Section 1: Top edge specific styling (<40px) */
+    .top-edge-zone {
+      position: absolute !important;
+      top: 5px !important;
+      left: 10px !important;
+      right: 10px !important;
+      z-index: 100 !important;
+    }
+
+    /* Section 6: Right edge specific styling */
+    .right-edge-zone {
+      position: absolute !important;
+      right: 10px !important;
+      top: 180px !important;
+      width: 260px !important;
+      z-index: 90 !important;
+    }
+
+    .status-panel {
+      border: 1px solid #00ff00 !important;
+      color: #00ff00 !important;
+      background: rgba(0, 255, 0, 0.1) !important;
+      padding: 6px !important;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Section 1: Top Boundary Edge Case (< 40px top) to test downward flip -->
+  <div id="section-1-top" class="test-card top-edge-zone">
+    <span class="test-card-title">[SECTION 1: TOP BOUNDARY COLLISION (&lt;40PX TOP)]</span>
+    <p id="top-boundary-text">TOP EDGE SELECTION TEST: 顶部边缘划词测试——此处距离视窗顶部仅5PX（&lt;40PX），悬浮微标与主面板应自动下翻至选区下方，防止被浏览器标签栏遮挡。</p>
+    <div class="test-actions">
+      <button type="button" class="test-btn" onclick="selectElementText('top-boundary-text')">Select Top Edge Text</button>
+    </div>
+  </div>
+
+  <div class="testbed-wrapper" style="margin-top: 90px !important;">
+    
+    <!-- Testbed Control & Diagnostics Header -->
+    <div class="test-card">
+      <span class="test-card-title">RUNBI HOSTILE CSS ISOLATION TESTBED (M5 VALIDATION)</span>
+      <p>Hostile Resets Active: Comic Sans 8px uppercase red text with content-box and negative letter-spacing.</p>
+      <p>Observe: Runbi's floating capsule and glassmorphism panel inside Shadow DOM MUST maintain pristine typography, Jade green accents, and 380px panel dimensions without corruption.</p>
+      <div id="isolation-status" class="status-panel" style="margin-top: 6px !important;">
+        Shadow DOM Status: Checking...
+      </div>
+      <div class="test-actions">
+        <button type="button" class="test-btn" onclick="checkShadowIsolation()">Inspect Shadow DOM State</button>
+        <button type="button" class="test-btn" onclick="triggerManualMount()">Re-Mount Runbi</button>
+        <button type="button" class="test-btn" onclick="readTestClipboard()">Test Read Clipboard</button>
+        <button type="button" class="test-btn" onclick="location.href='index.html'">Go to Clean Preview Harness</button>
+      </div>
+    </div>
+
+    <!-- Section 2: Static Text Selection -->
+    <div id="section-2-static" class="test-card">
+      <span class="test-card-title">[SECTION 2: STATIC TEXT SELECTION &amp; CAPSULE TRIGGER]</span>
+      <p id="static-test-text">静态文本划词测试：在本文段内划选任意文字（长度≥2字符），150MS防抖后光标右上方将平滑浮现28PX翡翠绿悬浮微标。点击微标可无缝展开主润色面板。</p>
+      <div class="test-actions">
+        <button type="button" class="test-btn" onclick="selectElementText('static-test-text')">Select Static Paragraph</button>
+      </div>
+    </div>
+
+    <!-- Section 3: <textarea> In-Place Replacement testbed -->
+    <div id="section-3-textarea" class="test-card">
+      <span class="test-card-title">[SECTION 3: &lt;TEXTAREA&gt; IN-PLACE REPLACEMENT TESTBED]</span>
+      <p>Select text inside the textarea, open panel, click "一键替换 (Replace)", and verify instant value update &amp; input event dispatch.</p>
+      <textarea id="test-textarea" class="hostile-textarea">尊敬的李总：关于上周讨论的合作协议草案，我们团队觉得大体上没啥问题，但有几个地方还得再合计合计。请您过目。</textarea>
+      <div class="test-actions">
+        <button type="button" class="test-btn" onclick="selectInputContent('test-textarea')">Select Textarea Text</button>
+        <span id="textarea-event-log" style="color: #ffff00 !important;">Input Events: 0</span>
+      </div>
+    </div>
+
+    <!-- Section 4: <input type="text"> In-Place Replacement testbed -->
+    <div id="section-4-input" class="test-card">
+      <span class="test-card-title">[SECTION 4: &lt;INPUT TYPE="TEXT"&gt; IN-PLACE REPLACEMENT TESTBED]</span>
+      <p>Select text inside single-line input field and test in-place replacement.</p>
+      <input type="text" id="test-input" class="hostile-input" value="【通知】关于明天上午项目进度汇报会议的紧急改期事宜" />
+      <div class="test-actions">
+        <button type="button" class="test-btn" onclick="selectInputContent('test-input')">Select Input Text</button>
+        <span id="input-event-log" style="color: #ffff00 !important;">Input Events: 0</span>
+      </div>
+    </div>
+
+    <!-- Section 5: [contenteditable="true"] Rich Text Replacement testbed -->
+    <div id="section-5-contenteditable" class="test-card">
+      <span class="test-card-title">[SECTION 5: [CONTENTEDITABLE="TRUE"] RICH TEXT REPLACEMENT TESTBED]</span>
+      <p>Select rich text below, polish, and replace in-place via selection Range restoration:</p>
+      <div id="test-contenteditable" class="hostile-contenteditable" contenteditable="true">
+        富文本编辑器就地替换测试：在知乎/Notion/飞书等富文本框中划选<b>本段加粗文字</b>，润色后点击替换，系统将精准就地更新文本并保留节点结构。
+      </div>
+      <div class="test-actions">
+        <button type="button" class="test-btn" onclick="selectElementText('test-contenteditable')">Select Rich Text</button>
+      </div>
+    </div>
+
+    <!-- Section 6: Right Viewport Boundary Test to test leftward flip -->
+    <div id="section-6-right" class="test-card right-edge-zone">
+      <span class="test-card-title">[SECTION 6: RIGHT VIEWPORT COLLISION]</span>
+      <p id="right-boundary-text">RIGHT EDGE TEST: 靠右边缘划词测试——当选区靠近屏幕右侧边界时，悬浮面板应自动向左翻转吸附。</p>
+      <div class="test-actions">
+        <button type="button" class="test-btn" onclick="selectElementText('right-boundary-text')">Select Right Edge Text</button>
+      </div>
+    </div>
+
+    <!-- Section 7: Multi-Tab / 6-Scene style streaming simulation -->
+    <div id="section-7-scenes" class="test-card" style="margin-top: 80px !important;">
+      <span class="test-card-title">[SECTION 7: 6-SCENE STYLE PRESET STREAMING SIMULATION]</span>
+      <p>Click any button below to auto-select sample text for specific polishing styles and verify 60fps streaming &amp; prompt switching:</p>
+      <div class="test-actions">
+        <button type="button" class="test-btn" onclick="selectSampleText('scene-polished')">1. 通用 (Polished)</button>
+        <button type="button" class="test-btn" onclick="selectSampleText('scene-academic')">2. 学术 (Academic)</button>
+        <button type="button" class="test-btn" onclick="selectSampleText('scene-business')">3. 职场 (Business)</button>
+        <button type="button" class="test-btn" onclick="selectSampleText('scene-literary')">4. 文采 (Literary)</button>
+        <button type="button" class="test-btn" onclick="selectSampleText('scene-concise')">5. 精简 (Concise)</button>
+        <button type="button" class="test-btn" onclick="selectSampleText('scene-native')">6. 英文 (Native EN)</button>
+      </div>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px;">
+        <p id="scene-polished">【通用预设】这个产品整体还行，但是用起来不太顺手，希望能改改。</p>
+        <p id="scene-academic">【学术预设】我们做了一个很厉害的实验，效果比以前的算法好很多很多。</p>
+        <p id="scene-business">【职场预设】老王，你那个报告什么时候给我？快点，催得急。</p>
+        <p id="scene-literary">【文采预设】秋天的风吹过树叶，树叶落在了地上，感觉挺孤独的。</p>
+        <p id="scene-concise">【精简预设】基于现阶段所面临的各项不可预见之客观因素，我们决定将本次原定之研讨会议延期至下周同时间举行。</p>
+        <p id="scene-native">【地道英文】人工智能正在深刻地改变着现代软件工程的方方面面。</p>
+      </div>
+    </div>
+
+    <!-- Section 8: Diff mode visualization test -->
+    <div id="section-8-diff" class="test-card">
+      <span class="test-card-title">[SECTION 8: DIFF MODE VISUALIZATION TEST]</span>
+      <p id="diff-test-text">DIFF 对比测试：我们这个方案基本上来说大体上已经差不多搞定了，只是有一些小细节还需要再稍微修饰一下。</p>
+      <p>Select the sentence above, expand panel, toggle [Diff] button in top-right, and verify deletion strikethrough and insertion underline.</p>
+      <div class="test-actions">
+        <button type="button" class="test-btn" onclick="selectElementText('diff-test-text')">Select Diff Test Text</button>
+      </div>
+    </div>
+
+    <!-- Section 9: Copy to clipboard and Toast verification -->
+    <div id="section-9-copy" class="test-card">
+      <span class="test-card-title">[SECTION 9: COPY TO CLIPBOARD &amp; TOAST VERIFICATION]</span>
+      <p id="copy-test-text">复制与提示测试：润笔 AI 划词润色助手具备一键复制终稿至剪贴板能力，并触发 1.5S 优雅浮层 TOAST 提示。</p>
+      <div class="test-actions">
+        <button type="button" class="test-btn" onclick="selectElementText('copy-test-text')">Select Copy Text</button>
+        <button type="button" class="test-btn" onclick="readTestClipboard()">Inspect Current Clipboard Text</button>
+      </div>
+      <div id="clipboard-display" style="margin-top: 4px; color: #00ffff !important;">
+        Clipboard content: (click inspect to check)
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Interactive Testbed Helper Scripts -->
+  <script>
+    // Track textarea and input events
+    let textareaEvents = 0;
+    const textareaEl = document.getElementById('test-textarea');
+    if (textareaEl) {
+      textareaEl.addEventListener('input', () => {
+        textareaEvents++;
+        const log = document.getElementById('textarea-event-log');
+        if (log) log.textContent = 'Input Events: ' + textareaEvents;
+      });
+    }
+
+    let inputEvents = 0;
+    const inputEl = document.getElementById('test-input');
+    if (inputEl) {
+      inputEl.addEventListener('input', () => {
+        inputEvents++;
+        const log = document.getElementById('input-event-log');
+        if (log) log.textContent = 'Input Events: ' + inputEvents;
+      });
+    }
+
+    // Programmatic text selection helpers for manual validation
+    function selectElementText(elementId) {
+      const el = document.getElementById(elementId);
+      if (!el) return;
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      // Dispatch mouseup to trigger Runbi listener
+      const rect = range.getBoundingClientRect();
+      document.dispatchEvent(new MouseEvent('mouseup', {
+        bubbles: true,
+        clientX: rect.right,
+        clientY: rect.bottom
+      }));
+    }
+
+    function selectInputContent(inputId) {
+      const el = document.getElementById(inputId);
+      if (!el) return;
+      el.focus();
+      el.select();
+      const rect = el.getBoundingClientRect();
+      document.dispatchEvent(new MouseEvent('mouseup', {
+        bubbles: true,
+        clientX: rect.right,
+        clientY: rect.bottom
+      }));
+    }
+
+    function selectSampleText(sampleId) {
+      selectElementText(sampleId);
+    }
+
+    // Shadow DOM Isolation Inspector
+    function checkShadowIsolation() {
+      const host = document.getElementById('runbi-extension-root');
+      const statusEl = document.getElementById('isolation-status');
+      if (!host) {
+        if (statusEl) statusEl.textContent = 'Shadow DOM Status: ❌ Host element (#runbi-extension-root) not found yet.';
+        return;
+      }
+      const shadow = host.shadowRoot;
+      if (!shadow) {
+        if (statusEl) statusEl.textContent = 'Shadow DOM Status: ❌ Shadow root not attached or closed.';
+        return;
+      }
+      const container = shadow.getElementById('runbi-app-container');
+      const styleEl = shadow.querySelector('style');
+      const hasTailwind = styleEl && styleEl.textContent.length > 500;
+      
+      if (statusEl) {
+        statusEl.textContent = `Shadow DOM Status: ✅ Host (#runbi-extension-root) mounted | Mode: ${shadow.mode} | Container: ${container ? 'Present' : 'Missing'} | Scoped CSS: ${hasTailwind ? 'Injected (' + styleEl.textContent.length + ' bytes)' : 'Pending'}`;
+      }
+    }
+
+    async function readTestClipboard() {
+      const display = document.getElementById('clipboard-display');
+      try {
+        if (navigator.clipboard && navigator.clipboard.readText) {
+          const text = await navigator.clipboard.readText();
+          if (display) display.textContent = 'Clipboard content: "' + text + '"';
+        } else {
+          if (display) display.textContent = 'Clipboard API not accessible in this context.';
+        }
+      } catch (err) {
+        if (display) display.textContent = 'Clipboard read failed: ' + err.message;
+      }
+    }
+
+    function triggerManualMount() {
+      if (window.mountRunbi) {
+        window.mountRunbi();
+        checkShadowIsolation();
+      }
+    }
+
+    // Auto-check isolation status on load
+    window.addEventListener('load', () => {
+      setTimeout(checkShadowIsolation, 500);
+    });
+  </script>
+
+  <!-- Load Content Script into Shadow DOM -->
+  <script type="module" src="/src/content/index.ts"></script>
+</body>
+</html>

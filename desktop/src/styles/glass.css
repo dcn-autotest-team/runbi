@@ -1,0 +1,152 @@
+/**
+ * @file desktop/src/styles/glass.css
+ * Acrylic Blur & Dark Glassmorphism Design System for Runbi Desktop
+ */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Brand Colors */
+  --runbi-jade-primary: #00BFA5;
+  --runbi-jade-hover: #00A892;
+  --runbi-jade-active: #008F7C;
+  --runbi-jade-glow: rgba(0, 191, 165, 0.35);
+
+  /* Dark Acrylic Glass Tokens */
+  --runbi-acrylic-bg: rgba(18, 26, 28, 0.84);
+  --runbi-acrylic-card: rgba(28, 40, 44, 0.65);
+  --runbi-acrylic-input: rgba(14, 20, 22, 0.75);
+  --runbi-acrylic-border: rgba(255, 255, 255, 0.12);
+  --runbi-acrylic-border-glow: rgba(0, 191, 165, 0.45);
+  
+  /* Text Tokens */
+  --runbi-text-primary: #F8FAFC;
+  --runbi-text-secondary: #94A3B8;
+  --runbi-text-muted: #64748B;
+  
+  /* Diff Tokens */
+  --runbi-diff-del-bg: rgba(239, 68, 68, 0.22);
+  --runbi-diff-del-text: #F87171;
+  --runbi-diff-ins-bg: rgba(16, 185, 129, 0.22);
+  --runbi-diff-ins-text: #34D399;
+}
+
+/* Tauri Frameless Drag Regions */
+[data-tauri-drag-region] {
+  -webkit-app-region: drag;
+  user-select: none;
+  cursor: grab;
+}
+
+[data-tauri-drag-region]:active {
+  cursor: grabbing;
+}
+
+/* Ensure interactive children inside drag regions can receive pointer events */
+[data-tauri-drag-region] button,
+[data-tauri-drag-region] input,
+[data-tauri-drag-region] textarea,
+[data-tauri-drag-region] a,
+[data-tauri-drag-region] select,
+[data-tauri-drag-region] [role="button"],
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* Raycast Glass Floating Window Container */
+.raycast-window {
+  width: 100%;
+  max-width: 480px;
+  background: var(--runbi-acrylic-bg);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid var(--runbi-acrylic-border);
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7),
+              0 0 0 1px rgba(255, 255, 255, 0.08) inset,
+              0 10px 30px -5px rgba(0, 191, 165, 0.18);
+  border-radius: 18px;
+  overflow: hidden;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.raycast-window:focus-within {
+  border-color: var(--runbi-acrylic-border-glow);
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.75),
+              0 0 0 1px rgba(0, 191, 165, 0.25) inset,
+              0 12px 36px -4px rgba(0, 191, 165, 0.25);
+}
+
+/* Acrylic Cards */
+.acrylic-card {
+  background: var(--runbi-acrylic-card);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--runbi-acrylic-border);
+  border-radius: 12px;
+}
+
+/* Spotlight Search & Instruction Input */
+.spotlight-input {
+  background: var(--runbi-acrylic-input);
+  border: 1px solid var(--runbi-acrylic-border);
+  color: var(--runbi-text-primary);
+  transition: all 0.15s ease-in-out;
+}
+
+.spotlight-input:focus {
+  outline: none;
+  border-color: var(--runbi-jade-primary);
+  box-shadow: 0 0 0 2px rgba(0, 191, 165, 0.25);
+}
+
+/* Shortcut Badges */
+.kbd-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.15rem 0.35rem;
+  font-size: 0.65rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-weight: 600;
+  color: #94A3B8;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+  line-height: 1;
+}
+
+/* Custom Ultra-Thin Scrollbars */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--runbi-jade-primary);
+}
+
+/* Typewriter Cursor */
+.typewriter-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1.1em;
+  vertical-align: text-bottom;
+  background-color: var(--runbi-jade-primary);
+  margin-left: 2px;
+  animation: typewriterBlink 0.9s infinite cubic-bezier(0.65, 0, 0.35, 1);
+}
+
+@keyframes typewriterBlink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
