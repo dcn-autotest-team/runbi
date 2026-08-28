@@ -41,3 +41,16 @@ cargo test --release -- --ignored
 
 - 镜像新版入口在 `/code/bin/`(run-migrate.sh / run-worker.sh),旧文档的 `./run.sh` 已失效
 - 首次启动必须手动跑一次迁移,否则建项目会报 `relation does not exist`
+- GlitchTip 的事件经 celery worker 异步落库:**compose 必须包含 worker 服务**,否则 store 接口返回 200 但事件永远躺在队列里(UI Issues 恒 0)
+
+## 验证记录(2026-08-29)
+
+三条上报路径实测全部落库(事件计数 4,三方独立验证):
+
+| 路径 | 事件 | 验证人 |
+|---|---|---|
+| curl 原始 Sentry store 协议 | `13e5bd74` | LobsterAI |
+| Rust SDK 冒烟测试(`sentry` crate,`cargo test -- --ignored`) | `e8dc719b` | LobsterAI |
+| 扩展端 `telemetry.ts`(makeFetchTransport,MV3 SW,opt-in) | `dafc4f09` | Agent_F75E |
+
+扩展端集成见 commit `36945c1`(telemetry.ts + options UI 开关,DSN 存 chrome.storage,默认关)。
