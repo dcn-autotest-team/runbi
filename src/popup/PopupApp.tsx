@@ -95,6 +95,7 @@ export const PopupApp: React.FC<PopupAppProps> = ({ storageProvider: injectedSto
   const [isDomainDisabled, setIsDomainDisabled] = useState<boolean>(false);
   const [blacklist, setBlacklist] = useState<string[]>([]);
   const [saveToast, setSaveToast] = useState<string | null>(null);
+  const [hostGranted, setHostGranted] = useState<boolean | null>(null);
 
   // Load current settings and active tab domain
   useEffect(() => {
@@ -181,6 +182,37 @@ export const PopupApp: React.FC<PopupAppProps> = ({ storageProvider: injectedSto
       setTimeout(() => setSaveToast(null), 1500);
     } catch (_) {}
   }, [currentDomain, isDomainDisabled, blacklist, storage]);
+
+  // Check whether the https://*/* optional host permission is already granted
+  useEffect(() => {
+    if (typeof chrome === 'undefined' || !chrome.permissions?.contains) {
+      return;
+    }
+    let cancelled = false;
+    chrome.permissions.contains({ origins: ['https://*/*'] }).then((granted) => {
+      if (!cancelled) setHostGranted(granted);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  // Grant cross-origin access so the extension can reach the configured LLM API.
+  // Must run inside a user gesture (popup button click).
+  const handleGrantHostAccess = useCallback(async () => {
+    if (typeof chrome === 'undefined' || !chrome.permissions?.request) {
+      setSaveToast('当前环境不支持权限申请');
+      setTimeout(() => setSaveToast(null), 1500);
+      return;
+    }
+    try {
+      const granted = await chrome.permissions.request({ origins: ['https://*/*'] });
+      setHostGranted(granted);
+      setSaveToast(granted ? '已授权访问所有 HTTPS 站点' : '未授予访问权限');
+      setTimeout(() => setSaveToast(null), 1500);
+    } catch (err: any) {
+      setSaveToast(`授权失败: ${err?.message || String(err)}`);
+      setTimeout(() => setSaveToast(null), 2000);
+    }
+  }, []);
 
   // Open Options page
   const handleOpenOptions = useCallback(() => {
@@ -342,6 +374,33 @@ export const PopupApp: React.FC<PopupAppProps> = ({ storageProvider: injectedSto
               {isDomainDisabled ? '已禁用' : '已启用'}
             </span>
           </button>
+        </div>
+      )}
+
+      {/* Cross-origin permissions notice (requested on demand in MV3) */}
+      {hostGranted === false && (
+        <div className="mb-3 p-2.5 rounded-lg border border-amber-200 bg-amber-50">
+          <div className="text-[11px] font-semibold text-amber-800 mb-1 flex items-center gap-1">
+            <ShieldAlertIcon className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+            <span>需要访问 HTTPS 站点以连接模型 API</span>
+          </div>
+          <p className="text-[10px] text-amber-700 mb-2">
+            授权后润色请求才能发送到你的模型服务（仅 HTTPS 站点）。
+          </p>
+          <button
+            id="grant-host-access-btn"
+            type="button"
+            onClick={handleGrantHostAccess}
+            className="w-full py-1.5 rounded-lg text-xs font-semibold bg-[#00BFA5] text-white hover:bg-[#00A896] transition cursor-pointer"
+          >
+            一键授权划词
+          </button>
+        </div>
+      )}
+      {hostGranted === true && (
+        <div className="mb-3 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 text-[11px] font-medium">
+          <CheckIcon className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+          <span>已授权访问 HTTPS 站点</span>
         </div>
       )}
 

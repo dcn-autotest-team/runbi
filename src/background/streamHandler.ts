@@ -16,10 +16,11 @@ import { resolveEndpoint } from '@runbi/shared/core';
 export const STREAM_CHANNEL_NAME = 'runbi-stream-channel';
 
 /**
- * Ensures the extension has cross-origin permission for the given endpoint
- * before making an outbound fetch. Required since host permissions are
- * declared as `optional_host_permissions` (MV3) and granted on demand.
- * Returns an error message on failure, or null when the origin is allowed.
+ * Checks whether the extension already has cross-origin permission for the
+ * given endpoint. NOTE: this only *detects*; it never calls
+ * `chrome.permissions.request()` — that API must be invoked from a user
+ * gesture (popup/options page click), not from the background service worker.
+ * Returns an error message directing the user to grant access when missing.
  */
 export async function ensureOriginPermission(endpoint: string): Promise<string | null> {
   let origin: string;
@@ -30,30 +31,20 @@ export async function ensureOriginPermission(endpoint: string): Promise<string |
   }
 
   if (typeof chrome === 'undefined' || !chrome.permissions) {
-    // Non-extension context (tests / dev fallback): nothing to request.
+    // Non-extension context (tests / dev fallback): nothing to check.
     return null;
   }
 
   try {
-    const alreadyGranted = await chrome.permissions.contains({ origins: [origin] });
-    if (alreadyGranted) {
+    const granted = await chrome.permissions.contains({ origins: [origin] });
+    if (granted) {
       return null;
     }
   } catch (_) {
-    // contains() can reject in some contexts; fall through to a request attempt.
+    // contains() rejected in this context — treat as not verified.
   }
 
-  try {
-    // Match the wildcard if it is a subdomain of two-part TLD (e.g. co.uk) is
-    // covered by the https://*/* pattern; here we request the exact origin.
-    const granted = await chrome.permissions.request({ origins: [origin] });
-    if (!granted) {
-      return `未授予访问 ${origin} 的权限，请在浏览器扩展弹窗中允许后重试`;
-    }
-  } catch (err: any) {
-    return `申请访问 ${origin} 权限失败: ${err?.message || String(err)}`;
-  }
-  return null;
+  return `尚未授权访问 ${origin}。请点击扩展图标，在弹窗中点击「一键授权划词」，或到扩展详情页开启「网站访问权限」后重试。`;
 }
 
 export const DEFAULT_STYLE_PROMPTS: Record<PolishStyle, string> = {
