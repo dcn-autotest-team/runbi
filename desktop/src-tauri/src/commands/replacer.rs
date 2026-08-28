@@ -5,6 +5,7 @@
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tauri::{AppHandle, Manager, WebviewWindow};
+use tauri_plugin_clipboard_manager::ClipboardExt;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplacerResponse {
@@ -121,8 +122,8 @@ pub async fn replace_text(
     // 5. Restore original clipboard if requested
     if should_restore {
         tokio::time::sleep(Duration::from_millis(100)).await;
-        if let Some(old_text) = original_clip {
-            let _ = clipboard.write_text(&old_text);
+        if !original_clip.is_empty() {
+            let _ = clipboard.write_text(&original_clip);
         }
     }
 

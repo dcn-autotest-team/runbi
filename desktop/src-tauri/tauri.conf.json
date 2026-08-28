@@ -49,6 +49,6 @@
   "plugins": {
     "globalShortcut": {},
     "clipboardManager": {},
-    "store": {}
+    "store": null
   }
 }

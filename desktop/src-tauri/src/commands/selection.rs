@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tauri::{AppHandle, Manager, WebviewWindow};
+use tauri_plugin_clipboard_manager::ClipboardExt;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SelectionResult {
@@ -88,7 +89,7 @@ pub async fn get_current_selection(window: WebviewWindow) -> Result<SelectionRes
 
     // Read clipboard text
     let clipboard = window.app_handle().clipboard();
-    let text = clipboard.read_text().unwrap_or_default().unwrap_or_default();
+    let text = clipboard.read_text().unwrap_or_default();
 
     Ok(SelectionResult {
         text,
