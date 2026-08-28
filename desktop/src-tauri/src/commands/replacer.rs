@@ -20,6 +20,27 @@ fn paste_settle_delay(text_len: usize) -> Duration {
     Duration::from_millis((120 + text_len as u64 / 50).min(500))
 }
 
+const CLIPBOARD_POLL_INTERVAL: Duration = Duration::from_millis(20);
+
+/// Waits for the synthetic paste to be consumed before restoring the original
+/// clipboard. Polls `GetClipboardSequenceNumber`: a change means the target
+/// app (or the user) has read/replaced the clipboard, so we restore early.
+/// Bounded by a text-length deadline so we never hang on apps that paste
+/// without modifying the clipboard sequence number.
+async fn wait_for_paste_consumed(pre_seq: u32, text_len: usize) -> Duration {
+    let deadline = paste_settle_delay(text_len);
+    let start = std::time::Instant::now();
+    loop {
+        if get_clipboard_seq() != pre_seq {
+            return start.elapsed();
+        }
+        if start.elapsed() >= deadline {
+            return deadline;
+        }
+        tokio::time::sleep(CLIPBOARD_POLL_INTERVAL).await;
+    }
+}
+
 #[cfg(windows)]
 fn get_clipboard_seq() -> u32 {
     use windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber;
@@ -88,7 +109,7 @@ pub async fn replace_text(
         });
     }
 
-    let _pre_paste_seq = get_clipboard_seq();
+    let pre_paste_seq = get_clipboard_seq();
 
     // 4. Simulate Ctrl+V to paste
     #[cfg(windows)]
@@ -97,10 +118,12 @@ pub async fn replace_text(
     }
 
     // 5. Restore the original text, image, or empty clipboard after the target
-    // has had enough time to consume the synthetic paste event.
+    // has had enough time to consume the synthetic paste event. Poll the
+    // clipboard sequence number so we restore as soon as the app has read it,
+    // bounded by a text-length deadline to avoid hanging.
     let actually_restored = if should_restore {
         // Wait for target app to consume Ctrl+V from input queue and read clipboard
-        tokio::time::sleep(paste_settle_delay(new_text.chars().count())).await;
+        wait_for_paste_consumed(pre_paste_seq, new_text.chars().count()).await;
         let restored = snapshot.restore(app);
         let monitor_text = if restored {
             snapshot.text_for_monitor()
@@ -127,11 +150,24 @@ pub async fn replace_text(
 #[cfg(test)]
 mod tests {
     use super::paste_settle_delay;
+    use super::wait_for_paste_consumed;
+    use super::get_clipboard_seq;
 
     #[test]
     fn paste_delay_scales_without_becoming_unbounded() {
         assert_eq!(paste_settle_delay(0).as_millis(), 120);
         assert!(paste_settle_delay(5_000).as_millis() > 120);
         assert_eq!(paste_settle_delay(1_000_000).as_millis(), 500);
+    }
+
+    #[tokio::test]
+    async fn paste_waits_full_deadline_when_clipboard_unchanged() {
+        // When the clipboard sequence doesn't change, we must wait out the
+        // text-length deadline and then restore — never hang, never return early.
+        let seq = get_clipboard_seq();
+        let start = std::time::Instant::now();
+        let waited = wait_for_paste_consumed(seq, 0).await;
+        assert!(waited.as_millis() >= 120, "expected >= deadline, got {}", waited.as_millis());
+        assert!(start.elapsed().as_millis() >= 120);
     }
 }
