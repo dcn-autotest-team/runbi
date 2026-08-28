@@ -7,6 +7,19 @@ export default {
   theme: {
     extend: {
       colors: {
+        /* Brand unification: remap Tailwind teal onto the jade brand ramp (#00BFA5). */
+        teal: {
+          50: '#E6FAF7',
+          100: '#C2F2EA',
+          200: '#99E8DC',
+          300: '#4DDCC7',
+          400: '#0FD2B8',
+          500: '#00BFA5',
+          600: '#00A892',
+          700: '#008F7C',
+          800: '#06766A',
+          900: '#0A5F55'
+        },
         runbi: {
           jade: {
             DEFAULT: '#00BFA5',
