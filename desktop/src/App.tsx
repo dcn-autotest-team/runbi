@@ -24,6 +24,7 @@ window.addEventListener('unhandledrejection', (e) => {
 });
 import {
   classifyContext,
+  isScreenReplyPayload,
   buildScreenReplySystemPrompt,
   buildScreenReplyUserPrompt,
   buildScreenReplyRefinePrompt,
@@ -842,7 +843,7 @@ export const App: React.FC = () => {
         setShowEpoch((n) => n + 1); // remount panel container → replay enter animation
         invoke('append_log', { msg: 'frontend: epoch bumped' }).catch(() => {});
         const isSensitiveBlocked = event?.payload?.trigger === 'sensitive-blocked';
-        const isScreenReply = event?.payload?.trigger === 'screen-reply' && Boolean(event?.payload?.hasScreenshot);
+        const isScreenReply = isScreenReplyPayload(event?.payload);
         stateRef.current.hasScreenshot = isScreenReply;
         invoke('append_log', { msg: `frontend: flags computed sr=${isScreenReply} sens=${isSensitiveBlocked} rcs=${stateRef.current.readChatScreenshot}` }).catch(() => {});
 
@@ -1187,6 +1188,10 @@ export const App: React.FC = () => {
 
       if (e.key === 'Escape') {
         e.preventDefault();
+        if (s.showHistory) {
+          setShowHistory(false);
+          return;
+        }
         if (s.showSettings) {
           setShowSettings(false);
           return;
@@ -1205,8 +1210,22 @@ export const App: React.FC = () => {
         return;
       }
 
-      // Don't hijack keys while the user is editing a field or in settings.
-      if (typing || s.showSettings) return;
+      // History Drawer shortcut: Ctrl+H or Cmd+H
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'h' || e.key === 'H')) {
+        e.preventDefault();
+        setShowHistory((prev) => !prev);
+        return;
+      }
+
+      // Revert replacement shortcut: Ctrl+Z when not typing and lastReplacement exists
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z') && !typing && lastReplacement) {
+        e.preventDefault();
+        handleRevertReplace();
+        return;
+      }
+
+      // Don't hijack keys while the user is editing a field or in settings or in history.
+      if (typing || s.showSettings || s.showHistory) return;
 
       if (e.key === 'Enter') {
         e.preventDefault();
@@ -1223,8 +1242,8 @@ export const App: React.FC = () => {
     const onBlur = () => {
       const s = stateRef.current;
       // Raycast behavior: hide whenever focus leaves, unless pinned / generating /
-      // in settings / showing screen-reply analysis (user may peek at the chat).
-      if (!s.isPinned && !s.isGenerating && !s.showSettings && !s.screenReplyAnalysis) {
+      // in settings / in history / showing screen-reply analysis.
+      if (!s.isPinned && !s.isGenerating && !s.showSettings && !s.showHistory && !s.screenReplyAnalysis) {
         if (isTauri) {
           invoke('hide_window').catch(() => {});
         }
@@ -1286,6 +1305,29 @@ export const App: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-1">
+            {lastReplacement && (
+              <button
+                type="button"
+                onClick={handleRevertReplace}
+                title="撤回上次贴回，恢复目标应用原文 (Ctrl+Z)"
+                aria-label="撤回上次贴回"
+                className="runbi-icon-button !w-auto px-2 text-[11px] font-medium text-amber-300 hover:bg-amber-400/10 transition-colors cursor-pointer"
+              >
+                撤回贴回
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setShowHistory(!showHistory)}
+              aria-label={showHistory ? '关闭时光机' : '查看生成历史与草稿箱 (Ctrl+H)'}
+              aria-pressed={showHistory}
+              title="生成历史与草稿箱 (Ctrl+H)"
+              className={`runbi-icon-button ${
+                showHistory ? 'bg-teal-500/10 !text-teal-300' : ''
+              }`}
+            >
+              <History className="h-4 w-4" />
+            </button>
             <button
               type="button"
               onClick={handleTogglePin}
@@ -1324,6 +1366,41 @@ export const App: React.FC = () => {
             </button>
           </div>
         </div>
+
+        {/* Draft Auto-Recovery Banner */}
+        {recoverableDraft && !showHistory && !showSettings && (
+          <div className="flex shrink-0 items-center justify-between border-b border-teal-500/20 bg-teal-500/10 px-3.5 py-1.5 text-xs text-teal-300">
+            <span className="truncate pr-2">
+              发现上次未完成草稿（{(recoverableDraft.originalText || recoverableDraft.polishedText || '').slice(0, 16)}...）
+            </span>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  if (recoverableDraft.originalText) setOriginalText(recoverableDraft.originalText);
+                  if (recoverableDraft.polishedText) setPolishedText(recoverableDraft.polishedText);
+                  if (recoverableDraft.activeStyle) setActiveStyle(recoverableDraft.activeStyle);
+                  setRecoverableDraft(null);
+                  adapters.storageProvider.remove('activeDraft').catch(() => {});
+                  showToast('已恢复上次草稿');
+                }}
+                className="rounded bg-teal-500/20 px-2 py-0.5 font-medium hover:bg-teal-500/30 text-white cursor-pointer"
+              >
+                立即恢复
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setRecoverableDraft(null);
+                  adapters.storageProvider.remove('activeDraft').catch(() => {});
+                }}
+                className="text-slate-400 hover:text-slate-200 cursor-pointer text-[11px]"
+              >
+                忽略
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Settings Modal Body */}
         {showSettings ? (
@@ -1597,6 +1674,26 @@ export const App: React.FC = () => {
             replaceLabel="贴回"
           />
         )}
+
+        {/* History Drawer Modal */}
+        <HistoryDrawer
+          isOpen={showHistory}
+          history={history}
+          onClose={() => setShowHistory(false)}
+          onRestore={(record) => {
+            setOriginalText(record.originalText);
+            setPolishedText(record.polishedText);
+            setActiveStyle(record.style);
+            setShowHistory(false);
+            showToast('已恢复所选记录至主面板');
+          }}
+          onDelete={deleteHistoryRecord}
+          onClearAll={clearAllHistory}
+          onCopyText={async (text) => {
+            await adapters.textReplacer.copyToClipboard(text);
+            showToast('已复制到剪贴板');
+          }}
+        />
 
       </div>
     </div>

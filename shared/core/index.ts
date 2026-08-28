@@ -10,3 +10,4 @@ export * from './selection';
 export * from './position';
 export * from './context';
 export * from './endpoint';
+export * from './capturedSelection';
