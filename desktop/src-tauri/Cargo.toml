@@ -15,11 +15,15 @@ tauri-plugin-global-shortcut = "2.2"
 tauri-plugin-clipboard-manager = "2.2"
 tauri-plugin-single-instance = "2.2"
 tauri-plugin-store = "2.2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", features = ["json", "stream"] }
+# 错误遥测(GlitchTip/Sentry 协议):仅在 RUNBI_GLITCHTIP_DSN 环境变量存在时启用,默认不上报(隐私优先)
+sentry = { version = "0.36", default-features = false, features = ["backtrace", "contexts", "panic", "reqwest"] }
 futures-util = "0.3"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 base64 = "0.22"

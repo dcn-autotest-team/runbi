@@ -8,6 +8,22 @@ use tauri::{Emitter, Manager, WindowEvent};
 use tauri_plugin_global_shortcut::ShortcutState;
 
 fn main() {
+    // 错误遥测(GlitchTip/Sentry 协议):仅在设置 RUNBI_GLITCHTIP_DSN 时启用,默认完全关闭。
+    // 隐私红线(P0-3 同款):遥测永远 opt-in,绝不默认上报。私有化部署时 DSN 指向客户内网 GlitchTip。
+    let _sentry_guard = std::env::var("RUNBI_GLITCHTIP_DSN")
+        .ok()
+        .filter(|dsn| !dsn.trim().is_empty())
+        .map(|dsn| {
+            sentry::init((
+                dsn,
+                sentry::ClientOptions {
+                    release: sentry::release_name!(),
+                    shutdown_timeout: std::time::Duration::from_secs(10),
+                    ..Default::default()
+                },
+            ))
+        });
+
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
@@ -17,6 +33,8 @@ fn main() {
         }))
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_store::Builder::default().build())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             // Setup System Tray
             if let Err(e) = tray::setup_tray(app.handle()) {
@@ -205,4 +223,28 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Runbi Desktop application");
+}
+
+#[cfg(test)]
+mod tests {
+    /// 冒烟测试:需要本地 GlitchTip 运行(infra/glitchtip/docker-compose.yml)。
+    /// 运行: $env:RUNBI_GLITCHTIP_DSN="http://<public_key>@localhost:3000/1"; cargo test --release -- --ignored
+    #[test]
+    #[ignore = "requires RUNBI_GLITCHTIP_DSN pointing at a running GlitchTip instance"]
+    fn sentry_smoke_reports_to_local_glitchtip() {
+        let dsn = std::env::var("RUNBI_GLITCHTIP_DSN").expect("RUNBI_GLITCHTIP_DSN not set");
+        let guard = sentry::init((
+            dsn,
+            sentry::ClientOptions {
+                shutdown_timeout: std::time::Duration::from_secs(10),
+                ..Default::default()
+            },
+        ));
+        let event_id = sentry::capture_message(
+            "Runbi Rust SDK smoke test",
+            sentry::Level::Info,
+        );
+        assert!(!event_id.is_nil(), "sentry client should accept the event");
+        drop(guard); // 触发 flush(shutdown_timeout 内完成)
+    }
 }

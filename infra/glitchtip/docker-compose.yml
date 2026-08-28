@@ -1,0 +1,57 @@
+# GlitchTip 错误监控(自托管)— Runbi 遥测后端
+# 用法:cd infra/glitchtip && docker compose up -d
+# Web UI: http://localhost:3000
+# Sentry 协议兼容:DSN 指向 http://<public_key>@localhost:3000/<project_id>
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: glitchtip
+      POSTGRES_USER: glitchtip
+      POSTGRES_PASSWORD: glitchtip_local_dev_pwd
+    volumes:
+      - glitchtip-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U glitchtip"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+
+  web:
+    image: glitchtip/glitchtip:latest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://glitchtip:glitchtip_local_dev_pwd@db:5432/glitchtip
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: runbi-local-dev-secret-change-me
+      PORT: "3000"
+      # 默认管理员(仅本地开发用,生产环境必须改掉)
+      GLITCHTIP_INITIAL_USER_USERNAME: runbi-admin
+      GLITCHTIP_INITIAL_USER_PASSWORD: runbi-admin-pwd
+      GLITCHTIP_INITIAL_USER_EMAIL: admin@runbi.local
+    ports:
+      - "3000:3000"
+
+  worker:
+    image: glitchtip/glitchtip:latest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ./bin/run-worker.sh
+    environment:
+      DATABASE_URL: postgres://glitchtip:glitchtip_local_dev_pwd@db:5432/glitchtip
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: runbi-local-dev-secret-change-me
+
+volumes:
+  glitchtip-pg-data:
