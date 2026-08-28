@@ -50,3 +50,7 @@ Thumbs.db
 
 # Agent Workspaces & System Logs
 .agents/
+
+# Icon build temp artifacts
+.tmp/
+desktop/src-tauri/target-iconfix/
