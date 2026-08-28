@@ -5,13 +5,22 @@
  * Implements ILLMTransport for the Runbi Tauri Desktop Client.
  * When API key is missing or in mock mode, provides an instant, zero-config
  * fallback using the shared generateMockStreamMessages generator.
- * When in Tauri, coordinates streaming completions and testConnection with
- * optional Rust backend IPC or standard fetch streaming.
+ * When in Tauri, leverages Rust native IPC streaming (via reqwest) to bypass
+ * all browser CORS/CSP restrictions and deliver instant streaming with clear error handling.
  */
 
 import type { ILLMTransport, LLMStreamRequest, StreamCallbacks } from '@runbi/shared/adapters';
 import type { StreamConfig, ConnectionTestResult } from '@runbi/shared/types';
-import { generateMockStreamMessages } from '@runbi/shared/core';
+import { generateMockStreamMessages, buildSystemPrompt, buildUserPrompt, resolveEndpoint } from '@runbi/shared/core';
+import * as core from '@tauri-apps/api/core';
+
+const { invoke } = core;
+const Channel = (core as any).Channel;
+
+interface StreamEvent {
+  type: 'Chunk' | 'Done' | 'Error';
+  payload: any;
+}
 
 export class TauriIPCLLMTransport implements ILLMTransport {
   private isTauri(): boolean {
@@ -77,13 +86,60 @@ export class TauriIPCLLMTransport implements ILLMTransport {
       return;
     }
 
-    // Real API stream execution via Fetch SSE
+    const endpoint = resolveEndpoint(config.baseUrl);
+    const model = config.model?.trim() || 'deepseek-chat';
+    const hasVisionContext = Boolean(config.imageDataUrl);
+    const systemPrompt = buildSystemPrompt({
+      style: config.style,
+      userInstruction: config.userInstruction,
+      customPromptOverride: config.customPrompt,
+      hasVisionContext,
+    });
+    const userPrompt = buildUserPrompt({
+      text,
+      userInstruction: config.userInstruction,
+      hasVisionContext,
+    });
+
+    // 1. In Tauri: Use Native Rust reqwest Streaming IPC (Bypasses Browser CORS/CSP)
+    if (this.isTauri()) {
+      try {
+        const channel = new Channel();
+
+        channel.onmessage = (event: StreamEvent) => {
+          if (signal?.aborted) return;
+          if (event.type === 'Chunk') {
+            callbacks.onChunk(event.payload.delta);
+          } else if (event.type === 'Done') {
+            callbacks.onDone(event.payload.duration_ms, event.payload.total_tokens);
+          } else if (event.type === 'Error') {
+            callbacks.onError(event.payload.message);
+          }
+        };
+
+        await invoke('stream_llm_chat', {
+          endpoint,
+          apiKey,
+          model,
+          systemPrompt,
+          userPrompt,
+          temperature: config.temperature ?? 0.7,
+          imageDataUrl: config.imageDataUrl || null,
+          channel,
+        });
+        return;
+      } catch (err: any) {
+        if (signal?.aborted) {
+          callbacks.onAbort?.();
+        } else {
+          callbacks.onError(String(err?.message || err));
+        }
+        return;
+      }
+    }
+
+    // 2. Web/Fallback: Fetch SSE
     try {
-      const endpoint = config.baseUrl?.trim() || 'https://api.deepseek.com/v1/chat/completions';
-      const model = config.model?.trim() || 'deepseek-chat';
-
-      const promptSystem = `You are Runbi (润笔), an elite AI writing and text polishing assistant. Polish the user's text according to the requested style: ${config.style}. Return ONLY the polished text without meta commentary.`;
-
       const response = await fetch(endpoint, {
         method: 'POST',
         headers: {
@@ -93,8 +149,8 @@ export class TauriIPCLLMTransport implements ILLMTransport {
         body: JSON.stringify({
           model,
           messages: [
-            { role: 'system', content: promptSystem },
-            { role: 'user', content: text },
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt },
           ],
           stream: true,
           temperature: config.temperature ?? 0.7,
@@ -179,8 +235,32 @@ export class TauriIPCLLMTransport implements ILLMTransport {
       };
     }
 
+    if (this.isTauri()) {
+      try {
+        const res = await invoke<any>('test_llm_connection', {
+          req: {
+            endpoint: resolveEndpoint(config.baseUrl),
+            api_key: apiKey,
+            model: config.model?.trim() || 'deepseek-chat',
+          },
+        });
+        return {
+          success: res.success,
+          latencyMs: res.latency_ms,
+          error: res.error,
+          model: config.model,
+        };
+      } catch (err: any) {
+        return {
+          success: false,
+          latencyMs: Date.now() - startTime,
+          error: String(err?.message || err),
+        };
+      }
+    }
+
     try {
-      const endpoint = config.baseUrl?.trim() || 'https://api.deepseek.com/v1/chat/completions';
+      const endpoint = resolveEndpoint(config.baseUrl);
       const model = config.model?.trim() || 'deepseek-chat';
 
       const response = await fetch(endpoint, {

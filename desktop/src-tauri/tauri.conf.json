@@ -20,17 +20,13 @@
         "resizable": false,
         "decorations": false,
         "transparent": true,
-        "alwaysOnTop": true,
+        "shadow": false,
+        "alwaysOnTop": false,
         "skipTaskbar": true,
         "visible": false,
         "center": false
       }
     ],
-    "trayIcon": {
-      "iconPath": "icons/icon.png",
-      "tooltip": "润笔 (Runbi) - AI 划词润色",
-      "iconAsTemplate": true
-    },
     "security": {
       "csp": "default-src 'self'; connect-src 'self' https:; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; font-src 'self' data:;"
     }

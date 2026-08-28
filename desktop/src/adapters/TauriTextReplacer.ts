@@ -10,12 +10,18 @@
 
 import type { ITextReplacer, ReplacementResult } from '@runbi/shared/adapters';
 import type { SelectionInfo } from '@runbi/shared/types';
+import { invoke } from '@tauri-apps/api/core';
+import { writeText } from '@tauri-apps/plugin-clipboard-manager';
 
 interface TauriReplacerResult {
   success: boolean;
   error?: string;
   replacedLength?: number;
+  replaced_length?: number;
   restoredClipboard?: boolean;
+  restored_clipboard?: boolean;
+  safeToCopyFallback?: boolean;
+  safe_to_copy_fallback?: boolean;
 }
 
 export class TauriTextReplacer implements ITextReplacer {
@@ -26,33 +32,54 @@ export class TauriTextReplacer implements ITextReplacer {
   /**
    * Replaces the selected text with the new polished text.
    */
-  public async replaceText(newText: string, context?: SelectionInfo | null): Promise<ReplacementResult> {
+  public async replaceText(newText: string, context?: SelectionInfo | null, hideWindow: boolean = true): Promise<ReplacementResult> {
     if (!newText || newText.trim().length === 0) {
       return { success: false, error: 'Empty replacement text provided' };
     }
 
     if (this.isTauri()) {
       try {
-        const modName = '@tauri-apps/api/core';
-        const { invoke } = await import(/* @vite-ignore */ modName);
         const result = (await invoke('replace_text', {
           newText,
           restoreOriginalClipboard: true,
+          hideWindow,
         })) as TauriReplacerResult;
 
+        if (result.success) {
+          return {
+            success: true,
+            replacedLength: result.replacedLength ?? result.replaced_length ?? newText.length,
+            restoredClipboard: result.restoredClipboard ?? result.restored_clipboard ?? true,
+          };
+        }
+
+        const fallbackAllowed = result.safeToCopyFallback ?? result.safe_to_copy_fallback ?? true;
+        if (!fallbackAllowed) {
+          return {
+            success: false,
+            fallbackCopied: false,
+            error: result.error,
+            replacedLength: 0,
+          };
+        }
+
+        // Rust reported failure (e.g. empty text) — fall back to clipboard copy
+        // and tell the UI the truth via fallbackCopied.
+        const copied = await this.copyToClipboard(newText);
         return {
-          success: result.success,
+          success: false,
+          fallbackCopied: copied,
           error: result.error,
-          replacedLength: result.replacedLength ?? newText.length,
-          restoredClipboard: result.restoredClipboard ?? true,
+          replacedLength: 0,
         };
       } catch (err) {
         console.warn('[TauriTextReplacer] invoke replace_text failed, attempting clipboard copy:', err);
         const copied = await this.copyToClipboard(newText);
         return {
-          success: copied,
+          success: false,
+          fallbackCopied: copied,
           error: copied ? undefined : String(err),
-          replacedLength: copied ? newText.length : 0,
+          replacedLength: 0,
         };
       }
     }
@@ -61,6 +88,7 @@ export class TauriTextReplacer implements ITextReplacer {
     const copied = await this.copyToClipboard(newText);
     return {
       success: copied,
+      fallbackCopied: true,
       replacedLength: copied ? newText.length : 0,
       restoredClipboard: false,
     };
@@ -83,8 +111,6 @@ export class TauriTextReplacer implements ITextReplacer {
     try {
       if (this.isTauri()) {
         try {
-          const modName = '@tauri-apps/plugin-clipboard-manager';
-          const { writeText } = await import(/* @vite-ignore */ modName);
           await writeText(text);
           return true;
         } catch {

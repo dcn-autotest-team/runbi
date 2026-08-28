@@ -11,10 +11,12 @@
 import type { ISelectionProvider } from '@runbi/shared/adapters';
 import type { SelectionInfo } from '@runbi/shared/types';
 import { normalizeSelectionText, validateSelectionText } from '@runbi/shared/core';
+import { invoke } from '@tauri-apps/api/core';
 
 interface TauriSelectionResult {
   text: string;
   sourceApp?: string;
+  windowTitle?: string;
   cursorX?: number;
   cursorY?: number;
 }
@@ -36,8 +38,6 @@ export class TauriSelectionProvider implements ISelectionProvider {
   public async getSelection(): Promise<SelectionInfo | null> {
     if (this.isTauri()) {
       try {
-        const modName = '@tauri-apps/api/core';
-        const { invoke } = await import(/* @vite-ignore */ modName);
         const result = (await invoke('get_current_selection')) as TauriSelectionResult;
 
         if (result && result.text) {
@@ -60,6 +60,8 @@ export class TauriSelectionProvider implements ISelectionProvider {
               isEditable: true,
               source: 'os_selection',
               timestamp: Date.now(),
+              sourceApp: result.sourceApp,
+              windowTitle: result.windowTitle,
             };
             this.lastSelection = selection;
             this.notifySubscribers(selection);

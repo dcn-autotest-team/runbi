@@ -9,6 +9,21 @@ export default {
   theme: {
     extend: {
       colors: {
+        /* Brand unification: remap Tailwind teal onto the jade brand ramp
+           (#00BFA5) so every teal-* class renders on-brand without touching
+           component classes. */
+        teal: {
+          50: '#E6FAF7',
+          100: '#C2F2EA',
+          200: '#99E8DC',
+          300: '#4DDCC7',
+          400: '#0FD2B8',
+          500: '#00BFA5',
+          600: '#00A892',
+          700: '#008F7C',
+          800: '#06766A',
+          900: '#0A5F55'
+        },
         jade: {
           DEFAULT: '#00BFA5',
           hover: '#00A892',
