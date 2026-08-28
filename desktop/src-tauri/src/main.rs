@@ -217,6 +217,7 @@ fn main() {
             commands::set_autostart,
             commands::capture_foreground_screenshot,
             commands::append_log,
+            commands::submit_feedback,
             commands::load_app_config,
             commands::save_app_config,
             commands::set_auto_popup_enabled,

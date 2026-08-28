@@ -34,6 +34,7 @@ import {
 } from '@runbi/shared/core';
 import { RunbiLogo, Settings, X, Pin, PinOff, RefreshCw, History } from './components/Icons';
 import { UpdateCheckRow } from './components/UpdateCheckRow';
+import { OnboardingView } from './components/OnboardingView';
 
 const STYLE_NAMES: Record<PolishStyle, string> = {
   polished: '通用润色',
@@ -130,6 +131,9 @@ export const App: React.FC = () => {
   const [autostart, setAutostart] = useState<boolean>(false);
   const [readChatScreenshot, setReadChatScreenshot] = useState<boolean>(true);
   const [isSavingSettings, setIsSavingSettings] = useState<boolean>(false);
+  // Feedback — user-facing problem report (opt-in telemetry gate)
+  const [feedbackText, setFeedbackText] = useState<string>('');
+  const [feedbackSending, setFeedbackSending] = useState<boolean>(false);
   const [connectionTest, setConnectionTest] = useState<{
     status: 'idle' | 'testing' | 'success' | 'error';
     message: string;
@@ -146,6 +150,7 @@ export const App: React.FC = () => {
   // Data Safety & Fault Tolerance State
   const [history, setHistory] = useState<HistoryRecord[]>([]);
   const [showHistory, setShowHistory] = useState<boolean>(false);
+  const [showOnboarding, setShowOnboarding] = useState<boolean>(false);
   const [recoverableDraft, setRecoverableDraft] = useState<DraftSnapshot | null>(null);
   const [lastReplacement, setLastReplacement] = useState<LastReplacementSnapshot | null>(null);
 
@@ -802,13 +807,10 @@ export const App: React.FC = () => {
           console.warn('load shortcut/monitor/autostart state failed:', e);
         }
 
-        // First-run onboarding: teach the core loop once (6s so it's readable).
+        // First-run onboarding: if not yet onboarded, show the micro-onboarding view
         const onboarded = await adapters.storageProvider.get<boolean>('onboardingDone', false);
         if (!onboarded) {
-          showToast(`选中文字后自动润色 → Enter 贴回；${sc || 'Ctrl+Shift+Space'} 可随时唤起`, 6000);
-          await adapters.storageProvider.set('onboardingDone', true).catch((e) => {
-            console.warn('save onboarding state failed:', e);
-          });
+          setShowOnboarding(true);
         }
       }
     };
@@ -844,6 +846,10 @@ export const App: React.FC = () => {
       unlistens.push(listen('runbi://captured-selection', (event: any) => {
         const __p = event?.payload || {};
         invoke('append_log', { msg: `frontend: event received t=${__p.trigger} hs=${__p.hasScreenshot} keys=[${Object.keys(__p).join(',')}] text=${String(__p.text || '').slice(0, 24)}` }).catch(() => {});
+        setShowOnboarding(false);
+        setShowSettings(false);
+        setShowHistory(false);
+        adapters.storageProvider.set('onboardingDone', true).catch(() => {});
         setShowEpoch((n) => n + 1); // remount panel container → replay enter animation
         invoke('append_log', { msg: 'frontend: epoch bumped' }).catch(() => {});
         const isSensitiveBlocked = event?.payload?.trigger === 'sensitive-blocked';
@@ -1026,6 +1032,35 @@ export const App: React.FC = () => {
     }
   };
 
+  // Submit user feedback (opt-in: only sent when telemetry DSN is configured).
+  const handleSubmitFeedback = async () => {
+    const msg = feedbackText.trim();
+    if (!msg) {
+      showToast('请先输入反馈内容');
+      return;
+    }
+    if (feedbackSending) return;
+    setFeedbackSending(true);
+    try {
+      if (isTauri) {
+        const result = await invoke<string>('submit_feedback', { message: msg });
+        if (result === 'telemetry_disabled') {
+          showToast('错误上报未启用：请在运行目录设置 RUNBI_GLITCHTIP_DSN 后可上报', 4500);
+          setFeedbackText('');
+        } else {
+          showToast(`反馈已提交，谢谢！(${result})`);
+          setFeedbackText('');
+        }
+      } else {
+        showToast('网页预览模式不支持提交反馈，请在桌面端使用', 4000);
+      }
+    } catch (e) {
+      showToast(`反馈提交失败：${String(e)}`, 4000);
+    } finally {
+      setFeedbackSending(false);
+    }
+  };
+
   // Record a new global wake shortcut from the next key combination pressed.
   const [recording, setRecording] = useState(false);
   useEffect(() => {
@@ -1115,6 +1150,7 @@ export const App: React.FC = () => {
     }
     setShowSettings(false);
     setShowHistory(false);
+    setShowOnboarding(false);
     setAttachedFiles([]);
     setClipboardRef(null);
     const nextMode = stateRef.current.autoCopyPopup ? 'panel' : 'capsule';
@@ -1134,6 +1170,14 @@ export const App: React.FC = () => {
       }
     }
   };
+
+  // Dismiss Onboarding & Quietly Hide to Tray
+  const handleDismissOnboarding = useCallback(async () => {
+    setShowOnboarding(false);
+    await adapters.storageProvider.set('onboardingDone', true).catch(() => {});
+    showToast('润笔已常驻系统托盘，随时划选文字唤起！', 3000);
+    handleClose();
+  }, [adapters.storageProvider, showToast]);
 
   // Toggle Pin on Top
   const handleTogglePin = async () => {
@@ -1579,11 +1623,46 @@ export const App: React.FC = () => {
                   onChange={setReadChatScreenshot}
                 />
                 <UpdateCheckRow />
+
+                {/* User feedback — submit an issue/request to GlitchTip (opt-in) */}
+                <div className="mt-4 border-t border-white/10 pt-4">
+                  <label className="block font-medium text-slate-300 mb-1">问题反馈</label>
+                  <textarea
+                    rows={2}
+                    value={feedbackText}
+                    onChange={(e) => setFeedbackText(e.target.value)}
+                    placeholder="遇到问题或想提需求？写在这里，一键上报（仅在开启错误上报后发送）"
+                    className="runbi-form-control runbi-focus-ring w-full resize-none text-sm"
+                  />
+                  <div className="mt-2 flex items-center justify-between">
+                    <span className="text-[10px] text-slate-500">隐私：仅在你启用错误上报后才发送</span>
+                    <button
+                      type="button"
+                      disabled={feedbackSending || !feedbackText.trim()}
+                      onClick={handleSubmitFeedback}
+                      className="runbi-focus-ring rounded-lg bg-teal-500/20 px-3 py-1.5 text-xs font-medium text-teal-200 transition-colors hover:bg-teal-500/30 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                    >
+                      {feedbackSending ? '提交中…' : '提交反馈'}
+                    </button>
+                  </div>
+                </div>
               </section>
             </div>
 
             <div className="flex shrink-0 items-center justify-between border-t border-white/10 bg-black/20 px-4 py-3">
-              <span className="text-[10px] text-slate-500">Esc 取消</span>
+              <div className="flex items-center gap-3">
+                <span className="text-[10px] text-slate-500">Esc 取消</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowSettings(false);
+                    setShowOnboarding(true);
+                  }}
+                  className="text-[11px] font-medium text-teal-400 hover:text-teal-300 hover:underline cursor-pointer"
+                >
+                  新手引导
+                </button>
+              </div>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
@@ -1603,6 +1682,13 @@ export const App: React.FC = () => {
               </div>
             </div>
           </form>
+        ) : showOnboarding ? (
+          /* First-Run 5-Second Micro-Onboarding View */
+          <OnboardingView
+            onDismiss={handleDismissOnboarding}
+            shortcut={wakeShortcut || DEFAULT_SHORTCUT}
+            autoCloseSeconds={5}
+          />
         ) : showHistory ? (
           /* Dedicated History View Component (No double-exposure) */
           <HistoryDrawer

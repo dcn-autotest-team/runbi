@@ -10,6 +10,7 @@ pub mod autostart;
 pub mod screenshot;
 pub mod config;
 pub mod input;
+pub mod feedback;
 
 use tauri::Manager;
 
@@ -50,5 +51,6 @@ pub use mouse_hook::*;
 pub use autostart::*;
 pub use screenshot::*;
 pub use config::*;
+pub use feedback::*;
 
 
