@@ -28,6 +28,19 @@ fn main() {
                 tauri_plugin_global_shortcut::Builder::new()
                     .with_handler(move |app, _shortcut, event| {
                         if event.state() == ShortcutState::Pressed {
+                            // Debounce key auto-repeat: a held key fires multiple Pressed events,
+                            // each spawning a parallel capture+emit that clobbers the panel state.
+                            static LAST_FIRE_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                            let now_ms = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis() as u64;
+                            let last_ms = LAST_FIRE_MS.load(std::sync::atomic::Ordering::Relaxed);
+                            if now_ms.saturating_sub(last_ms) < 800 {
+                                commands::file_log(app, "wake shortcut debounced (auto-repeat)");
+                                return;
+                            }
+                            LAST_FIRE_MS.store(now_ms, std::sync::atomic::Ordering::Relaxed);
                             eprintln!("[Runbi] wake shortcut fired");
                             commands::file_log(app, "wake shortcut fired");
                             let app_handle = app.clone();
@@ -71,10 +84,16 @@ fn main() {
                                         } else {
                                             "shortcut"
                                         };
-                                        let screenshot = if trigger == "screen-reply" {
-                                            commands::screenshot::capture_foreground_screenshot().ok()
+                                        let has_screenshot = if trigger == "screen-reply" {
+                                            match commands::screenshot::capture_foreground_screenshot() {
+                                                Ok(_) => true,
+                                                Err(e) => {
+                                                    commands::file_log(&app_handle, &format!("screenshot capture FAILED: {}", e));
+                                                    false
+                                                }
+                                            }
                                         } else {
-                                            None
+                                            false
                                         };
                                         let text_len = text.len();
                                         let event_text = if is_sensitive { String::new() } else { text };
@@ -86,8 +105,8 @@ fn main() {
 
                                         // 4. Hand the captured text + context to the frontend.
                                         let decision = format!(
-                                            "trigger={} text_len={} is_chat={} source_app={:?} title={:?}",
-                                            trigger, text_len, final_is_chat, final_source_app, final_window_title
+                                            "trigger={} text_len={} is_chat={} has_shot={} source_app={:?} title={:?}",
+                                            trigger, text_len, final_is_chat, has_screenshot, final_source_app, final_window_title
                                         );
                                         eprintln!("[Runbi] shortcut: {}", decision);
                                         commands::file_log(&app_handle, &decision);
@@ -97,7 +116,7 @@ fn main() {
                                                 "text": event_text,
                                                 "sourceApp": final_source_app,
                                                 "windowTitle": final_window_title,
-                                                "screenshot": screenshot,
+                                                "hasScreenshot": has_screenshot,
                                                 "trigger": trigger,
                                             }),
                                         );
@@ -179,6 +198,7 @@ fn main() {
             commands::is_autostart_enabled,
             commands::set_autostart,
             commands::capture_foreground_screenshot,
+            commands::append_log,
             commands::load_app_config,
             commands::save_app_config,
             commands::set_auto_popup_enabled,

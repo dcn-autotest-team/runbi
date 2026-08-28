@@ -64,11 +64,11 @@ body {
 }
 
 .runbi-window {
-  background: linear-gradient(155deg, rgba(22, 32, 35, 0.98), var(--runbi-window-bg));
-  border: 1px solid var(--runbi-border-strong);
-  box-shadow: 0 22px 55px -24px rgba(0, 0, 0, 0.95),
-              0 0 0 1px rgba(255, 255, 255, 0.035) inset,
-              0 16px 38px -24px rgba(0, 191, 165, 0.45);
+  background: #12181b;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 24px 60px -15px rgba(0, 0, 0, 0.95),
+              0 0 0 1px rgba(255, 255, 255, 0.05) inset,
+              0 16px 40px -20px rgba(0, 191, 165, 0.35);
 }
 
 .runbi-icon-button {

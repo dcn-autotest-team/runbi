@@ -136,22 +136,34 @@ export const InstructionInput: React.FC<InstructionInputProps> = ({
       {/* Quick Reply Chips */}
       {showQuickTags && (
       <div className="flex items-center gap-1.5 overflow-x-auto runbi-scrollbar py-0.5">
-        {quickTags.map((tag) => (
-          <button
-            key={tag.label}
-            type="button"
-            disabled={isGenerating}
-            onClick={() => handleChipClick(tag.text)}
-            onMouseDown={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-            }}
-            title={tag.text}
-            className="runbi-focus-ring cursor-pointer whitespace-nowrap rounded-md bg-transparent px-2 py-1 text-[11px] font-medium text-slate-500 transition-all hover:bg-teal-50 hover:text-teal-600 disabled:cursor-not-allowed disabled:opacity-50 dark:text-slate-400 dark:hover:bg-teal-950/50 dark:hover:text-teal-300"
-          >
-            {tag.label}
-          </button>
-        ))}
+        {quickTags.map((tag) => {
+          const match = tag.label.match(/^(\d+)\s+(.*)$/);
+          return (
+            <button
+              key={tag.label}
+              type="button"
+              disabled={isGenerating}
+              onClick={() => handleChipClick(tag.text)}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+              title={tag.text}
+              className="runbi-focus-ring cursor-pointer whitespace-nowrap inline-flex items-center gap-1.5 rounded-lg bg-white/80 dark:bg-white/[0.06] px-2.5 py-1 text-xs font-medium text-slate-700 dark:text-slate-200 transition-all hover:bg-teal-50 hover:text-teal-600 dark:hover:bg-teal-500/20 dark:hover:text-teal-200 border border-slate-200/60 dark:border-white/10 shadow-2xs active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {match ? (
+                <>
+                  <kbd className="flex items-center justify-center w-4 h-4 rounded bg-teal-100 dark:bg-teal-400/20 text-teal-800 dark:text-teal-300 font-mono text-[10px] font-bold">
+                    {match[1]}
+                  </kbd>
+                  <span>{match[2]}</span>
+                </>
+              ) : (
+                <span>{tag.label}</span>
+              )}
+            </button>
+          );
+        })}
       </div>
       )}
 
@@ -161,9 +173,13 @@ export const InstructionInput: React.FC<InstructionInputProps> = ({
           {currentFiles.map((file, idx) => (
             <span
               key={idx}
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-teal-50 dark:bg-teal-950/60 border border-teal-200/80 dark:border-teal-800/80 text-[#00BFA5] text-[11px]"
+              className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-teal-50 dark:bg-teal-950/60 border border-teal-200/80 dark:border-teal-800/80 text-[#00BFA5] text-[11px]"
             >
-              <span className="truncate max-w-[150px]">📄 {file.name}</span>
+              <svg className="w-3 h-3 text-teal-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/>
+                <polyline points="14 2 14 8 20 8"/>
+              </svg>
+              <span className="truncate max-w-[150px]">{file.name}</span>
               <button
                 type="button"
                 disabled={isGenerating}
@@ -180,10 +196,14 @@ export const InstructionInput: React.FC<InstructionInputProps> = ({
               type="button"
               disabled={isGenerating}
               onClick={onAttachClipboard}
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-[#00BFA5] text-[11px] border border-dashed border-slate-300 dark:border-slate-700 cursor-pointer active:scale-95 transition-all"
+              className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-[#00BFA5] text-[11px] border border-dashed border-slate-300 dark:border-slate-700 cursor-pointer active:scale-95 transition-all font-medium"
               title="点击引用剪贴板中的资料"
             >
-              <span>📋 附带剪贴板参考</span>
+              <svg className="w-3 h-3 text-slate-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
+                <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+              </svg>
+              <span>附带剪贴板参考</span>
             </button>
           )}
         </div>

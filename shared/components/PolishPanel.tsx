@@ -92,7 +92,7 @@ export const PolishPanel: React.FC<PolishPanelProps> = ({
   onAttachClipboard,
 }) => {
   const [isCollapsed, setIsCollapsed] = useState(defaultCollapsed);
-  const [showConvSummary, setShowConvSummary] = useState(true);
+  const [showConvSummary, setShowConvSummary] = useState(false);
 
   // Keyboard shortcut listener for Attitude/Intent chips (1, 2, 3...)
   useEffect(() => {
@@ -121,7 +121,8 @@ export const PolishPanel: React.FC<PolishPanelProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [screenReplyAnalysis, onSelectClarifyChip]);
 
-  const diffToggleButton = (
+  // In screen-reply mode there is no meaningful original text to diff against — hide the toggle.
+  const diffToggleButton = screenReplyAnalysis ? null : (
     <button
       id="diff-toggle"
       type="button"
@@ -242,7 +243,7 @@ export const PolishPanel: React.FC<PolishPanelProps> = ({
 
       {/* Main Body */}
       {!isCollapsed && (
-        <div className={embedded ? 'flex min-h-0 flex-1 flex-col gap-3 px-4 py-3' : 'p-4 flex flex-col gap-3.5'}>
+        <div className={embedded ? 'flex min-h-0 flex-1 flex-col gap-2.5 px-4 py-3 overflow-y-auto runbi-scrollbar' : 'p-4 flex flex-col gap-3.5'}>
           {/* Optional Original Preview */}
           {showOriginalPreview && (
             <OriginalPreview
@@ -290,76 +291,53 @@ export const PolishPanel: React.FC<PolishPanelProps> = ({
             </div>
           )}
 
-          {/* Screen Reply: Context Badge, Conversation Summary & Attitude Chips */}
+          {/* Screen Reply: Context Badge & Collapsible Conversation Summary */}
           {screenReplyAnalysis && (
-            <div className="flex flex-col gap-2 p-2.5 rounded-xl bg-slate-50/90 dark:bg-slate-800/60 border border-slate-200/70 dark:border-slate-700/60 text-xs">
-              {/* Visual Context Header Badge */}
-              <div className="flex items-center justify-between pb-0.5 text-xs text-teal-600 dark:text-teal-400 font-medium select-none">
-                <span className="flex items-center gap-1.5">
-                  <span className="relative flex h-2 w-2">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#00BFA5] opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-[#00BFA5]"></span>
+            <div className="flex flex-col gap-2 p-2.5 rounded-xl bg-slate-50/90 dark:bg-white/[0.04] border border-slate-200/60 dark:border-white/10 text-xs shadow-xs">
+              {/* Clean Top Bar: Context tag & Collapsible toggle */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="flex h-2 w-2 relative shrink-0">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-teal-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-teal-400"></span>
                   </span>
-                  <span>💡 已感知聊天上下文</span>
-                </span>
-                {screenReplyAnalysis.conversation && screenReplyAnalysis.conversation.length > 0 && (
+                  <span className="text-xs font-semibold text-teal-600 dark:text-teal-300 shrink-0">
+                    已感知聊天上下文
+                  </span>
+                  {screenReplyAnalysis.last_message_from_other && (
+                    <span className="text-slate-800 dark:text-slate-200 font-medium truncate">
+                      · 对方诉求: “{screenReplyAnalysis.last_message_from_other}”
+                    </span>
+                  )}
+                </div>
+                {screenReplyAnalysis.conversation && screenReplyAnalysis.conversation.length > 1 && (
                   <button
                     type="button"
                     onClick={() => setShowConvSummary((prev) => !prev)}
-                    className="text-[10px] text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                    className="text-[11px] text-slate-400 hover:text-teal-600 dark:hover:text-teal-300 cursor-pointer transition-colors shrink-0 ml-2"
                   >
                     {showConvSummary ? '收起记录 ▴' : `展开记录(${screenReplyAnalysis.conversation.length}) ▾`}
                   </button>
                 )}
               </div>
 
-              {/* Highlighted Other Party Message / Request */}
-              {screenReplyAnalysis.last_message_from_other && (
-                <div className="px-2.5 py-1.5 rounded-lg bg-slate-100/90 dark:bg-slate-750/70 border border-slate-200/60 dark:border-slate-700/60 text-[11px] leading-snug">
-                  <span className="font-semibold text-slate-500 dark:text-slate-400 mr-1.5">对方诉求:</span>
-                  <span className="text-slate-800 dark:text-slate-100 font-medium">{screenReplyAnalysis.last_message_from_other}</span>
-                </div>
-              )}
-
-              {/* Conversation Summary (Collapsible) */}
-              {showConvSummary && screenReplyAnalysis.conversation && screenReplyAnalysis.conversation.length > 0 && (
-                <div className="flex flex-col gap-1 mt-0.5 pl-1 max-h-24 overflow-y-auto runbi-scrollbar border-l-2 border-teal-200 dark:border-teal-800/80">
+              {/* Multi-turn conversation history ONLY if multiple turns and expanded */}
+              {showConvSummary && screenReplyAnalysis.conversation && screenReplyAnalysis.conversation.length > 1 && (
+                <div className="flex flex-col gap-1.5 pt-1.5 pb-0.5 px-2 max-h-28 overflow-y-auto runbi-scrollbar border-l-2 border-teal-500/40 bg-black/20 rounded-r-lg">
                   {screenReplyAnalysis.conversation.map((msg, idx) => (
-                    <div key={idx} className="flex items-start gap-1.5 text-[11px]">
+                    <div key={idx} className="flex items-start gap-2 text-xs">
                       <span
-                        className={`px-1 py-0.2 rounded text-[10px] font-semibold flex-shrink-0 ${
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-semibold flex-shrink-0 ${
                           msg.sender === 'me'
-                            ? 'bg-teal-100 text-teal-800 dark:bg-teal-900/60 dark:text-teal-300'
-                            : 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-300'
+                            ? 'bg-teal-100 text-teal-800 dark:bg-teal-500/20 dark:text-teal-300'
+                            : 'bg-slate-200 text-slate-700 dark:bg-white/10 dark:text-slate-300'
                         }`}
                       >
                         {msg.sender === 'me' ? '我' : '对方'}
                       </span>
-                      <span className="text-slate-700 dark:text-slate-300 leading-snug break-words">{msg.text}</span>
+                      <span className="text-slate-800 dark:text-slate-200 leading-relaxed break-words">{msg.text}</span>
                     </div>
                   ))}
-                </div>
-              )}
-
-              {/* Attitude / Intent Chips with [1]/[2]/[3] Number Badges */}
-              {screenReplyAnalysis.clarify_options && screenReplyAnalysis.clarify_options.length > 0 && (
-                <div className="flex flex-col gap-1 pt-1 border-t border-slate-200/50 dark:border-slate-700/40">
-                  <span className="text-[10px] text-slate-400 select-none">快捷意图倾向 (按数字键 1/2/3 切换):</span>
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    {screenReplyAnalysis.clarify_options.map((opt, idx) => (
-                      <button
-                        key={idx}
-                        type="button"
-                        onClick={() => onSelectClarifyChip?.(opt)}
-                        className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] rounded-full bg-white dark:bg-slate-700/80 hover:bg-teal-50 dark:hover:bg-teal-950/60 text-[#00BFA5] border border-teal-200/80 dark:border-teal-800/60 hover:border-teal-400 transition-colors cursor-pointer font-medium shadow-2xs active:scale-95"
-                      >
-                        <kbd className="px-1 py-0.2 rounded bg-teal-100 dark:bg-teal-900/80 text-teal-800 dark:text-teal-300 font-mono text-[9px] font-bold">
-                          {idx + 1}
-                        </kbd>
-                        <span>{opt}</span>
-                      </button>
-                    ))}
-                  </div>
                 </div>
               )}
             </div>
@@ -387,17 +365,41 @@ export const PolishPanel: React.FC<PolishPanelProps> = ({
             )}
           </div>
 
-          {/* User Custom Instruction / Reply Input */}
-          {onSendInstruction && (
+          {/* User Custom Instruction / Dynamic Quick Replies */}
+          {(onSendInstruction || screenReplyAnalysis?.clarify_options?.length) && (
             <InstructionInput
-              onSubmit={onSendInstruction}
+              onSubmit={(instruction, files) => {
+                if (screenReplyAnalysis?.clarify_options?.includes(instruction) && onSelectClarifyChip) {
+                  onSelectClarifyChip(instruction);
+                } else if (onSendInstruction) {
+                  onSendInstruction(instruction, files);
+                }
+              }}
               isGenerating={isGenerating}
-              placeholder={
-                activeStyle === 'reply'
-                  ? '针对选中文本输入具体回复要求 (Enter 发送)...'
-                  : '想怎么改？直接说…'
+              placeholder="想怎么改？点击上方快捷标签或直接输入 (Enter 发送)..."
+              showQuickTags={true}
+              quickTags={
+                screenReplyAnalysis?.clarify_options && screenReplyAnalysis.clarify_options.length > 0
+                  ? screenReplyAnalysis.clarify_options.map((opt, idx) => ({
+                      label: `${idx + 1} ${opt}`,
+                      text: opt,
+                    }))
+                  : activeStyle === 'reply'
+                  ? [
+                      { label: '热情周全', text: '请用更加热情、周到诚恳且积极的语气回复' },
+                      { label: '商务沉稳', text: '请用严谨专业、得体沉稳的职场商务口吻回复' },
+                      { label: '委婉缓冲', text: '请委婉表示目前手头有安排，礼貌推迟或缓冲' },
+                      { label: '幽默接梗', text: '请用高情商、轻松幽默的方式接梗回复' },
+                      { label: '极简一句话', text: '请精简为一句话直接切中要点回复' },
+                    ]
+                  : [
+                      { label: '自然流畅', text: '使表达更加自然地道、通顺流畅' },
+                      { label: '大幅精简', text: '剔除冗余字词，大幅精简篇幅字数' },
+                      { label: '专业商务', text: '提升职场商务感，用词得体自信' },
+                      { label: '提炼要点', text: '分点陈述，核心论点更加醒目' },
+                      { label: '文采润色', text: '增加优美修辞与文采感染力' },
+                    ]
               }
-              showQuickTags={!embedded || activeStyle === 'reply'}
               attachedFiles={attachedFiles}
               onAttachFile={onAttachFile}
               onRemoveFile={onRemoveFile}

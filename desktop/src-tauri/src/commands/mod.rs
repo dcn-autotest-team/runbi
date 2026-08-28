@@ -13,6 +13,12 @@ pub mod input;
 
 use tauri::Manager;
 
+/// Frontend-reachable append-only log (full-stack tracing).
+#[tauri::command]
+pub fn append_log(app: tauri::AppHandle, msg: String) {
+    file_log(&app, &msg);
+}
+
 /// Append-only file log for release builds (no console):
 /// %APPDATA%\com.runbi.desktop\runbi.log
 pub fn file_log(app: &tauri::AppHandle, msg: &str) {

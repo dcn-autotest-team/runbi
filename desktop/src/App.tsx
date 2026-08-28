@@ -3,21 +3,35 @@
  * Runbi Desktop Client - Raycast-like AI Text Polishing Assistant
  * Powered by Tauri 2.x + React 18 + Tailwind CSS + @runbi/shared
  */
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import type { PolishStyle, StreamConfig } from '@runbi/shared/types';
-import { PolishPanel, type AttachedFileContext } from '@runbi/shared/components';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import type { PolishStyle, StreamConfig, PersonaType, HistoryRecord, DraftSnapshot, LastReplacementSnapshot } from '@runbi/shared/types';
+import { PERSONA_PRESETS } from '@runbi/shared/types';
+import { PolishPanel, HistoryDrawer, type AttachedFileContext } from '@runbi/shared/components';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { createDesktopAdapters } from './adapters';
+
+// ---- Boot + crash diagnostics (writes to runbi.log via Rust) ----
+// The desktop App.tsx is not covered by unit tests, so a runtime crash here
+// would previously white-screen silently. These lines make it observable.
+invoke('append_log', { msg: 'frontend module loaded' }).catch(() => {});
+window.addEventListener('error', (e) => {
+  invoke('append_log', { msg: `js error: ${e.message} @${e.filename}:${e.lineno}:${e.colno}` }).catch(() => {});
+});
+window.addEventListener('unhandledrejection', (e) => {
+  invoke('append_log', { msg: `unhandled rejection: ${String((e as PromiseRejectionEvent).reason).slice(0, 300)}` }).catch(() => {});
+});
 import {
   classifyContext,
   buildScreenReplySystemPrompt,
   buildScreenReplyUserPrompt,
   buildScreenReplyRefinePrompt,
+  buildTextReplySystemPrompt,
+  buildTextReplyUserPrompt,
   type ScreenReplyAnalysis,
 } from '@runbi/shared/core';
-import { RunbiLogo, Settings, X, Pin, PinOff, RefreshCw } from './components/Icons';
+import { RunbiLogo, Settings, X, Pin, PinOff, RefreshCw, History } from './components/Icons';
 
 const STYLE_NAMES: Record<PolishStyle, string> = {
   polished: '通用润色',
@@ -122,8 +136,24 @@ export const App: React.FC = () => {
   const [viewMode, setViewMode] = useState<'idle' | 'capsule' | 'panel'>(autoCopyPopup ? 'panel' : 'capsule');
   const [screenReplyAnalysis, setScreenReplyAnalysis] = useState<ScreenReplyAnalysis | null>(null);
   const [showEpoch, setShowEpoch] = useState<number>(0);
+  const [persona, setPersona] = useState<PersonaType>('standard');
+  const [customPersonaPrompt, setCustomPersonaPrompt] = useState<string>('');
   const [attachedFiles, setAttachedFiles] = useState<AttachedFileContext[]>([]);
   const [clipboardRef, setClipboardRef] = useState<string | null>(null);
+
+  // Data Safety & Fault Tolerance State
+  const [history, setHistory] = useState<HistoryRecord[]>([]);
+  const [showHistory, setShowHistory] = useState<boolean>(false);
+  const [recoverableDraft, setRecoverableDraft] = useState<DraftSnapshot | null>(null);
+  const [lastReplacement, setLastReplacement] = useState<LastReplacementSnapshot | null>(null);
+
+  const activePersonaPrompt = useMemo(() => {
+    if (persona === 'custom') {
+      return customPersonaPrompt.trim();
+    }
+    const preset = PERSONA_PRESETS.find((p) => p.id === persona);
+    return preset && preset.id !== 'standard' ? preset.prompt : '';
+  }, [persona, customPersonaPrompt]);
 
   const getProviderPreset = (ep: string, md: string) => {
     if (ep === PROVIDER_PRESETS.deepseek.endpoint && md === PROVIDER_PRESETS.deepseek.model) return 'deepseek';
@@ -150,15 +180,18 @@ export const App: React.FC = () => {
     activeStyle,
     originalText,
     currentScreenshot,
+    hasScreenshot: false,
     isGenerating,
     showSettings,
+    showHistory,
     isPinned,
     readChatScreenshot,
     autoCopyPopup,
     viewMode,
     screenReplyAnalysis,
     handleStartPolish: (_t: string, _s: PolishStyle, _c?: string, _img?: string | null) => {},
-    handleStartScreenReplyAnalysis: (_ss: string, _hint?: string) => {},
+    handleStartScreenReplyAnalysis: (_hint?: string) => {},
+    handleStartTextReplyAnalysis: (_msg: string) => {},
   });
   stateRef.current.apiKey = apiKey;
   stateRef.current.endpoint = endpoint;
@@ -168,6 +201,7 @@ export const App: React.FC = () => {
   stateRef.current.currentScreenshot = currentScreenshot;
   stateRef.current.isGenerating = isGenerating;
   stateRef.current.showSettings = showSettings;
+  stateRef.current.showHistory = showHistory;
   stateRef.current.isPinned = isPinned;
   stateRef.current.readChatScreenshot = readChatScreenshot;
   stateRef.current.autoCopyPopup = autoCopyPopup;
@@ -184,6 +218,54 @@ export const App: React.FC = () => {
       setToastVisible(false);
     }, durationMs);
   }, []);
+
+  // History & Draft Operations
+  const addHistoryRecord = useCallback(
+    (record: Omit<HistoryRecord, 'id' | 'timestamp'>) => {
+      const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const newEntry: HistoryRecord = {
+        ...record,
+        id,
+        timestamp: Date.now(),
+      };
+      setHistory((prev) => {
+        const filtered = prev.filter((item) => item.polishedText !== record.polishedText);
+        const updated = [newEntry, ...filtered].slice(0, 100);
+        adapters.storageProvider.set('generationHistory', updated).catch(() => {});
+        return updated;
+      });
+    },
+    [adapters.storageProvider]
+  );
+
+  const deleteHistoryRecord = useCallback(
+    (id: string) => {
+      setHistory((prev) => {
+        const updated = prev.filter((item) => item.id !== id);
+        adapters.storageProvider.set('generationHistory', updated).catch(() => {});
+        return updated;
+      });
+    },
+    [adapters.storageProvider]
+  );
+
+  const clearAllHistory = useCallback(() => {
+    setHistory([]);
+    adapters.storageProvider.set('generationHistory', []).catch(() => {});
+  }, [adapters.storageProvider]);
+
+  // Revert Last In-Place Replacement (Undo capability)
+  const handleRevertReplace = useCallback(async () => {
+    if (!lastReplacement) return;
+    const res = await (adapters.textReplacer as any).replaceText(lastReplacement.originalText, null, false);
+    if (res.success) {
+      showToast('已撤回，已将原文恢复贴回目标应用');
+      setLastReplacement(null);
+    } else {
+      await adapters.textReplacer.copyToClipboard(lastReplacement.originalText);
+      showToast('撤回完成，原文已写入剪贴板 (Ctrl+V 可粘贴)', 3000);
+    }
+  }, [adapters.textReplacer, lastReplacement, showToast]);
 
   // Helper to read clipboard text in Tauri or Web environment
   const readClipboardText = useCallback(async (): Promise<string> => {
@@ -250,7 +332,7 @@ export const App: React.FC = () => {
     const currentEndpoint = stateRef.current.endpoint || endpoint;
     const currentModel = stateRef.current.model || model;
 
-    const useScreenshot = Boolean(style === 'reply' && stateRef.current.readChatScreenshot && screenshotUrl);
+    const useScreenshot = Boolean(style === 'reply' && stateRef.current.readChatScreenshot && (screenshotUrl || stateRef.current.hasScreenshot));
 
     if (useScreenshot) {
       adapters.storageProvider.get<boolean>('hasShownVisionNotice', false).then((shown) => {
@@ -266,11 +348,13 @@ export const App: React.FC = () => {
     const streamConfig: StreamConfig = {
       style,
       userInstruction: customInstruction,
+      personaPrompt: activePersonaPrompt || undefined,
       apiKey: currentApiKey || undefined,
       baseUrl: currentEndpoint || undefined,
       model: currentModel || undefined,
       temperature: 0.7,
       imageDataUrl: useScreenshot ? (screenshotUrl as string) : undefined,
+      useLastScreenshot: useScreenshot && !screenshotUrl,
     };
 
     const runStream = async (config: StreamConfig): Promise<void> => {
@@ -289,6 +373,20 @@ export const App: React.FC = () => {
             if (abortControllerRef.current === abortController) {
               abortControllerRef.current = null;
             }
+            setPolishedText((finalText) => {
+              if (finalText && finalText.trim()) {
+                addHistoryRecord({
+                  originalText: text,
+                  polishedText: finalText.trim(),
+                  style,
+                  instruction: customInstruction,
+                  model: config.model,
+                  tokens,
+                  durationMs: duration,
+                });
+              }
+              return finalText;
+            });
           },
           onError: async (err) => {
             if (currentSignal.aborted) return;
@@ -339,7 +437,7 @@ export const App: React.FC = () => {
   stateRef.current.handleStartPolish = handleStartPolish;
 
   // Round 1: Vision Screen Understanding (Output JSON)
-  const handleStartScreenReplyAnalysis = useCallback(async (screenshotUrl: string, existingHint?: string) => {
+  const handleStartScreenReplyAnalysis = useCallback(async (existingHint?: string) => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
@@ -394,12 +492,12 @@ export const App: React.FC = () => {
 
     const streamConfig: StreamConfig = {
       style: 'reply',
-      customPrompt: buildScreenReplySystemPrompt(),
+      customPrompt: buildScreenReplySystemPrompt(activePersonaPrompt),
       apiKey: currentApiKey || undefined,
       baseUrl: currentEndpoint || undefined,
       model: currentModel || undefined,
       temperature: 0.3,
-      imageDataUrl: screenshotUrl,
+      useLastScreenshot: true,
     };
 
     try {
@@ -419,10 +517,11 @@ export const App: React.FC = () => {
               abortControllerRef.current = null;
             }
 
-            // Parse JSON
+            // Parse JSON (strip qwen-style <think> reasoning blocks first)
+            const noThink = rawOutput.replace(/<think>[\s\S]*?<\/think>\s*/gi, '');
             let parsed: ScreenReplyAnalysis | null = null;
             try {
-              const cleaned = rawOutput
+              const cleaned = noThink
                 .replace(/^```json\s*/i, '')
                 .replace(/^```\s*/i, '')
                 .replace(/\s*```$/i, '')
@@ -433,7 +532,7 @@ export const App: React.FC = () => {
               parsed = {
                 conversation: [],
                 last_message_from_other: fallbackMsg,
-                draft_reply: rawOutput.trim(),
+                draft_reply: noThink.trim(),
                 clarify_options: ['更正式一点', '热情答应', '婉言谢绝'],
               };
             }
@@ -445,22 +544,27 @@ export const App: React.FC = () => {
               const targetMsg = parsed.last_message_from_other || existingHint?.trim() || '屏幕聊天历史';
               setOriginalText(targetMsg);
               stateRef.current.originalText = targetMsg;
+              if (draft) {
+                addHistoryRecord({
+                  originalText: targetMsg,
+                  polishedText: draft,
+                  style: 'reply',
+                  model: streamConfig.model,
+                  tokens,
+                  durationMs: duration,
+                });
+              }
             }
           },
           onError: async (err) => {
             if (currentSignal.aborted) return;
             console.warn('[Screen Reply] Vision analysis error:', err);
             // Fallback: If endpoint rejects image input (e.g. text-only model),
-            // do NOT fake a context-free reply — tell the user the truth and
-            // point to the two working paths (vision model / select-text flow).
-            if (streamConfig.imageDataUrl) {
-              setIsGenerating(false);
-              setPolishedText('');
-              setScreenReplyAnalysis(null);
-              setError(
-                '当前模型不支持读图，无法分析聊天窗口。两个办法：① 设置里换视觉模型（如 qwen-vl-plus / glm-4v-flash）；② 选中要回复的消息文字后按快捷键（文本回复）。',
-              );
-              showToast('当前模型不支持读图，零划词回复需要视觉模型', 4000);
+            // seamlessly fallback to structured text reply analysis!
+            if (streamConfig.useLastScreenshot || streamConfig.imageDataUrl) {
+              const fallbackMsg = existingHint?.trim() || '对方发来的消息';
+              showToast('💡 当前模型不支持直接读图，已切换为文本智能回复', 3000);
+              stateRef.current.handleStartTextReplyAnalysis(fallbackMsg);
               return;
             }
             setIsGenerating(false);
@@ -488,6 +592,138 @@ export const App: React.FC = () => {
 
   stateRef.current.handleStartScreenReplyAnalysis = handleStartScreenReplyAnalysis;
 
+  // Structured Text-based Reply Analysis (Output JSON for selected chat messages)
+  const handleStartTextReplyAnalysis = useCallback(async (messageText: string) => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+    const currentSignal = abortController.signal;
+
+    setIsGenerating(true);
+    setError(null);
+    setPolishedText('正在针对消息构思高情商回复建议...');
+    setDurationMs(0);
+    setTotalTokens(0);
+
+    const currentApiKey = stateRef.current.apiKey || apiKey;
+    const currentEndpoint = stateRef.current.endpoint || endpoint;
+    const currentModel = stateRef.current.model || model;
+
+    // Offline / Mock fallback
+    if (!currentApiKey) {
+      setTimeout(() => {
+        if (currentSignal.aborted) return;
+        setIsGenerating(false);
+        const targetMsg = messageText.trim() || '这版方案周五前能交付吗？';
+        const mockAnalysis: ScreenReplyAnalysis = {
+          conversation: [{ sender: 'other', text: targetMsg }],
+          last_message_from_other: targetMsg,
+          draft_reply: `收到，关于“${targetMsg.slice(0, 15)}...”，我这边会全力推进落实，稍后同步最新进展！`,
+          clarify_options: ['积极推进（全力落实）', '严谨对齐（确认排期）', '委婉缓冲（稍后答复）'],
+        };
+        setScreenReplyAnalysis(mockAnalysis);
+        setPolishedText(mockAnalysis.draft_reply);
+        setOriginalText(targetMsg);
+        stateRef.current.originalText = targetMsg;
+        if (abortControllerRef.current === abortController) {
+          abortControllerRef.current = null;
+        }
+      }, 500);
+      return;
+    }
+
+    let rawOutput = '';
+    const streamConfig: StreamConfig = {
+      style: 'reply',
+      customPrompt: buildTextReplySystemPrompt(activePersonaPrompt),
+      apiKey: currentApiKey || undefined,
+      baseUrl: currentEndpoint || undefined,
+      model: currentModel || undefined,
+      temperature: 0.4,
+    };
+
+    try {
+      await adapters.llmTransport.streamChat(
+        { text: buildTextReplyUserPrompt(messageText), config: streamConfig },
+        {
+          onChunk: (delta) => {
+            if (currentSignal.aborted) return;
+            rawOutput += delta;
+          },
+          onDone: (duration, tokens) => {
+            if (currentSignal.aborted) return;
+            setIsGenerating(false);
+            setDurationMs(duration);
+            setTotalTokens(tokens);
+            if (abortControllerRef.current === abortController) {
+              abortControllerRef.current = null;
+            }
+
+            let parsed: ScreenReplyAnalysis | null = null;
+            try {
+              const cleaned = rawOutput
+                .replace(/^```json\s*/i, '')
+                .replace(/^```\s*/i, '')
+                .replace(/\s*```$/i, '')
+                .trim();
+              parsed = JSON.parse(cleaned);
+            } catch {
+              parsed = {
+                conversation: [{ sender: 'other', text: messageText }],
+                last_message_from_other: messageText,
+                draft_reply: rawOutput.trim(),
+                clarify_options: ['积极推进/正面答复', '严谨对齐/确认细节', '委婉缓冲/礼貌借过'],
+              };
+            }
+
+            if (parsed) {
+              setScreenReplyAnalysis(parsed);
+              const draft = parsed.draft_reply || rawOutput.trim();
+              setPolishedText(draft);
+              const targetMsg = parsed.last_message_from_other || messageText;
+              setOriginalText(targetMsg);
+              stateRef.current.originalText = targetMsg;
+              if (draft) {
+                addHistoryRecord({
+                  originalText: targetMsg,
+                  polishedText: draft,
+                  style: 'reply',
+                  model: streamConfig.model,
+                  tokens,
+                  durationMs: duration,
+                });
+              }
+            }
+          },
+          onError: (err) => {
+            if (currentSignal.aborted) return;
+            setIsGenerating(false);
+            setError(err);
+            if (abortControllerRef.current === abortController) {
+              abortControllerRef.current = null;
+            }
+          },
+          onAbort: () => {
+            if (currentSignal.aborted && abortControllerRef.current === abortController) {
+              setIsGenerating(false);
+              abortControllerRef.current = null;
+            }
+          },
+        },
+        currentSignal
+      );
+    } catch (e: any) {
+      if (!currentSignal.aborted) {
+        setIsGenerating(false);
+        setError(String(e?.message || e));
+      }
+    }
+  }, [adapters, apiKey, endpoint, model]);
+
+  stateRef.current.handleStartTextReplyAnalysis = handleStartTextReplyAnalysis;
+
   // Round 2: Refine Screen Reply using Conversation Context + Chip / Instruction + Attached Files
   const handleSelectClarifyChip = useCallback((chipText: string) => {
     const analysis = stateRef.current.screenReplyAnalysis;
@@ -499,9 +735,9 @@ export const App: React.FC = () => {
         .join('\n\n');
       instruction = `${chipText}\n\n${fileSummaries}`;
     }
-    const refinePrompt = buildScreenReplyRefinePrompt(conversation, instruction);
+    const refinePrompt = buildScreenReplyRefinePrompt(conversation, instruction, activePersonaPrompt);
     handleStartPolish(refinePrompt, 'reply', chipText, undefined);
-  }, [handleStartPolish, attachedFiles]);
+  }, [handleStartPolish, attachedFiles, activePersonaPrompt]);
 
   // Load Saved Settings on Mount
   useEffect(() => {
@@ -514,11 +750,26 @@ export const App: React.FC = () => {
       const savedReadScreenshot = await adapters.storageProvider.get<boolean>('readChatScreenshot', true);
       const savedWakeShortcut = await adapters.storageProvider.get<string>('wakeShortcut', DEFAULT_SHORTCUT);
       const savedAutostart = await adapters.storageProvider.get<boolean>('autostart', false);
+      const savedPersona = await adapters.storageProvider.get<PersonaType>('persona', 'standard');
+      const savedCustomPersona = await adapters.storageProvider.get<string>('customPersonaPrompt', '');
 
       if (savedKey) setApiKey(savedKey);
       if (savedEndpoint) setEndpoint(savedEndpoint);
       if (savedModel) setModel(savedModel);
       if (savedStyle) setActiveStyle(savedStyle);
+      if (savedPersona) setPersona(savedPersona);
+      if (savedCustomPersona) setCustomPersonaPrompt(savedCustomPersona);
+
+      const savedHistory = await adapters.storageProvider.get<HistoryRecord[]>('generationHistory', []);
+      if (Array.isArray(savedHistory)) setHistory(savedHistory);
+
+      const savedDraft = await adapters.storageProvider.get<DraftSnapshot | null>('activeDraft', null);
+      if (savedDraft && savedDraft.timestamp && Date.now() - savedDraft.timestamp < 15 * 60 * 1000) {
+        if (savedDraft.polishedText || savedDraft.originalText) {
+          setRecoverableDraft(savedDraft);
+        }
+      }
+
       setAutoCopyPopup(savedAutoPopup);
       stateRef.current.autoCopyPopup = savedAutoPopup;
       const initialMode = savedAutoPopup ? 'panel' : 'capsule';
@@ -559,30 +810,48 @@ export const App: React.FC = () => {
 
     loadConfig().catch((e) => {
       console.warn('load app config failed:', e);
-      showToast('配置加载失败，请打开设置重试', 4000);
+      showToast('配置加载载入失败，请打开设置重试', 4000);
     });
+  }, [adapters.storageProvider, isTauri, showToast]);
 
+  // Auto-save active draft to prevent accidental loss on close or crash
+  useEffect(() => {
+    if (isGenerating) return;
+    if (!originalText.trim() && !polishedText.trim()) return;
+    const timer = setTimeout(() => {
+      adapters.storageProvider.set('activeDraft', {
+        timestamp: Date.now(),
+        originalText,
+        polishedText,
+        activeStyle,
+      }).catch(() => {});
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [originalText, polishedText, activeStyle, isGenerating, adapters.storageProvider]);
+
+  useEffect(() => {
     // In Tauri, signal that frontend is ready to avoid white flash
     if (isTauri) {
       invoke('app_ready').catch((e) => console.warn('app_ready failed:', e));
 
       // Listen for selection events from Rust global shortcut or mouse hook
-      listen('runbi://captured-selection', (event: any) => {
+      const unlistens: Array<Promise<(() => void) | undefined>> = [];
+      unlistens.push(listen('runbi://captured-selection', (event: any) => {
+        const __p = event?.payload || {};
+        invoke('append_log', { msg: `frontend: event received t=${__p.trigger} hs=${__p.hasScreenshot} keys=[${Object.keys(__p).join(',')}] text=${String(__p.text || '').slice(0, 24)}` }).catch(() => {});
         setShowEpoch((n) => n + 1); // remount panel container → replay enter animation
+        invoke('append_log', { msg: 'frontend: epoch bumped' }).catch(() => {});
         const isSensitiveBlocked = event?.payload?.trigger === 'sensitive-blocked';
-        const isScreenReply = event?.payload?.trigger === 'screen-reply' && Boolean(event?.payload?.screenshot);
+        const isScreenReply = event?.payload?.trigger === 'screen-reply' && Boolean(event?.payload?.hasScreenshot);
+        stateRef.current.hasScreenshot = isScreenReply;
+        invoke('append_log', { msg: `frontend: flags computed sr=${isScreenReply} sens=${isSensitiveBlocked} rcs=${stateRef.current.readChatScreenshot}` }).catch(() => {});
 
         if (isSensitiveBlocked) {
           setClipboardRef(null);
         } else {
-          readClipboardText().then((clip: string) => {
-            const trimmed = clip?.trim();
-            if (trimmed && trimmed.length > 5 && (!event?.payload?.text || trimmed !== event.payload.text.trim())) {
-              setClipboardRef(trimmed);
-            } else {
-              setClipboardRef(null);
-            }
-          }).catch(() => {});
+          // No silent clipboard injection: the user can't judge whether stale
+          // clipboard text is valid context. Explicit attach buttons remain.
+          setClipboardRef(null);
         }
 
         if (isSensitiveBlocked) {
@@ -595,10 +864,9 @@ export const App: React.FC = () => {
           setViewMode('panel');
           stateRef.current.viewMode = 'panel';
           showToast('已拦截疑似密码或密钥，内容未发送给模型', 4000);
-        } else if (isScreenReply && stateRef.current.readChatScreenshot) {
-          const screenshot = event.payload.screenshot;
-          setCurrentScreenshot(screenshot);
-          stateRef.current.currentScreenshot = screenshot;
+        } else if (isScreenReply) {
+                    setCurrentScreenshot(null);
+          stateRef.current.currentScreenshot = null;
           setViewMode('panel');
           stateRef.current.viewMode = 'panel';
           setActiveStyle('reply');
@@ -608,11 +876,17 @@ export const App: React.FC = () => {
           setOriginalText(previewText);
           stateRef.current.originalText = previewText;
           setScreenReplyAnalysis(null);
-          showToast('💡 已捕获聊天界面，正在识别对话并构思回复...');
 
-          stateRef.current.handleStartScreenReplyAnalysis(screenshot, hint);
+          // Vision disabled → open the panel but do NOT send screenshots to the LLM.
+          if (!stateRef.current.readChatScreenshot) {
+            invoke('append_log', { msg: 'frontend: screen-reply gated OFF (readChatScreenshot=false)' }).catch(() => {});
+            showToast('视觉读取已在设置中关闭，打开后可分析聊天窗口', 4000);
+          } else {
+            showToast('💡 已捕获聊天界面，正在识别对话并构思回复...');
+            invoke('append_log', { msg: 'frontend: screen-reply → vision analysis start' }).catch(() => {});
+            stateRef.current.handleStartScreenReplyAnalysis(hint);
+          }
         } else if (event?.payload?.text) {
-          setScreenReplyAnalysis(null);
           const captured = event.payload.text;
           const screenshot = event.payload.screenshot || null;
           setCurrentScreenshot(screenshot);
@@ -635,22 +909,42 @@ export const App: React.FC = () => {
           if (cls.confidence >= 0.7 && targetStyle !== 'polished') {
             showToast(`💡 智能识别【${STYLE_NAMES[targetStyle]}】(${cls.reason})`);
           }
-          stateRef.current.handleStartPolish(captured, targetStyle, undefined, screenshot);
+
+          if (targetStyle === 'reply') {
+            stateRef.current.handleStartTextReplyAnalysis(captured);
+          } else {
+            setScreenReplyAnalysis(null);
+            stateRef.current.handleStartPolish(captured, targetStyle, undefined, screenshot);
+          }
         } else if (event?.payload?.trigger === 'shortcut') {
           setViewMode('panel');
           stateRef.current.viewMode = 'panel';
           showToast('未检测到选中文本');
+        } else if (event?.payload?.trigger === 'screen-reply') {
+          // Screen-reply trigger but no screenshot available — never stay silent.
+          invoke('append_log', { msg: 'frontend: screen-reply without screenshot' }).catch(() => {});
+          showToast('截图失败，请再按一次快捷键重试', 4000);
         }
-      }).catch((e) => console.warn('listen captured-selection failed:', e));
+      }).then((un) => un, (e: unknown) => {
+        invoke('append_log', { msg: `frontend: listen FAILED: ${String(e).slice(0, 300)}` }).catch(() => {});
+        console.warn('listen captured-selection failed:', e);
+        return undefined;
+      }));
 
       // Tray "设置" menu → show window & open the settings form
-      listen('runbi://open-settings', () => {
+      unlistens.push(listen('runbi://open-settings', () => {
         setViewMode('panel');
         stateRef.current.viewMode = 'panel';
         setShowEpoch((n) => n + 1);
         setShowSettings(true);
-      }).catch((e) => console.warn('listen open-settings failed:', e));
+      }).then((un) => un, (e) => { console.warn('listen open-settings failed:', e); return undefined; }));
+
+      invoke('append_log', { msg: 'frontend: listeners registered (1x)' }).catch(() => {});
+      return () => {
+        for (const p of unlistens) p.then((un) => { if (un) un(); }).catch(() => {});
+      };
     }
+    return undefined;
   }, [adapters, isTauri]);
 
   const handleTestConnection = async () => {
@@ -699,6 +993,8 @@ export const App: React.FC = () => {
         readChatScreenshot,
         autostart,
         wakeShortcut: sc,
+        persona,
+        customPersonaPrompt: customPersonaPrompt.trim(),
       });
 
       if (isTauri) {
@@ -1146,6 +1442,43 @@ export const App: React.FC = () => {
                     {connectionTest.status === 'testing' ? '测试中' : '测试连接'}
                   </button>
                 </div>
+              </section>
+
+              <section aria-labelledby="persona-settings-title" className="space-y-3 border-t border-white/10 pt-4">
+                <h3 id="persona-settings-title" className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
+                  个性人设与说话风格
+                </h3>
+
+                <div className="space-y-1.5">
+                  <label htmlFor="persona-preset" className="block font-medium text-slate-300">我的人设偏好</label>
+                  <select
+                    id="persona-preset"
+                    value={persona}
+                    onChange={(e) => setPersona(e.target.value as PersonaType)}
+                    className="runbi-form-control cursor-pointer"
+                  >
+                    {PERSONA_PRESETS.map((p) => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                  <p className="text-[10px] text-slate-500">
+                    {PERSONA_PRESETS.find((p) => p.id === persona)?.description}
+                  </p>
+                </div>
+
+                {persona === 'custom' && (
+                  <div className="space-y-1.5">
+                    <label htmlFor="custom-persona-prompt" className="block font-medium text-slate-300">自定义人设描述</label>
+                    <textarea
+                      id="custom-persona-prompt"
+                      rows={3}
+                      placeholder="例：互联网大厂高级产品经理，注重商业价值和用户体验，语气自信沉稳且有条理..."
+                      value={customPersonaPrompt}
+                      onChange={(e) => setCustomPersonaPrompt(e.target.value)}
+                      className="runbi-form-control resize-none font-sans text-xs"
+                    />
+                  </div>
+                )}
               </section>
 
               <section aria-labelledby="desktop-settings-title" className="space-y-2.5 border-t border-white/10 pt-4">

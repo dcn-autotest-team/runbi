@@ -136,6 +136,7 @@ export interface PromptBuildOptions {
   customPromptOverride?: string;
   userInstruction?: string;
   hasVisionContext?: boolean;
+  personaPrompt?: string;
 }
 
 export interface UserPromptOptions {
@@ -148,7 +149,7 @@ export interface UserPromptOptions {
  * Builds the strict system prompt for LLM completions.
  */
 export function buildSystemPrompt(options: PromptBuildOptions): string {
-  const { style, customPromptOverride, userInstruction, hasVisionContext } = options;
+  const { style, customPromptOverride, userInstruction, hasVisionContext, personaPrompt } = options;
 
   let base =
     customPromptOverride && customPromptOverride.trim()
@@ -158,6 +159,10 @@ export function buildSystemPrompt(options: PromptBuildOptions): string {
   if (style === 'reply' && hasVisionContext) {
     base =
       '你是一名顶级的即时通讯与会话回复专家。你的职责是：仔细观察截图中呈现的完整聊天上下文（包括上下文各发言人的消息、对方的真实诉求与对话背景），针对用户划选的目标消息，生成一条自然得体、高情商且全面呼应上文所有要点的精准回复。';
+  }
+
+  if (personaPrompt && personaPrompt.trim()) {
+    base += `\n【用户人设风格偏好】：${personaPrompt.trim()}\n生成时请深度契合此人设特征。`;
   }
 
   if (userInstruction && userInstruction.trim()) {
@@ -189,17 +194,19 @@ export function buildUserPrompt(options: UserPromptOptions): string {
 }
 
 /**
- * Interpolates variables in custom template string (e.g. `{text}`, `{instruction}`).
+ * Replaces `{variable}` placeholders in template strings with actual values.
  */
-export function interpolateTemplate(
+export function interpolatePrompt(
   template: string,
-  variables: Record<string, string | number | undefined>
+  variables: Record<string, string | number | boolean | undefined>
 ): string {
-  return template.replace(/\{([a-zA-Z0-9_]+)\}/g, (match, key) => {
+  return template.replace(/\{(\w+)\}/g, (match, key) => {
     const val = variables[key];
     return val !== undefined ? String(val) : match;
   });
 }
+
+export const interpolateTemplate = interpolatePrompt;
 
 export interface ScreenReplyAnalysis {
   conversation: Array<{ sender: 'me' | 'other'; text: string }>;
@@ -212,8 +219,11 @@ export interface ScreenReplyAnalysis {
 /**
  * Builds system prompt for Round 1 screen reply analysis (structured JSON extraction).
  */
-export function buildScreenReplySystemPrompt(): string {
-  return `你是一名顶级的即时通讯与对话理解专家。你的任务是深入分析聊天窗口截图中呈现的对话记录，提炼上下文与对方的核心意图，并构思回复建议。
+export function buildScreenReplySystemPrompt(personaPrompt?: string): string {
+  const personaSection = personaPrompt && personaPrompt.trim()
+    ? `\n【用户人设风格偏好】：${personaPrompt.trim()}\n在提取意图并生成草稿时深度契合此人设风格。\n`
+    : '';
+  return `你是一名顶级的即时通讯与对话理解专家。你的任务是深入分析聊天窗口截图中呈现的对话记录，提炼上下文与对方的核心意图，并构思回复建议。${personaSection}
 【极其严格的格式要求】：
 1. 必须输出且仅输出一个合法的 JSON 对象，格式必须完全符合如下结构：
 {
@@ -241,10 +251,44 @@ export function buildScreenReplyUserPrompt(): string {
  */
 export function buildScreenReplyRefinePrompt(
   conversation: Array<{ sender: 'me' | 'other'; text: string }>,
-  instruction: string
+  instruction: string,
+  personaPrompt?: string
 ): string {
   const historyText = conversation
     .map((c) => `[${c.sender === 'me' ? '我' : '对方'}]: ${c.text}`)
     .join('\n');
-  return `【历史对话记录】：\n${historyText}\n\n【我的回复要求/语气偏好】：\n${instruction}\n\n请直接生成最终的回复内容。`;
+  const personaSection = personaPrompt && personaPrompt.trim()
+    ? `\n【我的人设风格偏好】：\n${personaPrompt.trim()}\n`
+    : '';
+  return `【历史对话记录】：\n${historyText}\n\n【我的回复要求/语气偏好】：\n${instruction}${personaSection}\n\n请直接生成最终的回复内容。`;
 }
+
+/**
+ * Builds system prompt for text-only reply analysis (structured JSON extraction for selected chat messages).
+ */
+export function buildTextReplySystemPrompt(personaPrompt?: string): string {
+  const personaSection = personaPrompt && personaPrompt.trim()
+    ? `\n【用户人设风格偏好】：${personaPrompt.trim()}\n在构思回复建议与草稿时深度契合此人设风格。\n`
+    : '';
+  return `你是一名顶级的即时通讯与高情商对话专家。针对用户提供的对方消息，深入理解对方的真实诉求与情境，并构思回复建议。${personaSection}
+【极其严格的格式要求】：
+1. 必须输出且仅输出一个合法的 JSON 对象，格式必须完全符合如下结构：
+{
+  "conversation": [
+    {"sender": "other", "text": "对方发来的核心消息"}
+  ],
+  "last_message_from_other": "对方发来的核心消息",
+  "ambiguity": "简要说明对话背景或对方期望",
+  "clarify_options": ["积极推进/正面答复", "严谨对齐/确认细节", "委婉缓冲/礼貌借过"],
+  "draft_reply": "基于现有信息生成的默认自然、高情商回复草稿"
+}
+2. 严禁输出任何 markdown 代码块外部的客套话或多余文字。`;
+}
+
+/**
+ * Builds user prompt for text-only reply analysis.
+ */
+export function buildTextReplyUserPrompt(message: string): string {
+  return `【对方发来的消息】：\n"""\n${message}\n"""\n\n请分析对方诉求，输出符合要求的 JSON 分析与默认回复草稿。`;
+}
+

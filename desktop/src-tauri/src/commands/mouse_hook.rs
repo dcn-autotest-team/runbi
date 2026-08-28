@@ -126,6 +126,8 @@ unsafe extern "system" fn low_level_mouse_proc(
                                 }
 
                                 // 3. Grab selection text via dynamic short-polling (typically 15ms, max 150ms)
+                                // Capture screen context first (stored Rust-side; for vision reply).
+                                let has_screenshot = crate::commands::screenshot::capture_foreground_screenshot().is_ok();
                                 let captured_text = match crate::commands::selection::grab_selected_text_with_retry(&app).await {
                                     Some(t) => t,
                                     None => return,
@@ -162,7 +164,7 @@ unsafe extern "system" fn low_level_mouse_proc(
                                                 "text": captured_text,
                                                 "sourceApp": source_app,
                                                 "windowTitle": window_title,
-                                                "screenshot": null,
+                                                "hasScreenshot": has_screenshot,
                                                 "trigger": "selection",
                                             }),
                                         );

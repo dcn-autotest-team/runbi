@@ -125,6 +125,7 @@ export class TauriIPCLLMTransport implements ILLMTransport {
           userPrompt,
           temperature: config.temperature ?? 0.7,
           imageDataUrl: config.imageDataUrl || null,
+          useLastScreenshot: config.useLastScreenshot ?? false,
           channel,
         });
         return;

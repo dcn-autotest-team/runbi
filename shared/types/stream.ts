@@ -36,9 +36,12 @@ export interface StreamConfig {
   style: PolishStyle;
   customPrompt?: string;
   userInstruction?: string;
+  personaPrompt?: string;
   temperature?: number;
   maxTokens?: number;
   imageDataUrl?: string;
+  /** Pull the last Rust-captured screenshot instead of passing image bytes over IPC. */
+  useLastScreenshot?: boolean;
 }
 
 /**

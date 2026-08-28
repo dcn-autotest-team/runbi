@@ -7,3 +7,4 @@ export * from './selection';
 export * from './diff';
 export * from './stream';
 export * from './settings';
+export * from './history';

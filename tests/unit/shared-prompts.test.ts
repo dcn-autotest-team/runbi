@@ -14,6 +14,8 @@ import {
   buildScreenReplySystemPrompt,
   buildScreenReplyUserPrompt,
   buildScreenReplyRefinePrompt,
+  buildTextReplySystemPrompt,
+  buildTextReplyUserPrompt,
 } from '@runbi/shared/core/prompts';
 import type { PolishStyle } from '@runbi/shared/types/stream';
 
@@ -157,6 +159,39 @@ describe('Shared Core: Prompt Engine & Dynamic Builder', () => {
       expect(prompt).toContain('[我]: 我上午有个评审。');
       expect(prompt).toContain('[对方]: 那下午两点方便吗？');
       expect(prompt).toContain('【我的回复要求/语气偏好】：\n热情答应并约定地点');
+    });
+
+    it('should build text reply system and user prompts with JSON schema and message content', () => {
+      const sysPrompt = buildTextReplySystemPrompt();
+      expect(sysPrompt).toContain('JSON');
+      expect(sysPrompt).toContain('"last_message_from_other"');
+      expect(sysPrompt).toContain('"clarify_options"');
+
+      const userPrompt = buildTextReplyUserPrompt('这周五能交付吗？');
+      expect(userPrompt).toContain('这周五能交付吗？');
+    });
+
+    it('should inject persona prompt into system and refine prompts when provided', () => {
+      const persona = '沉稳严谨、逻辑清晰、用词得体自信，符合高质量职场商务标准。';
+      const sysPrompt = buildSystemPrompt({ style: 'business', personaPrompt: persona });
+      expect(sysPrompt).toContain('【用户人设风格偏好】：');
+      expect(sysPrompt).toContain(persona);
+
+      const screenSysPrompt = buildScreenReplySystemPrompt(persona);
+      expect(screenSysPrompt).toContain('【用户人设风格偏好】：');
+      expect(screenSysPrompt).toContain(persona);
+
+      const textSysPrompt = buildTextReplySystemPrompt(persona);
+      expect(textSysPrompt).toContain('【用户人设风格偏好】：');
+      expect(textSysPrompt).toContain(persona);
+
+      const refinePrompt = buildScreenReplyRefinePrompt(
+        [{ sender: 'other', text: '你好' }],
+        '确认收到',
+        persona
+      );
+      expect(refinePrompt).toContain('【我的人设风格偏好】：');
+      expect(refinePrompt).toContain(persona);
     });
   });
 });

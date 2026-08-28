@@ -104,19 +104,44 @@ pub fn capture_foreground_screenshot() -> Result<String, String> {
 
             let mut jpeg_bytes = Vec::new();
             let mut cursor = std::io::Cursor::new(&mut jpeg_bytes);
-            target_img
+            // JPEG has no alpha channel: the `image` crate rejects Rgba8, so drop to RGB8 first.
+            image::DynamicImage::ImageRgba8(target_img)
+                .to_rgb8()
                 .write_to(&mut cursor, image::ImageFormat::Jpeg)
                 .map_err(|e| format!("Failed to encode JPEG: {}", e))?;
 
             use base64::Engine;
             let b64 = base64::engine::general_purpose::STANDARD.encode(&jpeg_bytes);
-            Ok(format!("data:image/jpeg;base64,{}", b64))
+            let data_url = format!("data:image/jpeg;base64,{}", b64);
+            // Keep the screenshot Rust-side: large base64 payloads get silently
+            // dropped crossing the IPC bridge (WebView2 postMessage), so the
+            // frontend only ever receives a hasScreenshot flag and the LLM call
+            // pulls the image from here via use_last_screenshot.
+            if let Ok(mut slot) = LAST_SCREENSHOT.lock() {
+                *slot = Some(data_url.clone());
+            }
+            Ok(data_url)
         }
     }
     #[cfg(not(windows))]
     {
         Err("Screenshot not supported on non-windows platform".to_string())
     }
+}
+
+/// Last captured screenshot, kept in Rust memory (never crosses IPC whole).
+#[allow(dead_code)]
+pub static LAST_SCREENSHOT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+#[allow(dead_code)]
+pub fn last_screenshot() -> Option<String> {
+    LAST_SCREENSHOT.lock().ok().and_then(|s| s.clone())
+}
+
+#[tauri::command]
+#[allow(dead_code)]
+pub fn has_last_screenshot() -> bool {
+    LAST_SCREENSHOT.lock().map(|s| s.is_some()).unwrap_or(false)
 }
 
 /// Checks if foreground window is likely an IM / chat communication application

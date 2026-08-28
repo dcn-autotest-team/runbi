@@ -40,9 +40,19 @@ pub async fn stream_llm_chat(
     user_prompt: String,
     temperature: Option<f32>,
     image_data_url: Option<String>,
+    use_last_screenshot: Option<bool>,
     channel: Channel<StreamEvent>,
 ) -> Result<(), String> {
     let start = Instant::now();
+    // Resolve the vision image: explicit data URL wins, else pull the last
+    // captured screenshot from Rust-side state (it never crosses IPC whole).
+    let img_url = match image_data_url {
+        Some(ref u) if !u.is_empty() => Some(u.clone()),
+        _ if use_last_screenshot.unwrap_or(false) => {
+            crate::commands::screenshot::last_screenshot()
+        }
+        _ => None,
+    };
     // Streaming-friendly timeouts: connect_timeout covers dial + TLS handshake,
     // read_timeout covers each body chunk individually. A single total `timeout`
     // would kill long-running polish streams at the 60s mark even when healthy.
@@ -52,7 +62,7 @@ pub async fn stream_llm_chat(
         .build()
         .map_err(|e| e.to_string())?;
 
-    let messages = if let Some(ref img_url) = image_data_url {
+    let messages = if let Some(ref img_url) = img_url {
         if !img_url.is_empty() {
             serde_json::json!([
                 { "role": "system", "content": system_prompt },
@@ -92,7 +102,7 @@ pub async fn stream_llm_chat(
         &format!(
             "llm request: model={} image={} payload_kb={} endpoint={}",
             model,
-            image_data_url.is_some(),
+            img_url.is_some(),
             payload_kb,
             endpoint
         ),
@@ -150,6 +160,7 @@ pub async fn stream_llm_chat(
     // multi-byte UTF-8 sequence, so decoding per line is always safe.
     let mut buffer: Vec<u8> = Vec::new();
     let mut total_tokens = 0;
+    let mut snippet = String::new();
 
     while let Some(item) = stream.next().await {
         match item {
@@ -165,6 +176,8 @@ pub async fn stream_llm_chat(
                     }
 
                     if line == "data: [DONE]" {
+                        let head: String = snippet.chars().take(160).collect();
+                        crate::commands::file_log(&app, &format!("llm done: {} chars, head: {}", snippet.chars().count(), head));
                         let _ = channel.send(StreamEvent::Done {
                             duration_ms: start.elapsed().as_millis() as u64,
                             total_tokens,
@@ -176,6 +189,9 @@ pub async fn stream_llm_chat(
                         if let Ok(val) = serde_json::from_str::<serde_json::Value>(stripped) {
                             if let Some(delta) = val["choices"][0]["delta"]["content"].as_str() {
                                 total_tokens += 1;
+                                if snippet.chars().count() < 300 {
+                                    snippet.push_str(delta);
+                                }
                                 let _ = channel.send(StreamEvent::Chunk {
                                     delta: delta.to_string(),
                                 });
@@ -193,6 +209,8 @@ pub async fn stream_llm_chat(
         }
     }
 
+    let head: String = snippet.chars().take(160).collect();
+    crate::commands::file_log(&app, &format!("llm done (stream end): {} chars, head: {}", snippet.chars().count(), head));
     let _ = channel.send(StreamEvent::Done {
         duration_ms: start.elapsed().as_millis() as u64,
         total_tokens,

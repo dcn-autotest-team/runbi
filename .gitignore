@@ -54,3 +54,4 @@ Thumbs.db
 # Icon build temp artifacts
 .tmp/
 desktop/src-tauri/target-iconfix/
+.cowork-temp/

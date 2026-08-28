@@ -64,7 +64,65 @@ export interface AppSettings {
    * Desktop global shortcut (e.g. 'Alt+Space').
    */
   shortcut?: string;
+
+  /**
+   * User Persona preference ID.
+   */
+  persona?: PersonaType;
+
+  /**
+   * Custom Persona prompt description when persona is 'custom'.
+   */
+  customPersonaPrompt?: string;
 }
+
+export type PersonaType = 'standard' | 'professional' | 'warm' | 'concise' | 'humorous' | 'custom';
+
+export interface PersonaPreset {
+  id: PersonaType;
+  name: string;
+  description: string;
+  prompt: string;
+}
+
+export const PERSONA_PRESETS: PersonaPreset[] = [
+  {
+    id: 'standard',
+    name: '标准得体 (默认)',
+    description: '自然大方、情商在线，适用于绝大多数日常与职场场景',
+    prompt: '自然大方、高情商且语调适中，符合礼貌得体的社交规范。',
+  },
+  {
+    id: 'professional',
+    name: '严谨商务',
+    description: '沉稳干练、职场专业、逻辑严谨，适合正式汇报与跨部门沟通',
+    prompt: '沉稳严谨、逻辑清晰、用词得体自信，符合高质量职场商务标准。',
+  },
+  {
+    id: 'warm',
+    name: '亲切亲和',
+    description: '真诚周到、富有同理心与温度，适合客户关怀与团队伙伴协作',
+    prompt: '真诚热情、富有同理心与沟通温度，语气亲切周到。',
+  },
+  {
+    id: 'concise',
+    name: '极简敏捷',
+    description: '直切要害、短小精悍、不讲废话，适合高效快节奏交流',
+    prompt: '极致精简干练，直奔主题核心，剔除一切冗余客套话。',
+  },
+  {
+    id: 'humorous',
+    name: '幽默风趣',
+    description: '生动接梗、高情商自嘲与破冰，适合轻松活跃的社群与好友对话',
+    prompt: '幽默轻松、机智生动、高情商化解与接梗，氛围轻松愉悦。',
+  },
+  {
+    id: 'custom',
+    name: '自定义人设',
+    description: '自定义您的个性化身份背景、说话习惯与特定行业术语',
+    prompt: '',
+  },
+];
 
 /**
  * Provider metadata definition for UI selection.

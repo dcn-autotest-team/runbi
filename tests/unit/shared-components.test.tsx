@@ -15,6 +15,7 @@ import {
   InstructionInput,
   Toast,
   PolishPanel,
+  MarkdownRenderer,
 } from '@runbi/shared/components';
 
 describe('Shared UI Components (@runbi/shared/components)', () => {
@@ -137,6 +138,29 @@ describe('Shared UI Components (@runbi/shared/components)', () => {
         stopBtn?.click();
       });
       expect(handleStop).toHaveBeenCalledTimes(1);
+    });
+
+    it('should render markdown bold, inline code, and numbered lists properly', async () => {
+      const markdown = `1. **夯实基础**: 重点掌握\`NumPy\`和\`Pandas\`。\n2. **框架实战**: 直接上手PyTorch。\n\n> 祝学习顺利！`;
+      await renderElement(
+        <StreamingView
+          content={markdown}
+          isGenerating={false}
+        />
+      );
+
+      expect(container.textContent).toContain('夯实基础');
+      expect(container.textContent).toContain('重点掌握');
+      const strongs = container.querySelectorAll('strong');
+      expect(strongs.length).toBe(2);
+      expect(strongs[0].textContent).toBe('夯实基础');
+      expect(strongs[1].textContent).toBe('框架实战');
+
+      const codes = container.querySelectorAll('code');
+      expect(codes.length).toBe(2);
+      expect(codes[0].textContent).toBe('NumPy');
+
+      expect(container.textContent).toContain('祝学习顺利！');
     });
   });
 

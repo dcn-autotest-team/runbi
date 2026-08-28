@@ -10,3 +10,5 @@ export * from './ActionBar';
 export * from './InstructionInput';
 export * from './OriginalPreview';
 export * from './Toast';
+export * from './MarkdownRenderer';
+export * from './HistoryDrawer';
