@@ -147,6 +147,8 @@ export const OptionsApp: React.FC<OptionsAppProps> = ({
   // Custom Prompts State for 6+ styles
   const [activePromptStyle, setActivePromptStyle] = useState<PolishStyle>('polished');
   const [customPrompts, setCustomPrompts] = useState<Partial<Record<PolishStyle, string>>>({});
+  const [telemetryEnabled, setTelemetryEnabled] = useState<boolean>(false);
+  const [telemetryDsn, setTelemetryDsn] = useState<string>('');
 
   // Status & Feedback States
   const [isTesting, setIsTesting] = useState<boolean>(false);
@@ -173,6 +175,11 @@ export const OptionsApp: React.FC<OptionsAppProps> = ({
         if (storedTriggerMode) setTriggerMode(storedTriggerMode);
         if (Array.isArray(storedBlacklist)) setBlacklistText(storedBlacklist.join('\n'));
         if (storedCustomPrompts) setCustomPrompts(storedCustomPrompts);
+
+        const storedTelemetryEnabled = await storage.get<boolean>('telemetry.enabled', false);
+        const storedTelemetryDsn = await storage.get<string>('telemetry.dsn', '');
+        setTelemetryEnabled(Boolean(storedTelemetryEnabled));
+        if (storedTelemetryDsn !== undefined) setTelemetryDsn(storedTelemetryDsn);
       } catch (_) {}
     }
 
@@ -224,38 +231,42 @@ export const OptionsApp: React.FC<OptionsAppProps> = ({
       .filter((s) => s.length > 0);
 
     const payload = {
-      provider,
-      baseUrl: baseUrl.trim(),
-      apiKey: apiKey.trim(),
-      model: model.trim(),
-      triggerMode,
-      blacklist,
-      customPrompts,
-    };
+          provider,
+          baseUrl: baseUrl.trim(),
+          apiKey: apiKey.trim(),
+          model: model.trim(),
+          triggerMode,
+          blacklist,
+          customPrompts,
+          'telemetry.enabled': telemetryEnabled,
+          'telemetry.dsn': telemetryDsn.trim(),
+        };
 
-    try {
-      if (typeof chrome !== 'undefined' && chrome.storage?.local) {
-        await chrome.storage.local.set(payload);
-      } else {
-        await storage.set('provider', payload.provider);
-        await storage.set('baseUrl', payload.baseUrl);
-        await storage.set('apiKey', payload.apiKey);
-        await storage.set('model', payload.model);
-        await storage.set('triggerMode', payload.triggerMode);
-        await storage.set('blacklist', payload.blacklist);
-        await storage.set('customPrompts', payload.customPrompts);
-      }
-      setIsSaved(true);
-      setToastMessage('✓ 配置已成功保存！');
-      setTimeout(() => {
-        setIsSaved(false);
-        setToastMessage(null);
-      }, 2500);
-    } catch (err: any) {
-      setToastMessage(`保存失败: ${err?.message || '未知错误'}`);
-      setTimeout(() => setToastMessage(null), 3000);
-    }
-  }, [provider, baseUrl, apiKey, model, triggerMode, blacklistText, customPrompts, storage]);
+        try {
+          if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+            await chrome.storage.local.set(payload);
+          } else {
+            await storage.set('provider', payload.provider);
+            await storage.set('baseUrl', payload.baseUrl);
+            await storage.set('apiKey', payload.apiKey);
+            await storage.set('model', payload.model);
+            await storage.set('triggerMode', payload.triggerMode);
+            await storage.set('blacklist', payload.blacklist);
+            await storage.set('customPrompts', payload.customPrompts);
+            await storage.set('telemetry.enabled', telemetryEnabled);
+            await storage.set('telemetry.dsn', telemetryDsn.trim());
+          }
+          setIsSaved(true);
+          setToastMessage('✓ 配置已成功保存！');
+          setTimeout(() => {
+            setIsSaved(false);
+            setToastMessage(null);
+          }, 2500);
+        } catch (err: any) {
+          setToastMessage(`保存失败: ${err?.message || '未知错误'}`);
+          setTimeout(() => setToastMessage(null), 3000);
+        }
+      }, [provider, baseUrl, apiKey, model, triggerMode, blacklistText, customPrompts, storage, telemetryEnabled, telemetryDsn]);
 
   // Handle Reset Current Prompt
   const handleResetCurrentPrompt = useCallback(() => {
@@ -493,6 +504,63 @@ export const OptionsApp: React.FC<OptionsAppProps> = ({
                 </div>
               )}
             </div>
+          </section>
+
+          {/* Telemetry (Error Reporting) — opt-in, default OFF */}
+          <section className="bg-white rounded-xl shadow-sm border border-slate-200/80 p-6">
+            <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <span className="w-7 h-7 rounded-lg bg-slate-100 flex items-center justify-center text-slate-500">
+                  <ShieldIcon className="w-4 h-4" />
+                </span>
+                <h2 className="text-sm font-bold text-slate-800">错误上报（可选）</h2>
+              </div>
+              <span className="text-[10px] bg-slate-100 text-slate-500 font-medium px-1.5 py-0.5 rounded">
+                默认关闭
+              </span>
+            </div>
+
+            <p className="text-xs text-slate-500 mb-4">
+              用于收集崩溃与错误日志，帮助改进稳定性。为保护隐私，此功能<strong>默认关闭</strong>，仅在你主动开启并提供 DSN 地址时上报；上传内容不含文本正文，且可随时关闭。
+            </p>
+
+            <div className="flex items-center justify-between px-3 py-2.5 rounded-lg border border-slate-200 bg-slate-50">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-slate-700">启用错误上报</span>
+              </div>
+              <button
+                id="telemetry-toggle-btn"
+                type="button"
+                role="switch"
+                aria-checked={telemetryEnabled}
+                onClick={() => setTelemetryEnabled(!telemetryEnabled)}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none cursor-pointer ${
+                  telemetryEnabled ? 'bg-[#00BFA5]' : 'bg-slate-300'
+                }`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                    telemetryEnabled ? 'translate-x-6' : 'translate-x-1'
+                  }`}
+                />
+              </button>
+            </div>
+
+            {telemetryEnabled && (
+              <div className="mt-3">
+                <label htmlFor="telemetry-dsn-input" className="block text-xs font-medium text-slate-600 mb-1">
+                  DSN 地址（Sentry / GlitchTip 兼容）
+                </label>
+                <input
+                  id="telemetry-dsn-input"
+                  type="text"
+                  value={telemetryDsn}
+                  onChange={(e) => setTelemetryDsn(e.target.value)}
+                  placeholder="https://your-dsn@sentry.example.com/1"
+                  className="w-full px-3.5 py-2 text-sm bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#00BFA5]/30 focus:border-[#00BFA5] transition font-mono text-slate-800"
+                />
+              </div>
+            )}
           </section>
 
           {/* Section 2: Custom Prompt Templates (6+ Tabs) */}

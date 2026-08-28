@@ -4,8 +4,27 @@
  */
 
 import { setupStreamPortHandler, testApiConnection } from './streamHandler';
+import { initTelemetry, captureTelemetryError } from './telemetry';
 
 console.log('[Runbi] Background Service Worker initialized');
+
+// Initialize privacy-first telemetry (opt-in, default off)
+initTelemetry();
+
+// Global error/unhandledrejection capture → routes to Sentry if enabled
+self.addEventListener('error', (event) => {
+  captureTelemetryError(event?.error || event.message, { type: 'uncaught' });
+});
+self.addEventListener('unhandledrejection', (event) => {
+  captureTelemetryError(event?.reason, { type: 'unhandledrejection' });
+});
+
+// (Re)init telemetry whenever settings change
+chrome.storage.onChanged?.addListener((changes, area) => {
+  if (area === 'local' && (changes['telemetry.enabled'] || changes['telemetry.dsn'])) {
+    initTelemetry();
+  }
+});
 
 // Setup Port-based SSE streaming listener
 setupStreamPortHandler();
