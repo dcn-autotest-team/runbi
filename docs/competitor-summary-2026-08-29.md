@@ -20,7 +20,7 @@
 
 | 梯队 | 玩家 | 与 Runbi 关系 |
 |---|---|---|
-| A 国际写作助手 | Grammarly $12/月、QuillBot、Wordtune、DeepL Write | 扩展端正面竞品;证明订阅模式与三级定价 |
+| A 国际写作助手 | Grammarly $12/月(4000万用户+5万机构,实抓;**基本不支持中文**;触发是"被动批改"而非"选中即改")、QuillBot、Wordtune、DeepL Write($8.74-57.49/月,Write Pro $7.49) | 扩展端正面竞品;证明订阅模式与三级定价;Grammarly 的中文盲区正是 Runbi 的切入口 |
 | B 系统级划词工具 ⭐ | PopClip(macOS)、Bob(macOS)、Raycast AI(Mac→⚠️Win)、uTools(全平台) | **形态最接近**;验证付费意愿;Raycast 是最大变数 |
 | C 国产插件/输入法 | 沉浸式翻译(2000万用户,Pro ¥49/月)、沙拉查词(开源)、秘塔写作猫、欧路词典(桌面取词)、豆包/Kimi/通义侧边栏、搜狗/讯飞/百度输入法 AI | 免费流量碾压区,避开正面;唯一值得学的是沉浸式翻译 |
 
@@ -38,7 +38,9 @@
 2. **隐私**:BYOK 自选模型,数据不过厂商云,"数据不出域"写进报价单
 3. **跨端**:浏览器插件 + Windows 桌面全局热键,一个架构多端复用
 
-对外一句话:**Windows 原生的系统级 AI 划词润色工具**——"Windows 原生/系统级"是唯一的空窗词,别用红海词"AI 润色"。
+对外一句话(v1.1,采纳 Hermes 框架):**「在中文世界的任何角落,选中即润色,原地替换,隐私不上云」**——三要素组合:中文原生(海外竞品不做)× 主动划词触发(Grammarly 是被动批改)× 原地替换(编辑器型做不到)。
+
+对外备选(空窗词版):**Windows 原生的系统级 AI 划词润色工具**——"Windows 原生/系统级"是唯一的空窗词,别用红海词"AI 润色"。
 
 ## 四、定价建议
 
@@ -64,6 +66,7 @@
 
 ## 七、数据可信度说明
 
-- 🔍 实采(官网/商店直抓):Grammarly 定价、Wordtune、DeepL Write、PopClip、Bob、uTools、Raycast AI、沉浸式翻译(定价+用户量)、欧路词典、沙拉查词
+- 🔍 实采(官网/商店直抓):Grammarly 定价+用户规模、Wordtune、DeepL Write(定价 $8.74-57.49/Write Pro $7.49)、PopClip、Bob、uTools、Raycast AI、沉浸式翻译(定价+用户量)、欧路词典、沙拉查词
+- v1.1 合并:Hermes 子代理报告(competitor-research-summary.md)的增量——DeepL 具体价格档、Grammarly 用户规模与中文盲区、"主动划词 vs 被动批改"区分
 - 📚 知识底(官网 JS 壳/WAF 拦截):QuillBot 定价、秘塔写作猫细节、豆包/Kimi 插件细节、输入法 AI 功能页、WPS AI
 - 未知项:各家真实收入/留存(需第三方数据)、Raycast Windows 完成度(需实测)
