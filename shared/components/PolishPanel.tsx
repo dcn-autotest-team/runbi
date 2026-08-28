@@ -41,7 +41,6 @@ export interface PolishPanelProps {
   style?: React.CSSProperties;
   /** Embedded mode (desktop): no inner header, fills parent width, chips only in reply style. */
   embedded?: boolean;
-  onManualGrab?: () => void;
   replaceLabel?: string;
   /** Optional attached files for context enrichment */
   attachedFiles?: AttachedFileContext[];
@@ -83,7 +82,6 @@ export const PolishPanel: React.FC<PolishPanelProps> = ({
   className = '',
   style = {},
   embedded = false,
-  onManualGrab,
   replaceLabel,
   attachedFiles,
   onAttachFile,
@@ -249,32 +247,6 @@ export const PolishPanel: React.FC<PolishPanelProps> = ({
             <OriginalPreview
               originalText={originalText}
               compact={embedded}
-              actionSlot={
-                embedded && onManualGrab ? (
-                  <button
-                    type="button"
-                    onClick={onManualGrab}
-                    title="读取剪贴板"
-                    aria-label="重新读取选中文本"
-                    className="runbi-focus-ring flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-white/10 hover:text-white cursor-pointer"
-                  >
-                    <svg
-                      className="w-3.5 h-3.5"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
-                      <path d="M21 3v5h-5" />
-                      <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
-                      <path d="M8 16H3v5" />
-                    </svg>
-                  </button>
-                ) : undefined
-              }
               rightSlot={embedded ? diffToggleButton : undefined}
             />
           )}

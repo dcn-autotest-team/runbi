@@ -46,7 +46,7 @@ export const STYLE_PRESETS: StylePresetMetadata[] = [
     id: 'polished',
     name: '通用润色',
     shortName: '通用',
-    description: '修正语病与错别字，理顺逻辑，使语言地道流畅',
+    description: '修正错别字与语病，理顺逻辑，使语言地道流畅',
     icon: 'Sparkles',
     placeholder: '输入额外润色要求（如：保持活泼、口吻亲切）...',
     shortcutKey: '1',

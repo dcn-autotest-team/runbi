@@ -34,6 +34,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -45,6 +46,12 @@
   "plugins": {
     "globalShortcut": {},
     "clipboardManager": {},
-    "store": null
+    "store": null,
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEVCNDJEMUM5MjZBNDA2RkEKUldUNkJxUW15ZEZDNjNVVkVFZHFlY21sVGJSS25vOHZXcEFkTWZHV2lmQk03MUU0cnNQNGZXNU8K",
+      "endpoints": [
+        "https://github.com/dcn-autotest-team/runbi/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

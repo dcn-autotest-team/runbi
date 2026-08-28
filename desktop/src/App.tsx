@@ -33,6 +33,7 @@ import {
   type ScreenReplyAnalysis,
 } from '@runbi/shared/core';
 import { RunbiLogo, Settings, X, Pin, PinOff, RefreshCw, History } from './components/Icons';
+import { UpdateCheckRow } from './components/UpdateCheckRow';
 
 const STYLE_NAMES: Record<PolishStyle, string> = {
   polished: '通用润色',
@@ -230,7 +231,10 @@ export const App: React.FC = () => {
         timestamp: Date.now(),
       };
       setHistory((prev) => {
-        const filtered = prev.filter((item) => item.polishedText !== record.polishedText);
+        if (prev.length > 0 && prev[0].polishedText.trim() === record.polishedText.trim()) {
+          return prev;
+        }
+        const filtered = prev.filter((item) => item.polishedText.trim() !== record.polishedText.trim());
         const updated = [newEntry, ...filtered].slice(0, 100);
         adapters.storageProvider.set('generationHistory', updated).catch(() => {});
         return updated;
@@ -1109,6 +1113,8 @@ export const App: React.FC = () => {
       showToast('窗口已置顶锁定，请先取消置顶');
       return;
     }
+    setShowSettings(false);
+    setShowHistory(false);
     setAttachedFiles([]);
     setClipboardRef(null);
     const nextMode = stateRef.current.autoCopyPopup ? 'panel' : 'capsule';
@@ -1140,36 +1146,6 @@ export const App: React.FC = () => {
       } catch (e) {
         console.warn('setAlwaysOnTop failed:', e);
       }
-    }
-  };
-
-  // Manual Grab from Clipboard
-  const handleManualGrab = async () => {
-    const sel = await adapters.selectionProvider.getSelection();
-    if (sel && sel.text) {
-      let screenshot: string | null = null;
-      if (stateRef.current.readChatScreenshot && isTauri) {
-        screenshot = await invoke<string>('capture_foreground_screenshot').catch(() => null);
-      }
-      setCurrentScreenshot(screenshot);
-
-      setOriginalText(sel.text);
-      const cls = classifyContext({
-        text: sel.text,
-        sourceApp: sel.sourceApp,
-        windowTitle: sel.windowTitle,
-      });
-      const targetStyle = cls.style;
-      if (cls.confidence >= 0.7 && targetStyle !== 'polished') {
-        showToast(`💡 智能识别【${STYLE_NAMES[targetStyle]}】(${cls.reason})`);
-      } else {
-        showToast('已获取剪贴板内容');
-      }
-      stateRef.current.activeStyle = targetStyle;
-      setActiveStyle(targetStyle);
-      handleStartPolish(sel.text, targetStyle, undefined, screenshot);
-    } else {
-      showToast('剪贴板中未检测到有效文本');
     }
   };
 
@@ -1318,7 +1294,10 @@ export const App: React.FC = () => {
             )}
             <button
               type="button"
-              onClick={() => setShowHistory(!showHistory)}
+              onClick={() => {
+                setShowHistory(!showHistory);
+                if (!showHistory) setShowSettings(false);
+              }}
               aria-label={showHistory ? '关闭时光机' : '查看生成历史与草稿箱 (Ctrl+H)'}
               aria-pressed={showHistory}
               title="生成历史与草稿箱 (Ctrl+H)"
@@ -1342,7 +1321,10 @@ export const App: React.FC = () => {
             </button>
             <button
               type="button"
-              onClick={() => setShowSettings(!showSettings)}
+              onClick={() => {
+                setShowSettings(!showSettings);
+                if (!showSettings) setShowHistory(false);
+              }}
               aria-label={showSettings ? '返回润色面板' : '打开设置'}
               aria-pressed={showSettings}
               title="设置"
@@ -1596,6 +1578,7 @@ export const App: React.FC = () => {
                   checked={readChatScreenshot}
                   onChange={setReadChatScreenshot}
                 />
+                <UpdateCheckRow />
               </section>
             </div>
 
@@ -1620,6 +1603,26 @@ export const App: React.FC = () => {
               </div>
             </div>
           </form>
+        ) : showHistory ? (
+          /* Dedicated History View Component (No double-exposure) */
+          <HistoryDrawer
+            isOpen={showHistory}
+            history={history}
+            onClose={() => setShowHistory(false)}
+            onRestore={(record) => {
+              setOriginalText(record.originalText);
+              setPolishedText(record.polishedText);
+              setActiveStyle(record.style);
+              setShowHistory(false);
+              showToast('已恢复所选记录至主面板');
+            }}
+            onDelete={deleteHistoryRecord}
+            onClearAll={clearAllHistory}
+            onCopyText={async (text) => {
+              await adapters.textReplacer.copyToClipboard(text);
+              showToast('已复制到剪贴板');
+            }}
+          />
         ) : (
           /* Main Polish Panel Component */
           <PolishPanel
@@ -1670,30 +1673,9 @@ export const App: React.FC = () => {
               }
             }}
             onToastDismiss={() => setToastVisible(false)}
-            onManualGrab={handleManualGrab}
             replaceLabel="贴回"
           />
         )}
-
-        {/* History Drawer Modal */}
-        <HistoryDrawer
-          isOpen={showHistory}
-          history={history}
-          onClose={() => setShowHistory(false)}
-          onRestore={(record) => {
-            setOriginalText(record.originalText);
-            setPolishedText(record.polishedText);
-            setActiveStyle(record.style);
-            setShowHistory(false);
-            showToast('已恢复所选记录至主面板');
-          }}
-          onDelete={deleteHistoryRecord}
-          onClearAll={clearAllHistory}
-          onCopyText={async (text) => {
-            await adapters.textReplacer.copyToClipboard(text);
-            showToast('已复制到剪贴板');
-          }}
-        />
 
       </div>
     </div>
