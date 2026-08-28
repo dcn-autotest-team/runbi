@@ -9,18 +9,21 @@
 
 Runbi 桌面客户端打破了传统浏览器插件的沙盒限制，将精准的 AI 文本润色与文采修饰能力拓展至整个操作系统（VSCode、Word、飞书、微信、邮件客户端、各类 IDE 与 PDF 阅读器等）：
 
-1. **⚡ 全局快捷键即时唤醒 (Global Hotkey)**
-   - 默认全局热键 `Alt+Space`，随叫随到，毫秒级响应唤起。
-2. **🎯 系统级跨应用划词与文本捕获 (Selection Grab)**
-   - 在任意软件中选中文本后按下热键，Rust 后台通过模拟事件读取目标文本，并在鼠标光标旁即时弹出悬浮面板。
+1. **🖱️ 鼠标划选即时唤醒（对齐豆包 / Cherry Studio 体验）**
+   - 底层集成 Windows 低级鼠标钩子 (`WH_MOUSE_LL`)，在任何应用中划选文本（或双击选词）松开鼠标后，浮窗自动在光标旁弹出并开始流式润色，**无需按任何键**。
+2. **⚡ 全局快捷键与自定义录制 (Global Hotkey)**
+   - 默认全局热键 `Alt+Space`，支持在设置面板中直接按下键盘录制自定义快捷键，Rust 后台动态注册与持久化。
 3. **🪄 一键贴回原文 (In-place Text Replacement)**
-   - 润色满意后，点击“替换原文”或按 `Enter` 键，浮窗自动隐匿并将新文本通过模拟粘贴（`Ctrl+V` / `Cmd+V`）无缝替换回原应用。
-4. **🪟 Raycast / Spotlight 风格沉浸悬浮窗 (Glassmorphism UI)**
-   - 无边框（Frameless）、半透明毛玻璃质感、黑暗模式自适应、失焦自动隐藏（Focus Loss Auto-Hide）。
-5. **🎛️ 常驻系统托盘与单实例守护 (System Tray Daemon)**
-   - 支持开机自启、托盘菜单控制，集成单实例检测（`single-instance`），杜绝多开冲突。
-6. **📦 共享核心与无重复逻辑 (@runbi/shared)**
-   - 100% 复用与浏览器插件相同的 CJK Myers Diff 引擎、大模型 Prompt 预设模板、流式 Token 解析算法与 React 表现层组件。
+   - 润色满意后，点击“替换原文”或按 `Enter` 键，浮窗自动隐匿并将新文本通过模拟粘贴无缝替换回原应用。
+4. **🌐 Rust 原生流式直连 (Reqwest IPC)**
+   - 绕过 WebView 浏览器的跨域 (CORS/CSP) 限制，支持 DeepSeek、硅基流动、OpenAI 及本地 Ollama。
+   - 智能识别 401/402/404/429 错误并提供中文操作指引，留空 Key 时自动启用零配置离线 Mock 模拟流。
+5. **🪟 Raycast / Spotlight 风格沉浸悬浮窗 (Glassmorphism UI)**
+   - 无边框（Frameless）、半透明毛玻璃质感、黑暗模式自适应。
+6. **🎯 智能屏幕边缘避让 (Smart Edge Clamping)**
+   - 基于 Win32 `GetCursorPos` 全局光标与多显示器工作区检测，屏幕下/右边缘自动翻转，防溢出、防遮挡原文字行。
+7. **🛡️ 剪贴板无害化保护 (Clipboard Isolation)**
+   - 划词取词毫秒级自动备份并还原用户的系统剪贴板，绝不污染用户原本复制的历史记录。
 
 ---
 
@@ -29,25 +32,26 @@ Runbi 桌面客户端打破了传统浏览器插件的沙盒限制，将精准�
 ```
 ┌────────────────────────────────────────────────────────┐
 │               Presentation Layer (React 18)            │
-│  - App.tsx (Raycast 悬浮主窗口)                        │
+│  - App.tsx (Raycast 悬浮主窗口 & 快捷键录制)           │
 │  - @runbi/shared/components (PolishPanel, DiffViewer)  │
 └──────────────────────────┬─────────────────────────────┘
                            │ 消费平台抽象接口
 ┌──────────────────────────▼─────────────────────────────┐
 │          Desktop Platform Adapters (src/adapters/)     │
-│  - TauriSelectionProvider (Win32 SendInput 取词)       │
+│  - TauriSelectionProvider (Win32 选区读取)             │
 │  - TauriTextReplacer (剪贴板 + 模拟粘贴回写)           │
-│  - TauriStorageProvider (本地持久化配置)               │
-│  - TauriIPCLLMTransport (流式大模型网络传输)           │
+│  - TauriStorageProvider (tauri-plugin-store 本地存储)  │
+│  - TauriIPCLLMTransport (Rust Reqwest 流式直连 IPC)    │
 └──────────────────────────┬─────────────────────────────┘
-                           │ 异步 IPC 通信
+                           │ 异步 IPC 通信 (Channel & Commands)
 ┌──────────────────────────▼─────────────────────────────┐
 │             Native Core (src-tauri / Rust)             │
-│  - tauri-plugin-global-shortcut (热键注册)             │
-│  - tauri-plugin-clipboard-manager (剪贴板读写)         │
-│  - tauri-plugin-single-instance (单实例守护)           │
-│  - commands (selection, replacer, position, transport) │
-│  - tray (系统托盘生命周期管理)                         │
+│  - mouse_hook.rs (WH_MOUSE_LL 全局划词自动监听)        │
+│  - transport.rs (Reqwest SSE 流式直连与网络诊断)       │
+│  - position.rs (GetCursorPos 多显示器智能边缘贴合)     │
+│  - replacer.rs (SendInput 模拟粘贴与剪贴板隔离保护)    │
+│  - shortcut.rs (全局热键动态注册与录制持久化)          │
+│  - tray.rs (系统托盘生命周期管理)                      │
 └────────────────────────────────────────────────────────┘
 ```
 
@@ -58,38 +62,31 @@ Runbi 桌面客户端打破了传统浏览器插件的沙盒限制，将精准�
 ### 1. 环境准备
 - **Node.js**: >= 18.0.0
 - **Rust**: >= 1.75.0 (`rustup default stable`)
-- **操作系统要求**:
-  - **Windows**: Windows 10/11 (自带 Microsoft Edge WebView2)
-  - **macOS**: macOS 11+ (自带 WebKit)
-  - **Linux**: 安装 `webkit2gtk-4.1` 等基础 GUI 依赖
+- **操作系统**: Windows 10/11 (Edge WebView2) / macOS 11+ / Linux
 
-### 2. 安装依赖
-在项目根目录或 `desktop/` 目录下执行：
-```bash
-# 进入桌面端子目录
+### 2. 本地启动开发环境
+```powershell
 cd desktop
 
-# 安装前端依赖
+# 安装依赖
 npm install
-```
 
-### 3. 本地启动开发环境
-```bash
-# 启动 Vite 前端开发服务器（支持 Web 预览与独立调试）
-npm run dev
-
-# 启动完整的 Tauri 桌面端应用（含 Rust 原生热键与浮窗）
+# 启动开发环境（前端 Vite + Rust 原生浮窗）
 npm run tauri dev
 ```
 
-### 4. 生产打包构建
-```bash
-# 编译前端生产 Bundle
-npm run build
+### 3. 生产打包构建
+```powershell
+cd desktop
 
-# 打包为原生桌面安装包 (Windows: .msi / .exe; macOS: .dmg; Linux: .deb / .AppImage)
+# 一键全量编译（产出绿色单文件与安装包）
 npm run tauri build
 ```
+
+产物路径：
+* **绿色便携版 (.exe)**：`desktop/src-tauri/target/release/runbi-desktop.exe`
+* **Windows 安装包 (NSIS)**：`desktop/src-tauri/target/release/bundle/nsis/Runbi_1.0.0_x64-setup.exe`
+* **企业分发包 (MSI)**：`desktop/src-tauri/target/release/bundle/msi/Runbi_1.0.0_x64_en-US.msi`
 
 ---
 
@@ -97,10 +94,11 @@ npm run tauri build
 
 | 快捷键 | 功能说明 |
 | :--- | :--- |
-| `Alt + Space` | 全局唤醒 / 隐藏 Runbi 悬浮润色窗口 |
+| **鼠标划选** | 在任意应用中划选文本，松开鼠标立即弹出润色（豆包体验，无需按键） |
+| `Alt + Space` | 全局手动唤醒 / 隐藏 Runbi 悬浮润色窗口（支持自定义录制） |
 | `Enter` | 确认润色并将结果直接替换贴回原窗口 |
-| `Esc` | 立即隐藏悬浮窗口 |
-| `Tab` | 快速切换润色风格预设 |
+| `Esc` | 立即隐藏悬浮窗口并停止生成 |
+| `1` ~ `7` | 快速切换对应润色风格（通用/学术/商务/文采/精简/英文/回复） |
 
 ---
 

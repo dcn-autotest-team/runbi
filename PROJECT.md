@@ -81,8 +81,8 @@ Every feature required for the multi-platform Runbi project is mapped below:
 |---|------|-------|-------------|--------|
 | M1 | Shared Core & Platform Adapter Interfaces | Extract `shared/` package (types, core algorithms, adapter interfaces, platform-agnostic React components), configure root tsconfig path aliases (`@runbi/shared`), and verify shared unit tests | none | DONE |
 | M2 | Extension Platform Adapters & Refactor | Implement Chrome MV3 adapters (`src/adapters/`), refactor extension to use `@runbi/shared`, verify extension build and tests | M1 | DONE |
-| M3 | Tauri 2.x + Rust Desktop Client | Construct `desktop/` (Tauri 2.x backend, Rust Win32 SendInput selection grab/replace, cursor clamp, tray, global shortcut, Raycast UI, desktop adapters), verify typecheck and build | M1 | PLANNED |
-| M4 | E2E Integration, Hardening, Docs & Git Deliverable | Run full E2E test suite (Tiers 1-4), Tier 5 adversarial hardening, complete `desktop/README.md` and root docs, initialize git repository with atomic commits | M1, M2, M3 | PLANNED |
+| M3 | Tauri 2.x + Rust Desktop Client | Construct `desktop/` (Tauri 2.x backend, Rust Win32 WH_MOUSE_LL mouse hook selection grab/replace, Reqwest SSE streaming IPC, cursor clamp, tray, global shortcut, Raycast UI, desktop adapters), verify typecheck and build | M1 | DONE |
+| M4 | E2E Integration, Hardening, Docs & Git Deliverable | Run full E2E test suite (Tiers 1-4), Tier 5 adversarial hardening, complete `desktop/README.md` and root docs, initialize git repository with atomic commits | M1, M2, M3 | DONE |
 
 ---
 
