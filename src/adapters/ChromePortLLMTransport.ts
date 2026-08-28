@@ -15,7 +15,7 @@ import type {
   StreamServerMessage,
   ConnectionTestResult,
 } from '@runbi/shared/types/stream';
-import { generateMockStreamMessages } from '@runbi/shared/core';
+import { generateMockStreamMessages, resolveEndpoint } from '@runbi/shared/core';
 
 export const STREAM_CHANNEL_NAME = 'runbi-stream-channel';
 
@@ -263,8 +263,7 @@ export class ChromePortLLMTransport implements ILLMTransport {
       };
     }
 
-    const baseUrl = (config.baseUrl || 'https://api.deepseek.com/v1').trim().replace(/\/+$/, '');
-    const endpoint = `${baseUrl}/chat/completions`;
+    const endpoint = resolveEndpoint(config.baseUrl);
     const model = config.model || 'deepseek-chat';
     const startTime = Date.now();
 

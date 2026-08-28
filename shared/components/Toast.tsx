@@ -3,7 +3,7 @@
  * Platform-agnostic component for Runbi (@runbi/shared/components)
  */
 
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 
 export interface ToastProps {
   message: string;
@@ -31,14 +31,29 @@ export const Toast: React.FC<ToastProps> = ({
     return () => clearTimeout(timer);
   }, [visible, durationMs, onDismiss]);
 
-  if (!visible) return null;
+  // Exit animation: keep mounted briefly after visible=false to play toast-out.
+  const [leaving, setLeaving] = useState(false);
+  useEffect(() => {
+    if (visible) {
+      setLeaving(false);
+      return;
+    }
+    if (!message) return;
+    setLeaving(true);
+    const t = setTimeout(() => setLeaving(false), 140);
+    return () => clearTimeout(t);
+  }, [visible, message]);
+
+  if (!visible && !leaving) return null;
 
   return (
     <div
       role="status"
       aria-live="polite"
       id="runbi-toast"
-      className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[2147483647] flex items-center gap-1.5 px-4 py-2 bg-slate-900/90 dark:bg-slate-950/95 text-white text-xs font-medium rounded-full shadow-xl border border-slate-700/50 backdrop-blur-md animate-toast-in pointer-events-none select-none ${className}`}
+      className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[2147483647] flex items-center gap-1.5 px-4 py-2 bg-slate-900/90 dark:bg-slate-950/95 text-white text-xs font-medium rounded-full shadow-xl border border-slate-700/50 backdrop-blur-md pointer-events-none select-none ${
+        visible ? 'animate-toast-in' : 'animate-toast-out'
+      } ${className}`}
     >
       {type === 'success' && (
         <svg

@@ -10,12 +10,27 @@ export interface QuickReplyTag {
   text: string;
 }
 
+export interface AttachedFileContext {
+  name: string;
+  content: string;
+  size?: number;
+}
+
 export interface InstructionInputProps {
-  onSubmit: (instruction: string) => void;
+  onSubmit: (instruction: string, attachedFiles?: AttachedFileContext[]) => void;
   isGenerating?: boolean;
   placeholder?: string;
   quickTags?: QuickReplyTag[];
   className?: string;
+  /** Show the quick-intent chips row (defaults to true; embedders may hide it). */
+  showQuickTags?: boolean;
+  /** Optional external attached files */
+  attachedFiles?: AttachedFileContext[];
+  onAttachFile?: (file: AttachedFileContext) => void;
+  onRemoveFile?: (index: number) => void;
+  /** Optional clipboard reference text */
+  clipboardReference?: string | null;
+  onAttachClipboard?: () => void;
 }
 
 export const DEFAULT_QUICK_TAGS: QuickReplyTag[] = [
@@ -28,16 +43,84 @@ export const DEFAULT_QUICK_TAGS: QuickReplyTag[] = [
 export const InstructionInput: React.FC<InstructionInputProps> = ({
   onSubmit,
   isGenerating = false,
-  placeholder = '输入回复意向或自定义要求 (Enter 发送)...',
+  placeholder = '想怎么改？直接说…',
   quickTags = DEFAULT_QUICK_TAGS,
   className = '',
+  showQuickTags = true,
+  attachedFiles,
+  onAttachFile,
+  onRemoveFile,
+  clipboardReference,
+  onAttachClipboard,
 }) => {
   const [value, setValue] = useState('');
+  const [localFiles, setLocalFiles] = useState<AttachedFileContext[]>([]);
+  const [isDragging, setIsDragging] = useState(false);
+
+  const currentFiles = attachedFiles ?? localFiles;
+
+  const handleRemoveFile = (index: number) => {
+    if (onRemoveFile) {
+      onRemoveFile(index);
+    } else {
+      setLocalFiles((prev) => prev.filter((_, i) => i !== index));
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!isGenerating) {
+      setIsDragging(true);
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+
+    if (isGenerating) return;
+
+    const files = Array.from(e.dataTransfer.files);
+    for (const file of files) {
+      try {
+        // Read text content for files under 100KB
+        if (file.size > 100 * 1024) continue;
+        const text = await file.text();
+        if (text && text.trim()) {
+          const item: AttachedFileContext = {
+            name: file.name,
+            content: text.trim(),
+            size: file.size,
+          };
+          if (onAttachFile) {
+            onAttachFile(item);
+          } else {
+            setLocalFiles((prev) => [...prev, item]);
+          }
+        }
+      } catch {
+        // Ignore unreadable binary files
+      }
+    }
+  };
 
   const handleSubmit = (overrideText?: string) => {
     const textToSubmit = (overrideText ?? value).trim();
-    if (!textToSubmit || isGenerating) return;
-    onSubmit(textToSubmit);
+    if ((!textToSubmit && currentFiles.length === 0) || isGenerating) return;
+    const finalInstruction = textToSubmit || '请参考附加资料进行回复';
+    if (currentFiles.length > 0) {
+      onSubmit(finalInstruction, currentFiles);
+    } else {
+      onSubmit(finalInstruction);
+    }
     if (!overrideText) {
       setValue('');
     }
@@ -51,10 +134,8 @@ export const InstructionInput: React.FC<InstructionInputProps> = ({
   return (
     <div className={`flex flex-col gap-1.5 select-none ${className}`}>
       {/* Quick Reply Chips */}
+      {showQuickTags && (
       <div className="flex items-center gap-1.5 overflow-x-auto runbi-scrollbar py-0.5">
-        <span className="text-[11px] text-slate-400 dark:text-slate-500 font-medium whitespace-nowrap flex items-center gap-0.5">
-          <span>💡</span> 快捷意向:
-        </span>
         {quickTags.map((tag) => (
           <button
             key={tag.label}
@@ -66,17 +147,59 @@ export const InstructionInput: React.FC<InstructionInputProps> = ({
               e.stopPropagation();
             }}
             title={tag.text}
-            className="px-2 py-0.5 text-[11px] font-medium text-slate-600 dark:text-slate-300 bg-slate-100/90 dark:bg-slate-800/80 hover:bg-teal-50 hover:text-[#00BFA5] dark:hover:bg-teal-950/50 dark:hover:text-teal-300 rounded-md border border-slate-200/60 dark:border-slate-700/60 transition-all whitespace-nowrap cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+            className="runbi-focus-ring cursor-pointer whitespace-nowrap rounded-md bg-transparent px-2 py-1 text-[11px] font-medium text-slate-500 transition-all hover:bg-teal-50 hover:text-teal-600 disabled:cursor-not-allowed disabled:opacity-50 dark:text-slate-400 dark:hover:bg-teal-950/50 dark:hover:text-teal-300"
           >
             {tag.label}
           </button>
         ))}
       </div>
+      )}
+
+      {/* Attached Files & Clipboard Reference Chips */}
+      {(currentFiles.length > 0 || clipboardReference) && (
+        <div className="flex items-center gap-1.5 flex-wrap px-0.5 py-0.5">
+          {currentFiles.map((file, idx) => (
+            <span
+              key={idx}
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-teal-50 dark:bg-teal-950/60 border border-teal-200/80 dark:border-teal-800/80 text-[#00BFA5] text-[11px]"
+            >
+              <span className="truncate max-w-[150px]">📄 {file.name}</span>
+              <button
+                type="button"
+                disabled={isGenerating}
+                onClick={() => handleRemoveFile(idx)}
+                className="hover:text-rose-500 transition-colors ml-0.5 cursor-pointer font-bold"
+                title="移除参考文件"
+              >
+                ✕
+              </button>
+            </span>
+          ))}
+          {clipboardReference && (
+            <button
+              type="button"
+              disabled={isGenerating}
+              onClick={onAttachClipboard}
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-[#00BFA5] text-[11px] border border-dashed border-slate-300 dark:border-slate-700 cursor-pointer active:scale-95 transition-all"
+              title="点击引用剪贴板中的资料"
+            >
+              <span>📋 附带剪贴板参考</span>
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Input Box Bar */}
       <div
-        className="flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-50/90 dark:bg-slate-800/70 rounded-xl border border-slate-200/80 dark:border-slate-700/70 focus-within:border-[#00BFA5] focus-within:ring-2 focus-within:ring-[#00BFA5]/20 transition-all"
+        className={`flex min-h-10 items-center gap-2 rounded-xl border px-2.5 py-1.5 transition-all ${
+          isDragging
+            ? 'border-[#00BFA5] bg-teal-50/30 dark:bg-teal-950/30 ring-2 ring-[#00BFA5]/20'
+            : 'bg-slate-50/90 dark:bg-slate-800/70 border-slate-200/80 dark:border-slate-700/70 focus-within:border-[#00BFA5] focus-within:ring-2 focus-within:ring-[#00BFA5]/20'
+        }`}
         onMouseDown={(e) => e.stopPropagation()}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
       >
         {/* Chat / Pen Icon */}
         <svg
@@ -94,6 +217,7 @@ export const InstructionInput: React.FC<InstructionInputProps> = ({
         <input
           id="runbi-instruction-input"
           type="text"
+          aria-label="自定义润色要求"
           value={value}
           disabled={isGenerating}
           onChange={(e) => setValue(e.target.value)}
@@ -103,8 +227,8 @@ export const InstructionInput: React.FC<InstructionInputProps> = ({
               handleSubmit();
             }
           }}
-          placeholder={placeholder}
-          className="flex-1 bg-transparent text-xs text-slate-800 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none font-sans"
+          placeholder={isDragging ? '松开鼠标以添加参考文件…' : placeholder}
+          className="min-w-0 flex-1 bg-transparent font-sans text-[13px] text-slate-800 placeholder-slate-400 focus:outline-none dark:text-slate-100 dark:placeholder-slate-500"
         />
 
         {/* Send Button */}
@@ -112,14 +236,14 @@ export const InstructionInput: React.FC<InstructionInputProps> = ({
           id="runbi-instruction-send"
           type="button"
           aria-label="发送自定义回复指令"
-          disabled={!value.trim() || isGenerating}
+          disabled={(!value.trim() && currentFiles.length === 0) || isGenerating}
           onClick={() => handleSubmit()}
           onMouseDown={(e) => {
             e.preventDefault();
             e.stopPropagation();
           }}
-          className={`flex items-center justify-center w-6 h-6 rounded-lg transition-all focus:outline-none ${
-            value.trim() && !isGenerating
+          className={`runbi-focus-ring flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-all ${
+            (value.trim() || currentFiles.length > 0) && !isGenerating
               ? 'bg-[#00BFA5] hover:bg-[#00A892] text-white shadow-sm active:scale-95 cursor-pointer'
               : 'bg-slate-200/70 dark:bg-slate-700/60 text-slate-400 dark:text-slate-500 cursor-not-allowed'
           }`}

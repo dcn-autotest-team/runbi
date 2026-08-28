@@ -275,6 +275,8 @@ export const App: React.FC<AppProps> = ({
     }
   }, [polishedText, textReplacer]);
 
+  const dismissTimerRef = useRef<any>(null);
+
   // In-place replace handler via ITextReplacer
   const handleReplace = useCallback(async () => {
     if (!selection || !polishedText) return;
@@ -283,7 +285,8 @@ export const App: React.FC<AppProps> = ({
     if (result.success) {
       setToastMessage('✓ 已替换原文');
       setToastVisible(true);
-      setTimeout(() => {
+      if (dismissTimerRef.current) clearTimeout(dismissTimerRef.current);
+      dismissTimerRef.current = setTimeout(() => {
         handleDismiss();
       }, 300);
     } else if (result.error) {
@@ -388,6 +391,10 @@ export const App: React.FC<AppProps> = ({
   // Cleanup on unmount
   useEffect(() => {
     return () => {
+      if (dismissTimerRef.current) {
+        clearTimeout(dismissTimerRef.current);
+        dismissTimerRef.current = null;
+      }
       cleanupStream();
     };
   }, [cleanupStream]);

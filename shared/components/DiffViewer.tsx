@@ -42,7 +42,7 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
       <div
         id="runbi-diff-content"
         style={{ maxHeight }}
-        className="min-h-[96px] p-3 overflow-y-auto bg-slate-50/90 dark:bg-slate-800/60 rounded-xl border border-slate-200/70 dark:border-slate-700/60 text-sm leading-relaxed runbi-scrollbar whitespace-pre-wrap break-words font-sans select-text"
+        className="min-h-[110px] px-0.5 py-1.5 overflow-y-auto runbi-scrollbar whitespace-pre-wrap break-words font-sans select-text text-slate-800 dark:text-slate-100 text-sm leading-[1.8]"
       >
         {mode === 'split' ? (
           <div className="grid grid-cols-2 gap-3 divide-x divide-slate-200/60 dark:divide-slate-700/60">

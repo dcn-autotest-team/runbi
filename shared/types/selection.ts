@@ -89,6 +89,17 @@ export interface SelectionInfo {
    * Timestamp when the selection was captured (epoch ms).
    */
   timestamp?: number;
+
+  /**
+   * Foreground process/app name at capture time (desktop, e.g. "WeChat.exe").
+   * Used by the context auto-sense classifier.
+   */
+  sourceApp?: string;
+
+  /**
+   * Foreground window title at capture time (desktop).
+   */
+  windowTitle?: string;
 }
 
 /**

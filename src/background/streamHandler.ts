@@ -11,6 +11,7 @@ import type {
   ConnectionTestResult,
 } from '../types/stream';
 import { generateMockStreamMessages } from '../core/mockStream';
+import { resolveEndpoint } from '@runbi/shared/core';
 
 export const STREAM_CHANNEL_NAME = 'runbi-stream-channel';
 
@@ -59,8 +60,7 @@ export async function streamRealCompletions(
   port: chrome.runtime.Port,
   signal: AbortSignal
 ): Promise<void> {
-  const baseUrl = (config.baseUrl || 'https://api.deepseek.com/v1').trim().replace(/\/+$/, '');
-  const endpoint = `${baseUrl}/chat/completions`;
+  const endpoint = resolveEndpoint(config.baseUrl);
   const startTime = Date.now();
   let totalTokens = 0;
 
@@ -248,8 +248,7 @@ export async function testApiConnection(
     };
   }
 
-  const baseUrl = (config.baseUrl || 'https://api.deepseek.com/v1').trim().replace(/\/+$/, '');
-  const endpoint = `${baseUrl}/chat/completions`;
+  const endpoint = resolveEndpoint(config.baseUrl);
   const model = config.model || 'deepseek-chat';
   const startTime = Date.now();
 

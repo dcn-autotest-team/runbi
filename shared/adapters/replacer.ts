@@ -29,6 +29,12 @@ export interface ReplacementResult {
    * Whether the previous clipboard state was restored (in Desktop simulation).
    */
   restoredClipboard?: boolean;
+
+  /**
+   * True when pasting failed but the text was copied to the clipboard as a
+   * fallback — the UI must NOT claim "已贴回原文" in this case.
+   */
+  fallbackCopied?: boolean;
 }
 
 /**

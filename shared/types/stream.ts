@@ -38,6 +38,7 @@ export interface StreamConfig {
   userInstruction?: string;
   temperature?: number;
   maxTokens?: number;
+  imageDataUrl?: string;
 }
 
 /**

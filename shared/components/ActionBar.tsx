@@ -16,6 +16,8 @@ export interface ActionBarProps {
   copyLabel?: string;
   replaceLabel?: string;
   regenerateLabel?: string;
+  /** Optional inline control rendered at the left edge (e.g. Diff toggle in embedded mode). */
+  leftSlot?: React.ReactNode;
 }
 
 export const ActionBar: React.FC<ActionBarProps> = ({
@@ -29,22 +31,25 @@ export const ActionBar: React.FC<ActionBarProps> = ({
   copyLabel = '复制结果',
   replaceLabel = '替换原文',
   regenerateLabel = '换个说法',
+  leftSlot,
 }) => {
   return (
     <div
-      className={`flex items-center justify-between gap-2 pt-2 border-t border-slate-200/70 dark:border-slate-700/60 select-none ${className}`}
+      className={`flex shrink-0 items-center justify-between gap-2 border-t border-slate-200/70 pt-2.5 select-none dark:border-white/[0.08] ${className}`}
     >
       {/* 🔄 换个说法 (Regenerate) */}
-      <button
-        id="runbi-action-regenerate"
-        type="button"
-        disabled={isGenerating || disabled}
-        onClick={onRegenerate}
-        title="换个说法，重新生成"
-        className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg text-slate-700 dark:text-slate-200 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 transition-colors focus:outline-none ${
-          isGenerating || disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
-        }`}
-      >
+      <div className="flex items-center gap-1.5">
+        {leftSlot}
+        <button
+          id="runbi-action-regenerate"
+          type="button"
+          disabled={isGenerating || disabled}
+          onClick={onRegenerate}
+          title="换个说法，重新生成"
+          className={`runbi-focus-ring flex min-h-9 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800 dark:text-slate-400 dark:hover:bg-white/[0.07] dark:hover:text-slate-100 ${
+            isGenerating || disabled ? 'cursor-not-allowed opacity-45' : 'cursor-pointer'
+          }`}
+        >
         <svg
           className={`w-3.5 h-3.5 ${isGenerating ? 'animate-spin' : ''}`}
           viewBox="0 0 24 24"
@@ -57,7 +62,8 @@ export const ActionBar: React.FC<ActionBarProps> = ({
           <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" />
         </svg>
         <span>{regenerateLabel}</span>
-      </button>
+        </button>
+      </div>
 
       <div className="flex items-center gap-2">
         {/* 📋 复制结果 (Copy) */}
@@ -67,7 +73,11 @@ export const ActionBar: React.FC<ActionBarProps> = ({
           disabled={disabled}
           onClick={onCopy}
           title="复制润色结果到剪贴板"
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg text-slate-700 dark:text-slate-200 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 transition-colors focus:outline-none cursor-pointer"
+          className={`runbi-focus-ring flex min-h-9 items-center gap-1.5 rounded-lg border px-3 text-xs font-medium transition-colors ${
+            disabled
+              ? 'cursor-not-allowed border-slate-200/60 text-slate-400 opacity-45 dark:border-white/[0.06] dark:text-slate-500'
+              : 'cursor-pointer border-slate-200/80 text-slate-600 hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900 dark:border-white/10 dark:text-slate-300 dark:hover:border-white/20 dark:hover:bg-white/[0.07] dark:hover:text-white'
+          }`}
         >
           <svg
             className="w-3.5 h-3.5"
@@ -90,11 +100,12 @@ export const ActionBar: React.FC<ActionBarProps> = ({
           type="button"
           disabled={!isEditable || isGenerating || disabled}
           onClick={onReplace}
-          title={isEditable ? '将润色内容替换到输入区域' : '当前非可编辑区域，无法直接替换'}
-          className={`flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium rounded-lg transition-all focus:outline-none ${
+          aria-keyshortcuts="Enter"
+          title={isEditable ? '将润色内容替换到输入区域 (Enter)' : '当前非可编辑区域，无法直接替换'}
+          className={`runbi-focus-ring relative flex min-h-9 items-center gap-1.5 rounded-lg px-4 text-xs font-medium transition-all ${
             isEditable && !isGenerating && !disabled
-              ? 'bg-[#00BFA5] hover:bg-[#00A892] text-white shadow-sm hover:shadow active:scale-95 cursor-pointer font-semibold'
-              : 'bg-slate-100 text-slate-400 dark:bg-slate-800/60 dark:text-slate-500 border border-slate-200/60 dark:border-slate-700/50 cursor-not-allowed opacity-60'
+              ? 'cursor-pointer bg-teal-400 font-semibold text-slate-950 shadow-[0_8px_20px_-10px_rgba(45,212,191,0.95)] hover:bg-teal-300 active:scale-[0.97] active:bg-teal-500'
+              : 'cursor-not-allowed border border-slate-200/60 bg-slate-100 text-slate-400 opacity-50 dark:border-white/[0.06] dark:bg-white/[0.04] dark:text-slate-500'
           }`}
         >
           <svg
@@ -109,6 +120,9 @@ export const ActionBar: React.FC<ActionBarProps> = ({
             <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
           </svg>
           <span>{replaceLabel}</span>
+          <kbd className="pointer-events-none absolute -right-1 -top-1 flex h-[14px] min-w-[14px] select-none items-center justify-center rounded border border-white/20 bg-black/50 px-1 font-mono text-[9px] leading-none text-white shadow-xs">
+            ⏎
+          </kbd>
         </button>
       </div>
     </div>

@@ -12,6 +12,9 @@ export interface OriginalPreviewProps {
   className?: string;
   title?: string;
   onToggle?: (expanded: boolean) => void;
+  compact?: boolean;
+  actionSlot?: React.ReactNode;
+  rightSlot?: React.ReactNode;
 }
 
 export const OriginalPreview: React.FC<OriginalPreviewProps> = ({
@@ -21,6 +24,9 @@ export const OriginalPreview: React.FC<OriginalPreviewProps> = ({
   className = '',
   title = '原文预览',
   onToggle,
+  compact = false,
+  actionSlot,
+  rightSlot,
 }) => {
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
 
@@ -33,6 +39,42 @@ export const OriginalPreview: React.FC<OriginalPreviewProps> = ({
   };
 
   const charCount = originalText.length;
+
+  if (compact) {
+    return (
+      <div
+        className={`rounded-xl border border-white/10 bg-black/20 overflow-hidden select-none transition-all ${className}`}
+      >
+        <div className="flex min-h-9 w-full items-center justify-between px-2.5 text-xs text-slate-300">
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              aria-expanded={isExpanded}
+              aria-controls="runbi-original-preview-content"
+              onClick={handleToggle}
+              className="runbi-focus-ring flex min-h-7 cursor-pointer items-center gap-1 rounded-md px-1 font-medium text-slate-300 transition-colors hover:bg-white/5 hover:text-white"
+            >
+              <span>原文 {charCount}字</span>
+              <span className="text-[10px] text-slate-400">{isExpanded ? '▴' : '▾'}</span>
+            </button>
+            {actionSlot}
+          </div>
+
+          {rightSlot && <div className="flex items-center">{rightSlot}</div>}
+        </div>
+
+        {isExpanded && (
+          <div
+            id="runbi-original-preview-content"
+            style={{ maxHeight }}
+            className="p-2.5 pt-1 text-xs text-slate-300 leading-relaxed font-sans overflow-y-auto runbi-scrollbar whitespace-pre-wrap break-words border-t border-white/10 select-text"
+          >
+            {originalText}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div
