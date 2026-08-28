@@ -14,6 +14,23 @@ $env:TAURI_SIGNING_PRIVATE_KEY = Get-Content "C:\Users\54191\.runbi-keys\runbi-u
 $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ""
 node ..\node_modules\@tauri-apps\cli\tauri.js build
 ```
+
+> ⚠️ **坑：在 LobsterAI cowork 会话里跑构建**，其 `node` shim 会让 `process.argv[0]`
+> 变成 `D:\LobsterAI\LobsterAI.exe`，tauri CLI 报 `unrecognized subcommand`。
+> 此时必须用真实 node 全路径：
+> `& "C:\Program Files\nodejs\node.exe" ..\node_modules\@tauri-apps\cli\tauri.js build`
+> （用户自己的终端 / npm 均不受影响）
+
+构建时代码签名已配置（`tauri.conf.json → bundle.windows.certificateThumbprint`，
+证书 `CN=Runbi Dev`，指纹 `E31B0322...`），安装包自动带 Authenticode 签名。
+若 updater `.sig` 未生成（CLI 曾在无 TTY 时卡密码提示），补签：
+
+```powershell
+& "C:\Program Files\nodejs\node.exe" ..\node_modules\@tauri-apps\cli\tauri.js signer sign `
+  -k (Get-Content "C:\Users\54191\.runbi-keys\runbi-updater.key" -Raw) "<安装包路径>"
+```
+
+注意：`-k` 传**密钥内容**（不是路径）；一次只收一个 `<FILE>`；密码为空时直接回车。
 产物:
 - `target\release\bundle\nsis\Runbi_<ver>_x64-setup.exe`  ← 主分发安装包
 - `target\release\bundle\msi\Runbi_<ver>_x64_en-US.msi`
