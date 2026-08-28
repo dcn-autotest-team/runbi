@@ -6,9 +6,9 @@
  *        指向旧本地栈(:8000)。使用前请改成当前部署的 infra/glitchtip
  *        栈 DSN(http://...@localhost:3000/1)或官方 GlitchTip 地址。
  */
-const DSN = process.env.GLITCHTIP_DSN || 'http://9870fb70c1544eebaeb8a1882f3c00bd@localhost:8000/1';
+const DSN = process.env.GLITCHTIP_DSN || 'http://33bea17d-95fb-4472-9d42-f666a65376f9@localhost:3000/1';
 const API_TOKEN = process.env.GLITCHTIP_TOKEN || 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd';
-const API_BASE = 'http://localhost:8000/api/0';
+const API_BASE = 'http://localhost:3000/api/0';
 
 function uuid() {
   return crypto.randomUUID().replace(/-/g, '');
@@ -87,12 +87,12 @@ async function main() {
     console.log('  shortId    :', first.shortId);
     console.log('  lastSeen   :', first.lastSeen);
   } else {
-    console.log('⚠️  issues 接口暂未查到(可能需要几秒/或后端未索引), 请到 UI http://localhost:8000 手动确认');
+    console.log('⚠️  issues 接口暂未查到(可能需要几秒/或后端未索引), 请到 UI http://localhost:3000 手动确认');
     console.log('raw:', JSON.stringify(issues ?? 'null').slice(0, 300));
   }
 
   console.log('\n=== 完成 ===');
-  console.log('Web UI 查看: http://localhost:8000  (test@example.com / admin_pass)');
+  console.log('Web UI 查看: http://localhost:3000  (test@example.com / admin_pass)');
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });
