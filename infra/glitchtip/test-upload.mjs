@@ -2,6 +2,9 @@
  * GlitchTip 端到端对接测试 — 模拟 runbi 前端上报一次错误事件
  * 用法: node test-upload.mjs
  * 验证: 1) envelope 上报 202 Accepted  2) 事件进入 GlitchTip issue 列表
+ * 注意: 此脚本从已删除的 error-monitoring/ 栈留档而来，默认 DSN/Token
+ *        指向旧本地栈(:8000)。使用前请改成当前部署的 infra/glitchtip
+ *        栈 DSN(http://...@localhost:3000/1)或官方 GlitchTip 地址。
  */
 const DSN = process.env.GLITCHTIP_DSN || 'http://9870fb70c1544eebaeb8a1882f3c00bd@localhost:8000/1';
 const API_TOKEN = process.env.GLITCHTIP_TOKEN || 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd';
