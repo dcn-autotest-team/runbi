@@ -75,3 +75,26 @@ export function captureTelemetryError(err: unknown, context?: Record<string, unk
     // swallow — telemetry must never be a failure point
   }
 }
+
+/**
+ * Submits a user feedback message (opt-in, same policy as telemetry).
+ * Mirrors the desktop `submit_feedback` semantics: prefix "[用户反馈] ",
+ * Info level, and if telemetry is disabled we return a clear signal instead
+ * of silently dropping the feedback so the UI can guide the user.
+ *
+ * Returns:
+ *   'telemetry_disabled' -> no DSN enabled, feedback NOT sent
+ *   'queued'             -> sent for async processing
+ *   'event_id=<id>'      -> sent synchronously
+ */
+export function captureFeedback(message: string): Promise<string> {
+  if (!isTelemetryEnabled()) {
+    return Promise.resolve('telemetry_disabled');
+  }
+  try {
+    const eventId = Sentry.captureMessage(`[用户反馈] ${message}`, 'info');
+    return Promise.resolve(eventId ? `event_id=${eventId}` : 'queued');
+  } catch (_) {
+    return Promise.resolve('queued');
+  }
+}

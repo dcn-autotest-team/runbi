@@ -148,7 +148,9 @@ export const OptionsApp: React.FC<OptionsAppProps> = ({
   const [activePromptStyle, setActivePromptStyle] = useState<PolishStyle>('polished');
   const [customPrompts, setCustomPrompts] = useState<Partial<Record<PolishStyle, string>>>({});
   const [telemetryEnabled, setTelemetryEnabled] = useState<boolean>(false);
-  const [telemetryDsn, setTelemetryDsn] = useState<string>('');
+    const [telemetryDsn, setTelemetryDsn] = useState<string>('');
+    const [feedbackText, setFeedbackText] = useState<string>('');
+    const [feedbackSending, setFeedbackSending] = useState<boolean>(false);
 
   // Status & Feedback States
   const [isTesting, setIsTesting] = useState<boolean>(false);
@@ -267,6 +269,38 @@ export const OptionsApp: React.FC<OptionsAppProps> = ({
           setTimeout(() => setToastMessage(null), 3000);
         }
       }, [provider, baseUrl, apiKey, model, triggerMode, blacklistText, customPrompts, storage, telemetryEnabled, telemetryDsn]);
+
+  // Submit user feedback (opt-in: forwarded to background SW, only sent when telemetry enabled)
+  const handleSubmitFeedback = useCallback(async () => {
+    const msg = feedbackText.trim();
+    if (!msg) {
+      setToastMessage('请先输入反馈内容');
+      setTimeout(() => setToastMessage(null), 2500);
+      return;
+    }
+    if (feedbackSending) return;
+    setFeedbackSending(true);
+    try {
+      if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
+        const response = await chrome.runtime.sendMessage({ action: 'SUBMIT_FEEDBACK', payload: { message: msg } });
+        if (response?.status === 'telemetry_disabled') {
+          setToastMessage('错误上报未启用：请先在上方开启「错误上报」并填写 DSN 后重试');
+        } else if (response?.success) {
+          setToastMessage('反馈已提交，谢谢！');
+        } else {
+          setToastMessage('反馈提交失败，请稍后重试');
+        }
+      } else {
+        setToastMessage('当前环境不支持提交反馈');
+      }
+      setFeedbackText('');
+    } catch (err: any) {
+      setToastMessage(`反馈提交失败：${err?.message || '未知错误'}`);
+    } finally {
+      setFeedbackSending(false);
+      setTimeout(() => setToastMessage(null), 4500);
+    }
+  }, [feedbackText, feedbackSending]);
 
   // Handle Reset Current Prompt
   const handleResetCurrentPrompt = useCallback(() => {
@@ -563,7 +597,51 @@ export const OptionsApp: React.FC<OptionsAppProps> = ({
             )}
           </section>
 
-          {/* Section 2: Custom Prompt Templates (6+ Tabs) */}
+                    {/* User Feedback — submit issue/request to the same GlitchTip (opt-in) */}
+                    <section className="bg-white rounded-xl shadow-sm border border-slate-200/80 p-6">
+                      <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-100">
+                        <div className="flex items-center gap-2">
+                          <span className="w-7 h-7 rounded-lg bg-slate-100 flex items-center justify-center text-slate-500">
+                            <ShieldIcon className="w-4 h-4" />
+                          </span>
+                          <h2 className="text-sm font-bold text-slate-800">问题反馈</h2>
+                        </div>
+                        <span className="text-[10px] bg-slate-100 text-slate-500 font-medium px-1.5 py-0.5 rounded">
+                          随遥测一起发送
+                        </span>
+                      </div>
+
+                      <p className="text-xs text-slate-500 mb-3">
+                        遇到问题或想提建议？写下来发给我们。反馈通过<a className="text-[#00BFA5] font-medium" href="#telemetry-dsn-input">错误上报</a>通道发送，仅在开启遥测时生效；开启后状态栏会保留本地文案（可在 GlitchTip 按 <code className="text-[11px] bg-slate-100 px-1 py-0.5 rounded">[用户反馈]</code> 前缀过滤）。
+                      </p>
+
+                      <textarea
+                        id="feedback-text-input"
+                        value={feedbackText}
+                        onChange={(e) => setFeedbackText(e.target.value)}
+                        rows={3}
+                        maxLength={2000}
+                        placeholder="描述你遇到的问题或建议…"
+                        className="w-full px-3.5 py-2 text-sm bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#00BFA5]/30 focus:border-[#00BFA5] transition text-slate-800 resize-none"
+                      />
+
+                      <div className="mt-3 flex items-center justify-between">
+                        <span className="text-[11px] text-slate-400">
+                          {feedbackText.length}/2000
+                        </span>
+                        <button
+                          id="submit-feedback-btn"
+                          type="button"
+                          disabled={feedbackSending || !feedbackText.trim()}
+                          onClick={handleSubmitFeedback}
+                          className="px-3.5 py-1.5 bg-[#00BFA5] hover:bg-[#00A896] text-white text-xs font-semibold rounded-lg transition disabled:opacity-50 cursor-pointer"
+                        >
+                          {feedbackSending ? '提交中…' : '提交反馈'}
+                        </button>
+                      </div>
+                    </section>
+
+                    {/* Section 2: Custom Prompt Templates (6+ Tabs) */}
           <section className="bg-white rounded-xl shadow-sm border border-slate-200/80 p-6">
             <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2">

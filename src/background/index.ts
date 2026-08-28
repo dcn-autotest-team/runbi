@@ -4,7 +4,7 @@
  */
 
 import { setupStreamPortHandler, testApiConnection } from './streamHandler';
-import { initTelemetry, captureTelemetryError } from './telemetry';
+import { initTelemetry, captureTelemetryError, captureFeedback } from './telemetry';
 
 console.log('[Runbi] Background Service Worker initialized');
 
@@ -67,6 +67,18 @@ chrome.runtime.onMessage?.addListener((message, _sender, sendResponse) => {
     chrome.storage.local
       .set(message.payload || {})
       .then(() => sendResponse({ success: true }))
+      .catch((err) => sendResponse({ success: false, error: err?.message }));
+    return true;
+  }
+
+  if (message?.action === 'SUBMIT_FEEDBACK') {
+    const text = (message?.payload?.message || '').trim();
+    if (!text) {
+      sendResponse({ success: false, status: 'empty' });
+      return true;
+    }
+    captureFeedback(text)
+      .then((status) => sendResponse({ success: true, status }))
       .catch((err) => sendResponse({ success: false, error: err?.message }));
     return true;
   }
