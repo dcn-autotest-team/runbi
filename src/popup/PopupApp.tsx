@@ -206,8 +206,8 @@ export const PopupApp: React.FC<PopupAppProps> = ({ storageProvider: injectedSto
     try {
       const granted = await chrome.permissions.request({ origins: ['https://*/*'] });
       setHostGranted(granted);
-      setSaveToast(granted ? '已授权访问所有 HTTPS 站点' : '未授予访问权限');
-      setTimeout(() => setSaveToast(null), 1500);
+      setSaveToast(granted ? '已授权，请刷新已打开的网页以载入划词' : '未授予访问权限');
+      setTimeout(() => setSaveToast(null), 2500);
     } catch (err: any) {
       setSaveToast(`授权失败: ${err?.message || String(err)}`);
       setTimeout(() => setSaveToast(null), 2000);
@@ -385,7 +385,7 @@ export const PopupApp: React.FC<PopupAppProps> = ({ storageProvider: injectedSto
             <span>需要访问 HTTPS 站点以连接模型 API</span>
           </div>
           <p className="text-[10px] text-amber-700 mb-2">
-            授权后润色请求才能发送到你的模型服务（仅 HTTPS 站点）。
+            授权后润色请求才能发送到你的模型服务（仅 HTTPS 站点）。授权成功后请刷新已打开的网页以载入划词功能。
           </p>
           <button
             id="grant-host-access-btn"
