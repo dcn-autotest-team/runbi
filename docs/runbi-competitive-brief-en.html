@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Runbi — AI Selection Polisher for Windows (Competitive Brief)</title>
+<style>
+  :root { --ink:#1a1a1a; --muted:#6b7280; --accent:#00BFA5; --line:#e5e7eb; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif; color:var(--ink); line-height:1.6; background:#fff; padding:48px 24px; }
+  .wrap { max-width:860px; margin:0 auto; }
+  h1 { font-size:28px; font-weight:700; letter-spacing:-0.5px; }
+  .tagline { font-size:16px; color:var(--muted); margin:8px 0 28px; }
+  h2 { font-size:18px; font-weight:600; margin:32px 0 12px; padding-bottom:6px; border-bottom:2px solid var(--accent); }
+  table { width:100%; border-collapse:collapse; font-size:13.5px; margin:12px 0 8px; }
+  th,td { padding:9px 10px; text-align:left; vertical-align:top; }
+  thead th { border-top:2px solid var(--ink); border-bottom:1px solid var(--ink); font-weight:600; }
+  tbody tr:last-child td { border-bottom:2px solid var(--ink); }
+  tbody td { border-bottom:1px solid var(--line); }
+  .yes { color:var(--accent); font-weight:600; }
+  .no { color:#d9534f; font-weight:600; }
+  .part { color:#f0a500; font-weight:600; }
+  ul { padding-left:20px; margin:8px 0; }
+  li { margin-bottom:5px; }
+  .note { font-size:12.5px; color:var(--muted); margin-top:6px; }
+  .pill { display:inline-block; font-size:11px; font-weight:600; padding:2px 8px; border-radius:999px; background:#e6f7f4; color:#00897b; margin-left:6px; vertical-align:middle; }
+  .foot { margin-top:40px; padding-top:16px; border-top:1px solid var(--line); font-size:12px; color:var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Runbi <span class="pill">Windows · Native</span></h1>
+<p class="tagline">Select any text anywhere — Polish it with AI — replace it in place. Your keys, your model, your data.</p>
+
+<h2>One-Line Positioning</h2>
+<p><strong>The only AI polishing tool that is native-Chinese × active-selection-triggered × in-place-replacement × Windows desktop.</strong> Every single element has near-competitors; the four-element combination has none.</p>
+
+<h2>Competitive Landscape (vs. the closest players)</h2>
+<table>
+<thead>
+<tr><th>Product</th><th>Type</th><th>Chinese</th><th>Trigger</th><th>In-place replace</th><th>Windows desktop</th><th>Pricing / scale</th></tr>
+</thead>
+<tbody>
+<tr>
+  <td><strong>Runbi</strong></td>
+  <td>Selection polisher</td>
+  <td class="yes">Native</td>
+  <td class="yes">Active selection</td>
+  <td class="yes">Clipboard-isolated</td>
+  <td class="yes">Native + extension</td>
+  <td>BYOK free; B2B ¥299-599/seat/yr</td>
+</tr>
+<tr>
+  <td>QuillBot</td>
+  <td>Rewriting suite</td>
+  <td class="no">❌ (6 langs)</td>
+  <td class="yes">In-Page Editing</td>
+  <td class="yes">In-page only</td>
+  <td class="no">Web only</td>
+  <td>~$19.95/mo · 35M users · 5M ext</td>
+</tr>
+<tr>
+  <td>Grammarly</td>
+  <td>Grammar/passive coach</td>
+  <td class="no">❌ EN-first</td>
+  <td class="no">Passive underlines</td>
+  <td class="part">Partial</td>
+  <td class="yes">App/desktop</td>
+  <td>$12/mo · 40M users +50K orgs</td>
+</tr>
+<tr>
+  <td>Wordtune</td>
+  <td>Rewriting assistant</td>
+  <td class="no">❌ EN only</td>
+  <td class="yes">Selection</td>
+  <td class="part">Partial</td>
+  <td class="no">Web only</td>
+  <td>Free / $6.99 / $9.99+ · 10M users</td>
+</tr>
+<tr>
+  <td>DeepL Write</td>
+  <td>Writing workbench</td>
+  <td class="part">✅ (workbench)</td>
+  <td class="no">Paste-whole-text</td>
+  <td class="no">Workbench</td>
+  <td class="part">Desktop app</td>
+  <td>$8.74–57.49/mo (Write Pro $7.49)</td>
+</tr>
+<tr>
+  <td>PopClip / Bob</td>
+  <td>System selection tools</td>
+  <td class="part">PopClip: N; Bob: ✅</td>
+  <td class="yes">Selection</td>
+  <td class="yes">In-place</td>
+  <td class="no">macOS only</td>
+  <td>Paid, macOS 15yr proven</td>
+</tr>
+<tr>
+  <td>Raycast AI</td>
+  <td>Launcher AI</td>
+  <td class="no">Weak</td>
+  <td class="part">Partial</td>
+  <td class="part">Partial</td>
+  <td class="part">⚠️ Windows now shipping</td>
+  <td>Subscription — the 6–12 mo wildcard</td>
+</tr>
+</tbody>
+</table>
+
+<h2>Why the Window Is Real (and Why It Closes)</h2>
+<ul>
+  <li><strong>The interaction is proven</strong>: PopClip/Bob have charged for "select → act → replace" on macOS for 15 years. Nobody built it for Windows.</li>
+  <li><strong>Today's four-element gap</strong>: every international player misses Chinese (QuillBot 6 lang, no zh; Grammarly EN-first; Wordtune EN-only; DeepL Write zh but whole-text workbench, not selection). Domestic players are free-tier, browser-locked or input-method-locked.</li>
+  <li><strong>The threat</strong>: Raycast shipped a Windows version. QuillBot's In-Page Editing proves the interaction at 35M users — don't bet on it never adding Chinese. Estimated window: <strong>6–12 months</strong>.</li>
+  <li><strong>Privacy wedge</strong>: BYOK (bring your own key) means data never touches our cloud — the wedge both for C-end trust and B2B "no data leaves the company" deals.</li>
+</ul>
+
+<h2>Quick Facts</h2>
+<ul>
+  <li><strong>Pricing anchors (scraped)</strong>: Immersive Translate Pro ¥49/mo (domestic, vendor-reported 20M users) · Grammarly $12/mo · Wordtune $6.99/$9.99.</li>
+  <li><strong>Recommended wedge price</strong>: C-end BYOK permanently free; optional Pro ¥19.9–29.9/mo (safety band between ¥49 and $12); B2B ¥299–599/seat/yr + token plans.</li>
+  <li><strong>Positioning sentence (internal)</strong>: "Select-to-polish, replace-in-place, privacy never leaves your machine — in every corner of the Chinese-speaking world."</li>
+</ul>
+
+<h2>Data Notes</h2>
+<p class="note">Figures sourced from vendor sites / Chrome Web Store (2026-08-29). User counts prefixed "vendor-reported" are self-reported. QuillBot pricing (~$19.95/mo) is third-party; official pricing page blocked by Cloudflare — pending verification. Raycast Windows completeness yet to be tested.</p>
+
+<div class="foot">Runbi competitive brief · v1.0 EN · companion to competitor-summary-2026-08-29.md (v1.2) · 2026-08-29</div>
+
+</div>
+</body>
+</html>
