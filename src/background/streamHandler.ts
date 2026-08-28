@@ -15,6 +15,47 @@ import { resolveEndpoint } from '@runbi/shared/core';
 
 export const STREAM_CHANNEL_NAME = 'runbi-stream-channel';
 
+/**
+ * Ensures the extension has cross-origin permission for the given endpoint
+ * before making an outbound fetch. Required since host permissions are
+ * declared as `optional_host_permissions` (MV3) and granted on demand.
+ * Returns an error message on failure, or null when the origin is allowed.
+ */
+export async function ensureOriginPermission(endpoint: string): Promise<string | null> {
+  let origin: string;
+  try {
+    origin = new URL(endpoint).origin;
+  } catch (_) {
+    return `无法解析请求地址: ${endpoint}`;
+  }
+
+  if (typeof chrome === 'undefined' || !chrome.permissions) {
+    // Non-extension context (tests / dev fallback): nothing to request.
+    return null;
+  }
+
+  try {
+    const alreadyGranted = await chrome.permissions.contains({ origins: [origin] });
+    if (alreadyGranted) {
+      return null;
+    }
+  } catch (_) {
+    // contains() can reject in some contexts; fall through to a request attempt.
+  }
+
+  try {
+    // Match the wildcard if it is a subdomain of two-part TLD (e.g. co.uk) is
+    // covered by the https://*/* pattern; here we request the exact origin.
+    const granted = await chrome.permissions.request({ origins: [origin] });
+    if (!granted) {
+      return `未授予访问 ${origin} 的权限，请在浏览器扩展弹窗中允许后重试`;
+    }
+  } catch (err: any) {
+    return `申请访问 ${origin} 权限失败: ${err?.message || String(err)}`;
+  }
+  return null;
+}
+
 export const DEFAULT_STYLE_PROMPTS: Record<PolishStyle, string> = {
   polished: '你是一名文字润色专家。你的唯一职责是对用户的文本进行通用润色，消除语病，表达通顺自然，保持原意与语气。',
   academic: '你是一名文字润色专家。你的唯一职责是对用户的文本进行学术规范化润色，符合SCI/顶会论文风格，用词客观、精炼、高级，论证严谨，消除中式口语。',
@@ -63,6 +104,12 @@ export async function streamRealCompletions(
   const endpoint = resolveEndpoint(config.baseUrl);
   const startTime = Date.now();
   let totalTokens = 0;
+
+  const denyReason = await ensureOriginPermission(endpoint);
+  if (denyReason) {
+    safePostMessage(port, { type: 'ERROR', error: denyReason });
+    return;
+  }
 
   const userPrompt = config.userInstruction && config.userInstruction.trim()
     ? `【参考文本】：\n"""\n${text}\n"""\n\n【我的具体回复要求/意向】：\n${config.userInstruction.trim()}`
@@ -251,6 +298,11 @@ export async function testApiConnection(
   const endpoint = resolveEndpoint(config.baseUrl);
   const model = config.model || 'deepseek-chat';
   const startTime = Date.now();
+
+  const denyReason = await ensureOriginPermission(endpoint);
+  if (denyReason) {
+    return { success: false, error: denyReason };
+  }
 
   try {
     const response = await fetch(endpoint, {

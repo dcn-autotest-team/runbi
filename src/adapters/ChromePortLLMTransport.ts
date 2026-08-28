@@ -16,6 +16,7 @@ import type {
   ConnectionTestResult,
 } from '@runbi/shared/types/stream';
 import { generateMockStreamMessages, resolveEndpoint } from '@runbi/shared/core';
+import { ensureOriginPermission } from '../background/streamHandler';
 
 export const STREAM_CHANNEL_NAME = 'runbi-stream-channel';
 
@@ -266,6 +267,11 @@ export class ChromePortLLMTransport implements ILLMTransport {
     const endpoint = resolveEndpoint(config.baseUrl);
     const model = config.model || 'deepseek-chat';
     const startTime = Date.now();
+
+    const denyReason = await ensureOriginPermission(endpoint);
+    if (denyReason) {
+      return { success: false, error: denyReason };
+    }
 
     try {
       const response = await fetch(endpoint, {
