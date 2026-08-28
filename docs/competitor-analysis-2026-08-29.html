@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Runbi 竞品调研报告 · 2026-08-29</title>
+<style>
+  :root{
+    --ink:#1a1f1e; --paper:#fdfdfc; --accent:#0d7a5f; --accent-soft:#e6f2ee;
+    --warn:#b3541e; --warn-soft:#fdf0e7; --muted:#5c6663; --line:#d8dedb; --line-strong:#1a1f1e;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  html{scroll-behavior:smooth;}
+  body{font-family:"Helvetica Neue","PingFang SC","Microsoft YaHei",Arial,sans-serif;
+       color:var(--ink); background:var(--paper); line-height:1.75; font-size:15px;}
+  .page{max-width:880px; margin:0 auto; padding:56px 48px 80px;}
+  /* ---------- header ---------- */
+  .kicker{font-size:12px; letter-spacing:.22em; text-transform:uppercase; color:var(--accent); font-weight:700; margin-bottom:10px;}
+  h1{font-size:34px; line-height:1.25; font-weight:800; letter-spacing:-.01em; margin-bottom:14px;}
+  .meta{font-size:13px; color:var(--muted); border-top:3px solid var(--line-strong); padding-top:12px; margin-bottom:8px;}
+  .meta b{color:var(--ink);}
+  .rule{border:none; border-top:1px solid var(--line); margin:36px 0;}
+  /* ---------- TOC ---------- */
+  nav.toc{background:var(--accent-soft); padding:22px 26px; border-left:4px solid var(--accent); margin:28px 0 8px;}
+  nav.toc h2{font-size:13px; letter-spacing:.18em; text-transform:uppercase; color:var(--accent); margin-bottom:10px;}
+  nav.toc ol{list-style:none; columns:2; column-gap:40px;}
+  nav.toc a{color:var(--ink); text-decoration:none; font-size:14px; display:block; padding:2px 0;}
+  nav.toc a:hover{color:var(--accent); text-decoration:underline;}
+  nav.toc .num{color:var(--accent); font-weight:700; margin-right:8px; font-variant-numeric:tabular-nums;}
+  /* ---------- headings ---------- */
+  h2.sec{font-size:22px; font-weight:800; margin:52px 0 18px; padding-bottom:8px; border-bottom:2px solid var(--line-strong); scroll-margin-top:24px;}
+  h2.sec .no{color:var(--accent); margin-right:10px; font-variant-numeric:tabular-nums;}
+  h3{font-size:16px; font-weight:700; margin:26px 0 10px; scroll-margin-top:24px;}
+  h4{font-size:14px; font-weight:700; margin:18px 0 6px; color:var(--muted); letter-spacing:.04em;}
+  p{margin:8px 0;}
+  /* ---------- tldr ---------- */
+  .tldr{border:1px solid var(--line-strong); padding:24px 28px; margin:26px 0; background:#fff;}
+  .tldr h2{font-size:13px; letter-spacing:.18em; text-transform:uppercase; margin-bottom:12px; color:var(--accent);}
+  .tldr ol{list-style:none; counter-reset:t;}
+  .tldr li{counter-increment:t; position:relative; padding-left:34px; margin:10px 0; font-size:15px;}
+  .tldr li::before{content:counter(t); position:absolute; left:0; top:2px; width:22px; height:22px;
+    background:var(--accent); color:#fff; font-weight:700; font-size:12px; display:flex; align-items:center; justify-content:center;}
+  .tldr b{background:linear-gradient(transparent 62%, var(--accent-soft) 0);}
+  /* ---------- cards ---------- */
+  .card{border:1px solid var(--line); padding:18px 22px; margin:14px 0; background:#fff; break-inside:avoid;}
+  .card h3{margin-top:0;}
+  .card .tagline{font-size:12.5px; color:var(--muted); margin-bottom:8px;}
+  .card ul{margin:6px 0 0 18px;}
+  .card li{margin:3px 0; font-size:14px;}
+  .insight{border-left:3px solid var(--accent); background:var(--accent-soft); padding:8px 14px; margin-top:10px; font-size:13.5px;}
+  .insight b{color:var(--accent);}
+  .warn-box{border-left:3px solid var(--warn); background:var(--warn-soft); padding:8px 14px; margin-top:10px; font-size:13.5px;}
+  /* ---------- badges ---------- */
+  .badge{display:inline-block; font-size:11px; font-weight:700; padding:1px 8px; margin-left:6px; vertical-align:2px; letter-spacing:.05em;}
+  .b-live{background:var(--accent); color:#fff;}
+  .b-know{background:#e8e8e4; color:var(--muted);}
+  .b-warn{background:var(--warn); color:#fff;}
+  .b-new{background:#1f4e79; color:#fff;}
+  /* ---------- academic tables ---------- */
+  table{width:100%; border-collapse:collapse; margin:16px 0; font-size:13.5px; break-inside:avoid;}
+  caption{caption-side:top; text-align:left; font-size:12px; color:var(--muted); padding-bottom:6px; letter-spacing:.06em;}
+  thead th{border-top:2px solid var(--line-strong); border-bottom:1px solid var(--line-strong);
+    padding:8px 10px; text-align:left; font-weight:700; background:#fff;}
+  tbody td{border-bottom:1px solid var(--line); padding:8px 10px; vertical-align:top;}
+  tbody tr:last-child td{border-bottom:2px solid var(--line-strong);}
+  tbody tr:nth-child(even) td{background:#fafbf9;}
+  td.yes{color:var(--accent); font-weight:700;}
+  td.no{color:#b3423a; font-weight:700;}
+  td.part{color:var(--warn); font-weight:700;}
+  td.runbi{background:var(--accent-soft) !important; font-weight:600;}
+  /* ---------- misc ---------- */
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:14px;}
+  ol.steps{margin:10px 0 0 20px;}
+  ol.steps li{margin:8px 0;}
+  ul.plain{margin:8px 0 0 18px;}
+  ul.plain li{margin:4px 0;}
+  .small{font-size:12.5px; color:var(--muted);}
+  footer{margin-top:64px; border-top:2px solid var(--line-strong); padding-top:14px; font-size:12px; color:var(--muted);}
+  a{color:var(--accent);}
+  @media print{
+    body{font-size:12px;} .page{padding:24px; max-width:none;}
+    h2.sec{break-after:avoid;} .card,table{break-inside:avoid;}
+    nav.toc{columns:2;}
+  }
+  @media (max-width:640px){ .page{padding:28px 20px;} .grid2{grid-template-columns:1fr;} nav.toc ol{columns:1;} }
+</style>
+</head>
+<body>
+<div class="page">
+
+<header>
+  <div class="kicker">Runbi · Competitive Research</div>
+  <h1>Runbi 竞品调研报告</h1>
+  <p class="meta">
+    <b>版本</b> v1.2 · <b>调研时间</b> 2026-08-29 01:00–02:20(北京时间) ·
+    <b>调研分工</b> LobsterAI(国际线 + 桌面系统级,7 家官网实抓)× Agent_F75E(中文区 9 家,实采 + 知识底混合)
+  </p>
+  <p class="meta">数据标注:<span class="badge b-live">实采</span>官网/商店直接抓取&nbsp;&nbsp;<span class="badge b-know">知识底</span>JS 壳/WAF 拦截,领域知识补充&nbsp;&nbsp;定价以官网当日页面为准</p>
+</header>
+
+<nav class="toc">
+  <h2>目录 Contents</h2>
+  <ol>
+    <li><a href="#tldr"><span class="num">00</span>TL;DR 五句话</a></li>
+    <li><a href="#pattern"><span class="num">01</span>竞争格局:三个梯队</a></li>
+    <li><a href="#matrix"><span class="num">02</span>Runbi 卡位对比矩阵</a></li>
+    <li><a href="#findings"><span class="num">03</span>关键发现 Top 5</a></li>
+    <li><a href="#positioning"><span class="num">04</span>差异化定位</a></li>
+    <li><a href="#pricing"><span class="num">05</span>定价建议</a></li>
+    <li><a href="#risks"><span class="num">06</span>风险</a></li>
+    <li><a href="#actions"><span class="num">07</span>行动项</a></li>
+    <li><a href="#sources"><span class="num">08</span>来源与可信度</a></li>
+  </ol>
+</nav>
+
+<!-- ================= TLDR ================= -->
+<section class="tldr">
+  <h2>TL;DR</h2>
+  <ol>
+    <li><b>「中文 × 主动划词触发 × 原地替换 × Windows 桌面端」四要素组合,无直接竞品</b>——注意单要素各有近似者:QuillBot 的 In-Page Editing(划词→浮窗→原地替换)与 Runbi 交互高度重合且已验证 3500 万用户,但<b>不支持中文、无 Windows 桌面端</b>。</li>
+    <li>最接近的形态(PopClip / Bob)在 macOS 存活 15 年并持续收费,证明交互范式成立;但<b>没人做 Windows 原生</b>。</li>
+    <li>唯一的窗口期警报:<b>Raycast 已发布 Windows 版</b>;国产侧警惕豆包 / Kimi 免费侧边栏助手。</li>
+    <li>定价锚已实采:国内沉浸式翻译 Pro <b>¥49/月</b>(2000 万用户为官方自称)、海外 Grammarly <b>$12/月</b>——Runbi 走 BYOK 免费 + B 端坐席制有明确安全区。</li>
+    <li>商业化主线确认:C 端免费铺量防占位,<b>B 端(律所/券商/政务)模板包 + 私有化</b>是唯一避开免费碾压的路。</li>
+  </ol>
+</section>
+
+<!-- ================= 01 格局 ================= -->
+<h2 class="sec" id="pattern"><span class="no">01</span>竞争格局:三个梯队</h2>
+
+<h3>梯队 A|国际 AI 写作助手 <span class="badge b-live">3 家实采</span></h3>
+
+<div class="card">
+  <h3>Grammarly<span class="badge b-live">实采</span></h3>
+  <p class="tagline">行业标杆 · 扩展 + 桌面 App + Web + Office</p>
+  <ul>
+    <li>定价:Free $0 / <b>Pro $12/月</b> / Enterprise 联系销售——三级骨架(gamma:实抓 grammarly.com/plans)</li>
+    <li>规模:4000 万用户 + 5 万机构;触发是「文本有红旗就标注」的<b>被动批改</b>,非「选中即改」的主动划词</li>
+    <li><b>基本不支持中文</b>——其商务 empire 建在英文上</li>
+    <li>模型自家托管、不支持 BYOK;C 端数据过其云</li>
+  </ul>
+  <div class="insight"><b>启示</b>:三级定价骨架是被验证的标准打法;但无「系统级跨应用贴回」,且中文盲区正是 Runbi 切入口。</div>
+</div>
+
+<div class="card">
+  <h3>QuillBot<span class="badge b-know">二手口径待核</span><span class="badge b-warn">最需警惕的交互对标</span></h3>
+  <p class="tagline">学术改写之王 · Web + 扩展 + App(官方定价页被 Cloudflare 拦截)</p>
+  <ul>
+    <li>规模:<b>3500 万用户</b>,Chrome 扩展 500 万(商店页面实抓)</li>
+    <li>定价:免费 + Premium ~<b>$19.95/月</b>(第三方口径,待直连官方核实)</li>
+    <li><b>6 个语种,不含中文</b>;词库式改写(Synonym Slider)</li>
+    <li>⚠️ In-Page Editing(选中文本→浮窗→原地替换)交互模型与 Runbi <b>高度重合</b>——证明该交互已被大规模验证,也意味着它补中文的速度不可低估</li>
+  </ul>
+  <div class="insight"><b>启示</b>:「垂直人群(学术)+ 改写」单一窄场景可撑起一家公司;Runbi 学术英文润色模板可直接对标。</div>
+</div>
+
+<div class="card">
+  <h3>Wordtune<span class="badge b-live">实采</span></h3>
+  <p class="tagline">逐句行内改写 · 仅英文 · Web + 扩展</p>
+  <ul>
+    <li>规模:1000 万用户;定价 Free / Advanced $6.99+ / Unlimited $9.99+</li>
+    <li>功能线:Paraphrase / Rewrite / Summarize / AI Writing / Grammar / <b>Humanize AI</b>(AI 味去除)</li>
+    <li>交互:「多选一建议」而非一键,路径比 Runbi 长</li>
+  </ul>
+  <div class="insight"><b>启示</b>:"Humanize AI"是 2024–2026 新长出的需求(AI 内容去味),可加入 Runbi 场景模板。</div>
+</div>
+
+<div class="card">
+  <h3>DeepL Write<span class="badge b-live">实采</span></h3>
+  <p class="tagline">写作工作台 · 整篇粘贴 · 多语含中文 · Web + 桌面</p>
+  <ul>
+    <li>定价:$8.74–57.49/月,Write Pro $7.49;Web 免费,Pro 捆绑</li>
+    <li>风格/语气选择、词句备选;独立数据安全页,欧洲企业市场强</li>
+  </ul>
+  <div class="insight"><b>启示</b>:「翻译口碑 → 写作助手」路径 + 企业安全叙事拿 B 端;Runbi 私有化话术可参考其数据安全页。</div>
+</div>
+
+<h3>梯队 B|系统级划词工具 ⭐ 形态最接近 Runbi 桌面端</h3>
+
+<div class="card">
+  <h3>PopClip(macOS)<span class="badge b-live">实采</span></h3>
+  <p class="tagline">「PopClip appears when you select text in any app」——交互范式与 Runbi 桌面端完全同构</p>
+  <ul>
+    <li>扩展库生态(翻译/复制/搜索/分享),AI 靠扩展 BYOK 接入,无内置 AI</li>
+    <li>一次买断制,2011 年至今持续更新(2026.8 版)</li>
+    <li><b>仅 macOS,无 Windows 版</b></li>
+  </ul>
+  <div class="insight"><b>启示</b>:该交互范式在 macOS 被验证 15 年,付费意愿成立;Windows 上没有等价物——Runbi 桌面端的空窗位。</div>
+</div>
+
+<div class="card">
+  <h3>Bob(macOS)<span class="badge b-live">实采</span></h3>
+  <p class="tagline">划词翻译 / 截图翻译 / OCR · Mac App Store 分发</p>
+  <ul>
+    <li><b>30+ 翻译服务 BYOK 聚合</b>(火山/腾讯/阿里/百度/有道/DeepL…)+ 插件系统</li>
+    <li>主打翻译,无 AI 润色原生体验;<b>无 Windows 版</b></li>
+  </ul>
+  <div class="insight"><b>启示</b>:Bob =「macOS 版 Runbi 的翻译版」,BYOK + 划词 + 服务聚合模式在国内被验证过。</div>
+</div>
+
+<div class="card">
+  <h3>Raycast AI(macOS → Windows)<span class="badge b-live">实采</span><span class="badge b-warn">最大变数</span></h3>
+  <p class="tagline">「AI that works with your OS」· 32+ 模型聚合 · AI Chat + 扩展</p>
+  <ul>
+    <li>订阅制:Pro + AI 加购;体验标杆级产品</li>
+    <li>⚠️ <b>官网导航已出现 Windows 入口(raycast.com/windows)</b>——本次调研最重要的单一发现</li>
+    <li>其 Windows 版全局划词/贴回完成度待实测(空窗期判断的关键变量)</li>
+  </ul>
+  <div class="insight"><b>启示</b>:窗口期估计 <b>6–12 个月</b>。Runbi 应尽快锁定「Windows 原生 + 中文场景 + BYOK 隐私」心智。</div>
+</div>
+
+<div class="card">
+  <h3>uTools(全平台)<span class="badge b-live">实采</span></h3>
+  <p class="tagline">3000+ 插件生态 · 500 万+ 用户 · Alt+Space 全局唤起(与 Runbi 同款热键)</p>
+  <ul>
+    <li>免费 + 会员/企业版;企业内网部署方案;AI 插件创作(Vibe Coding)</li>
+  </ul>
+  <div class="insight"><b>启示</b>:双刃——既是生态位威胁,也是渠道(Runbi 可做 uTools 插件借 500 万用户分发);其企业内网部署验证了 B 端私有化需求。</div>
+</div>
+
+<h3>梯队 C|国产插件与输入法生态 <span class="badge b-know">流量碾压区,避开正面</span></h3>
+
+<table>
+  <caption>表 1 · 浏览器插件类(🔍 实采 / 📚 知识底)</caption>
+  <thead><tr><th>产品</th><th>形态</th><th>划词润色</th><th>系统级/跨应用</th><th>收费</th><th>来源</th></tr></thead>
+  <tbody>
+    <tr><td>沉浸式翻译</td><td>扩展+桌面壳</td><td>✅ 划词翻译(强)/润色弱</td><td class="part">⚠️ 部分</td><td>免费 + Pro ¥49/月(年付 ¥588,含 GPT-5.6 Luna / DeepL Pro / 2000 万 token/月)</td><td>🔍 官网定价页</td></tr>
+    <tr><td>秘塔写作猫</td><td>Web 编辑器</td><td>✅ 中文改写/校对</td><td class="no">❌</td><td>免费+订阅</td><td>📚 官网 JS 壳</td></tr>
+    <tr><td>豆包浏览器插件</td><td>扩展(商店第三方为主)</td><td>✅ 划词 AI 问答/总结</td><td class="no">❌</td><td>免费(字节流量)</td><td>📚 官方桌面端走微软商店</td></tr>
+    <tr><td>Kimi 浏览器助手</td><td>官方扩展(2024-07 上线)</td><td>✅ 划词 AI 辅助</td><td class="no">❌</td><td>免费+会员</td><td>📚 官网/百科</td></tr>
+    <tr><td>欧路词典</td><td>扩展+桌面取词</td><td>✅ 划词翻译(词典向)</td><td class="yes">✅ 桌面取词</td><td>免费+内购</td><td>🔍 官网</td></tr>
+  </tbody>
+</table>
+
+<table>
+  <caption>表 2 · 输入法 AI 类(锁输入框场景)</caption>
+  <thead><tr><th>产品</th><th>AI 能力</th><th>系统级</th><th>收费</th><th>来源</th></tr></thead>
+  <tbody>
+    <tr><td>讯飞输入法 AI</td><td>输入框内润色/改写</td><td class="part">⚠️ 仅输入法场景</td><td>免费+会员</td><td>📚</td></tr>
+    <tr><td>搜狗输入法 AI</td><td>输入框内 AI</td><td class="part">⚠️ 仅输入法场景</td><td>免费</td><td>📚</td></tr>
+    <tr><td>百度输入法 AI</td><td>输入框内 AI</td><td class="part">⚠️ 仅输入法场景</td><td>免费</td><td>📚</td></tr>
+    <tr><td>微信输入法</td><td>AI 侧重语音整理,非划词润色</td><td class="part">⚠️ 仅输入法场景</td><td>免费</td><td>🔍 官网</td></tr>
+    <tr><td>彩云小译</td><td>划词翻译(双语对照)</td><td class="no">❌</td><td>免费+会员</td><td>🔍 官网</td></tr>
+    <tr><td>WPS AI</td><td>文档内润色</td><td class="no">❌ 锁 WPS 内</td><td>订阅</td><td>📚</td></tr>
+  </tbody>
+</table>
+
+<div class="insight"><b>国内线小结</b>:输入法 AI 锁输入框、插件锁网页内、欧路锁词典向——「跨应用贴回 + 剪贴板恢复」在国产生态仍是空白;免费流量碾压属实(豆包/Kimi/输入法全免费),C 端正面打必输;沉浸式翻译是唯一值得学的国产对手(¥49/月锚点 + 「内容零保留」隐私叙事);Chrome 商店里大量「豆包/Kimi」插件为<b>第三方非官方</b>,官方尚未重注浏览器划词场景。</div>
+
+<!-- ================= 02 矩阵 ================= -->
+<h2 class="sec" id="matrix"><span class="no">02</span>Runbi 卡位对比矩阵</h2>
+
+<table>
+  <caption>表 3 · 关键维度横评(Runbi 列为浅绿底)</caption>
+  <thead><tr><th>维度</th><th>Grammarly</th><th>PopClip/Bob</th><th>Raycast</th><th>豆包/输入法</th><th>Runbi</th></tr></thead>
+  <tbody>
+    <tr><td>系统级跨应用划词</td><td class="no">❌</td><td class="yes">✅ 仅 macOS</td><td class="part">✅ Mac 成熟 / Win 起步</td><td class="no">❌</td><td class="runbi">✅ Windows</td></tr>
+    <tr><td>AI 原生润色 + Diff 对比</td><td class="yes">✅</td><td class="no">❌ 靠扩展</td><td class="part">部分</td><td class="part">部分</td><td class="runbi">✅</td></tr>
+    <tr><td>一键原地贴回</td><td class="part">部分</td><td class="yes">✅</td><td class="part">部分</td><td class="no">❌</td><td class="runbi">✅ 剪贴板隔离+防死锁</td></tr>
+    <tr><td>BYOK / 自选模型</td><td class="no">❌</td><td class="yes">✅</td><td class="no">❌ 订阅聚合</td><td class="no">❌</td><td class="runbi">✅ DeepSeek/智谱/OpenAI 预设</td></tr>
+    <tr><td>隐私(不过厂商云)</td><td class="no">❌</td><td class="yes">✅</td><td class="no">❌</td><td class="no">❌</td><td class="runbi">✅</td></tr>
+    <tr><td>定价</td><td>$12/月</td><td>买断</td><td>订阅+加购</td><td>免费</td><td class="runbi">未定(见 §05)</td></tr>
+    <tr><td>Windows 桌面端</td><td class="part">✅ 应用内</td><td class="no">❌</td><td class="part">⚠️ 新</td><td class="no">❌</td><td class="runbi">✅ 原生</td></tr>
+  </tbody>
+</table>
+
+<!-- ================= 03 发现 ================= -->
+<h2 class="sec" id="findings"><span class="no">03</span>关键发现 Top 5</h2>
+<ol class="steps">
+  <li><b>四空位确认(两线独立收敛)</b>:中文原生润色(海外四款全不做中文,唯一含中文的 DeepL Write 是整篇工作台)× 主动划词触发(Grammarly 是被动批改)× 原地替换(秘塔是编辑器形态)× Windows 桌面端(QuillBot/Wordtune 连桌面端都没有)——国产侧同样无人做「跨应用贴回 + 剪贴板恢复」。</li>
+  <li><b>Raycast Windows 版已出</b>(实抓官网导航入口):体验标杆 + Windows 落地,窗口期估计 <b>6–12 个月</b>;需实测其全局划词/贴回完成度(待办)。</li>
+  <li><b>沉浸式翻译是被验证的最佳模板</b>(实采):划词入口 + 免费引流 + Pro ¥49/月 + 「内容零保留」隐私口号,2000 万用户(官方自称)——隐私叙事文案可直接对标;但「翻译」心智已被它垄断,Runbi 应避开翻译叙事,主打「润色/改写」。</li>
+  <li><b>大厂免费助手威胁大但有软肋</b>:免费、模型强,但「通用且交互重」;商店里大量「豆包/Kimi」插件为第三方非官方——官方尚未重注浏览器划词场景。</li>
+  <li><b>垂直模板付费意愿已验证</b>:QuillBot 靠学术(3500 万用户)、秘塔写作猫靠中文公文/学术细分存活——Runbi 律所/券商/政务模板包路线成立。</li>
+</ol>
+
+<!-- ================= 04 定位 ================= -->
+<h2 class="sec" id="positioning"><span class="no">04</span>差异化定位</h2>
+<p><b>对外主话术(v1.1 采纳):</b>「在中文世界的任何角落,选中即润色,原地替换,隐私不上云。」——三要素:中文原生(海外竞品不做)× 主动划词触发(Grammarly 是被动批改)× 原地替换(编辑器型做不到)。</p>
+<p><b>对外备选(空窗词版):</b>「Windows 原生的系统级 AI 划词润色工具」——「Windows 原生/系统级」是唯一的空窗词,别用红海词「AI 润色」。</p>
+<div class="grid2">
+  <div class="card"><h3>轻</h3><p class="small">划词即润、Diff 对比、一键原地贴回(剪贴板隔离 + 防死锁),一秒换风格,用完即走。</p></div>
+  <div class="card"><h3>隐私</h3><p class="small">BYOK 自选模型(DeepSeek/智谱/OpenAI 预设),数据不过厂商云,「数据不出域」写进报价单。</p></div>
+  <div class="card"><h3>跨端</h3><p class="small">浏览器插件 + Windows 桌面全局热键,Shared Core 架构一端开发多端复用——纯扩展类做不了。</p></div>
+  <div class="card"><h3>场景资产</h3><p class="small">律所/券商/政务等行业模板包:代码可被抄,模板资产 + 客户关系抄不走。</p></div>
+</div>
+
+<!-- ================= 05 定价 ================= -->
+<h2 class="sec" id="pricing"><span class="no">05</span>定价建议</h2>
+<table>
+  <caption>表 4 · 四层定价(对标锚点均为实采或公开数据)</caption>
+  <thead><tr><th>层</th><th>定价</th><th>对标依据</th></tr></thead>
+  <tbody>
+    <tr><td>C 端 BYOK</td><td>永久免费(自带 Key)</td><td>获客 + 口碑;对标沙拉查词开源策略</td></tr>
+    <tr><td>C 端 Pro(可选)</td><td>¥19.9–29.9/月</td><td>沉浸式 ¥49 与 Grammarly $12 之间的安全带(若做)</td></tr>
+    <tr><td>B 端坐席</td><td>¥299–599/年/席 + token 套餐</td><td>企业管理端 / 场景模板包 / SSO</td></tr>
+    <tr><td>私有化项目</td><td>¥5–20 万/项目</td><td>uTools 企业内网部署、DeepL 数据安全叙事验证需求</td></tr>
+  </tbody>
+</table>
+
+<!-- ================= 06 风险 ================= -->
+<h2 class="sec" id="risks"><span class="no">06</span>风险</h2>
+<ol class="steps">
+  <li><b>Raycast Windows 化</b>(时间窗 6–12 个月)→ 尽快锁心智 + 商店上架占位。</li>
+  <li><b>大厂入场</b>(字节/月之暗面官方重注浏览器划词)→ 靠「系统级 + 贴回 + 隐私 + B 端」错位防御。</li>
+  <li><b>技术护城河薄</b>(Win32 hook 可复制)→ 护城河建在模板资产、客户关系、私有化交付上。</li>
+</ol>
+
+<!-- ================= 07 行动项 ================= -->
+<h2 class="sec" id="actions"><span class="no">07</span>行动项</h2>
+<ol class="steps">
+  <li><b>本周</b>:对外文案统一换成「Windows 原生系统级 AI 划词」心智;Chrome 商店免费版上架占位(防抢注搜索词)。</li>
+  <li><b>两周</b>:出一页英文对比表(vs PopClip/Bob/Raycast),投放 Product Hunt + r/Windows,试探海外 Windows 用户需求。</li>
+  <li><b>本月</b>:律所版模板包 demo(借秘塔验证过的垂直付费意愿),配合 FDE 渠道试水。</li>
+  <li><b>待补数据(白天)</b>:SimilarWeb / Chrome 商店实装数;Raycast Windows 版功能实测(全局划词/贴回有无);QuillBot 官方定价核实。</li>
+</ol>
+
+<!-- ================= 08 来源 ================= -->
+<h2 class="sec" id="sources"><span class="no">08</span>来源与可信度</h2>
+<ul class="plain">
+  <li><span class="badge b-live">实采</span>(2026-08-29 01:00–02:20 直抓):grammarly.com/plans、wordtune.com、deepl.com/en/write、popclip.app、bobtranslate.com、u-tools.cn、raycast.com/ai、immersivetranslate.com/pricing、eudic.net、z.weixin.qq.com、fanyi.caiyunapp.com、Chrome 商店页面(QuillBot/Wordtune 用户量与语种)</li>
+  <li><span class="badge b-know">知识底</span>(官网 JS 壳 / WAF 拦截):QuillBot 官方定价(~$19.95/月为第三方口径待核)、秘塔写作猫细节、豆包/Kimi 插件细节、讯飞/搜狗/百度输入法功能页、WPS AI</li>
+  <li><b>局限</b>:各家真实收入/留存未取第三方数据(SimilarWeb / 点点数据,建议白天补);Raycast Windows 版完成度未实测(仅确认入口存在)</li>
+</ul>
+
+<footer>
+  Runbi Competitive Research · v1.2 · 生成于 2026-08-29 02:25 ·
+  调研:LobsterAI × Agent_F75E · 数据 Markdown 源:<a href="./competitor-summary-2026-08-29.md">competitor-summary(v1.2)</a> ·
+  <a href="./competitor-analysis-2026-08-29.md">competitor-analysis(详单)</a> · 仓库:dcn-autotest-team/runbi
+</footer>
+
+</div>
+</body>
+</html>
