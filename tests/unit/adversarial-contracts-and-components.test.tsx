@@ -663,7 +663,7 @@ describe('Adversarial Shared React UI Components', () => {
 
       expect(container.textContent).toContain('润笔沉思中');
       // Style tabs must be disabled during generation
-      const tabs = container.querySelectorAll('[role="tab"]');
+      const tabs = container.querySelectorAll('[role="menuitemradio"]');
       tabs.forEach((tab) => {
         expect((tab as HTMLButtonElement).disabled).toBe(true);
       });
@@ -758,7 +758,7 @@ describe('Adversarial Shared React UI Components', () => {
 
       // Diff Toggle Button
       const diffToggleBtn = container.querySelector('#diff-toggle') as HTMLButtonElement;
-      expect(diffToggleBtn.textContent).toBe('终稿');
+      expect(diffToggleBtn.textContent).toBe('查看终稿');
       await act(async () => {
         diffToggleBtn.click();
       });
@@ -934,12 +934,12 @@ describe('Adversarial Shared React UI Components', () => {
         />
       );
 
-      const tabs = container.querySelectorAll('[role="tab"]');
+      const tabs = container.querySelectorAll('[role="menuitemradio"]');
       expect(tabs.length).toBe(STYLE_OPTIONS.length);
 
       // None of the preset tabs should be selected
       tabs.forEach((tab) => {
-        expect(tab.getAttribute('aria-selected')).toBe('false');
+        expect(tab.getAttribute('aria-checked')).toBe('false');
       });
     });
 
@@ -952,7 +952,7 @@ describe('Adversarial Shared React UI Components', () => {
         />
       );
 
-      expect(container.querySelectorAll('[role="tab"]').length).toBe(0);
+      expect(container.querySelectorAll('[role="menuitemradio"]').length).toBe(0);
     });
   });
 
@@ -1074,9 +1074,15 @@ describe('Adversarial Shared React UI Components', () => {
       expect(container.querySelector('#runbi-toast')).not.toBeNull();
       expect(container.textContent).toContain('提示信息');
 
-      // Hidden
+      // Hidden → stays mounted ~140ms for the exit animation, then unmounts
+      vi.useFakeTimers();
       await renderUI(<Toast message="隐藏" visible={false} />);
+      expect(container.querySelector('#runbi-toast')).not.toBeNull();
+      await act(async () => {
+        vi.advanceTimersByTime(150);
+      });
       expect(container.querySelector('#runbi-toast')).toBeNull();
+      vi.useRealTimers();
     });
 
     it('ADV-TST-2: unmounting before duration timer cleans up timer cleanly', async () => {

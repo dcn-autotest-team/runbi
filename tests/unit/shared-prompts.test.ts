@@ -11,6 +11,9 @@ import {
   buildSystemPrompt,
   buildUserPrompt,
   interpolateTemplate,
+  buildScreenReplySystemPrompt,
+  buildScreenReplyUserPrompt,
+  buildScreenReplyRefinePrompt,
 } from '@runbi/shared/core/prompts';
 import type { PolishStyle } from '@runbi/shared/types/stream';
 
@@ -124,6 +127,36 @@ describe('Shared Core: Prompt Engine & Dynamic Builder', () => {
       });
 
       expect(result).toBe('Hello Alice, your score is 95 in {course}.');
+    });
+  });
+
+  describe('Screen Reply (Zero-selection) Prompt Builder', () => {
+    it('should build screen reply system prompt with JSON schema requirements', () => {
+      const prompt = buildScreenReplySystemPrompt();
+      expect(prompt).toContain('JSON');
+      expect(prompt).toContain('"conversation"');
+      expect(prompt).toContain('"last_message_from_other"');
+      expect(prompt).toContain('"clarify_options"');
+      expect(prompt).toContain('"draft_reply"');
+    });
+
+    it('should build screen reply user prompt for vision parsing', () => {
+      const userPrompt = buildScreenReplyUserPrompt();
+      expect(userPrompt).toContain('屏幕截图');
+      expect(userPrompt).toContain('JSON');
+    });
+
+    it('should build screen reply refine prompt from conversation history and user chip', () => {
+      const conversation = [
+        { sender: 'other' as const, text: '明天上午有空开会吗？' },
+        { sender: 'me' as const, text: '我上午有个评审。' },
+        { sender: 'other' as const, text: '那下午两点方便吗？' },
+      ];
+      const prompt = buildScreenReplyRefinePrompt(conversation, '热情答应并约定地点');
+      expect(prompt).toContain('[对方]: 明天上午有空开会吗？');
+      expect(prompt).toContain('[我]: 我上午有个评审。');
+      expect(prompt).toContain('[对方]: 那下午两点方便吗？');
+      expect(prompt).toContain('【我的回复要求/语气偏好】：\n热情答应并约定地点');
     });
   });
 });

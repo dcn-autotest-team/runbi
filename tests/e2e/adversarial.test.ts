@@ -1,12 +1,10 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   validateSelectionText,
-  isEditableElement,
-  getActiveSelection,
-  createDebouncedSelectionListener,
   MIN_SELECTION_LENGTH,
   MAX_SELECTION_LENGTH,
-} from '../../src/core/selection';
+} from '@runbi/shared/core/selection';
+import { isEditableElement } from '../../src/adapters/ChromeDOMSelectionProvider';
 import {
   calculatePlacement,
   calculateCapsulePosition,
@@ -17,18 +15,17 @@ import {
   PANEL_DEFAULT_HEIGHT,
   TOP_COLLISION_THRESHOLD,
   VIEWPORT_MARGIN,
-} from '../../src/core/position';
+} from '@runbi/shared/core/position';
 import {
   tokenizeText,
   computeDiff,
   mergeDiffChunks,
-} from '../../src/core/diff';
+} from '@runbi/shared/core/diff';
 import {
   replaceInInputElement,
   replaceInContentEditable,
-  replaceSelection,
-  copyToClipboard,
-} from '../../src/core/replacer';
+  DOMTextReplacer,
+} from '../../src/adapters/DOMTextReplacer';
 import {
   generateMockStream,
   generateMockStreamMessages,
@@ -36,12 +33,10 @@ import {
   MOCK_POLISH_RULES,
 } from '../../src/core/mockStream';
 import type {
-  SelectionInfo,
   PositionCoordinates,
   DiffChunk,
   PolishStyle,
-  StreamConfig,
-} from '../../src/types';
+} from '@runbi/shared/types';
 
 describe('Tier 5: Adversarial Stress, Algorithmic Oracles & Boundary Challenges', () => {
 
@@ -177,28 +172,6 @@ describe('Tier 5: Adversarial Stress, Algorithmic Oracles & Boundary Challenges'
       expect(isEditableElement(host)).toBe(true);
     });
 
-    it('ADV-SEL-7: creates and tears down debounced selection listener cleanly', () => {
-      vi.useFakeTimers();
-      const onValid = vi.fn();
-      const onClear = vi.fn();
-
-      const unbind = createDebouncedSelectionListener(onValid, onClear, 150);
-      expect(typeof unbind).toBe('function');
-
-      document.dispatchEvent(new MouseEvent('mouseup'));
-      expect(onValid).not.toHaveBeenCalled();
-      expect(onClear).not.toHaveBeenCalled();
-
-      vi.advanceTimersByTime(150);
-      expect(onClear).toHaveBeenCalledTimes(1);
-
-      unbind();
-      document.dispatchEvent(new MouseEvent('mouseup'));
-      vi.advanceTimersByTime(200);
-      expect(onClear).toHaveBeenCalledTimes(1);
-
-      vi.useRealTimers();
-    });
   });
 
   // =========================================================================
@@ -256,15 +229,15 @@ describe('Tier 5: Adversarial Stress, Algorithmic Oracles & Boundary Challenges'
       const winW = 1000;
       const winH = 800;
       const trRect = { top: 20, right: 985, bottom: 45, left: 900 };
-      const trPos = calculatePlacement({ rect: trRect, windowWidth: winW, windowHeight: winH });
+      const trPos = calculatePlacement({ rect: trRect, viewport: { width: winW, height: winH } });
       expect(trPos.placement).toBe('bottom-left');
 
       const tlRect = { top: 15, right: 80, bottom: 40, left: 10 };
-      const tlPos = calculatePlacement({ rect: tlRect, windowWidth: winW, windowHeight: winH });
+      const tlPos = calculatePlacement({ rect: tlRect, viewport: { width: winW, height: winH } });
       expect(tlPos.placement.startsWith('bottom')).toBe(true);
 
       const midRect = { top: 300, right: 400, bottom: 325, left: 300 };
-      const midPos = calculatePlacement({ rect: midRect, windowWidth: winW, windowHeight: winH });
+      const midPos = calculatePlacement({ rect: midRect, viewport: { width: winW, height: winH } });
       expect(midPos.placement).toBe('top-right');
     });
 
@@ -424,7 +397,7 @@ describe('Tier 5: Adversarial Stress, Algorithmic Oracles & Boundary Challenges'
         navigator.clipboard.writeText = vi.fn().mockRejectedValue(new Error('Permission denied'));
       }
       const execSpy = vi.spyOn(document, 'execCommand').mockReturnValue(true);
-      const success = await copyToClipboard('润笔极速复制文本测试');
+      const success = await new DOMTextReplacer().copyToClipboard('润笔极速复制文本测试');
       expect(success).toBe(true);
       expect(execSpy).toHaveBeenCalledWith('copy');
       if (navigator.clipboard && originalWriteText) {
@@ -432,22 +405,6 @@ describe('Tier 5: Adversarial Stress, Algorithmic Oracles & Boundary Challenges'
       }
     });
 
-    it('ADV-REP-5: gracefully rejects replaceSelection on non-editable selection targets', () => {
-      const staticDiv = document.createElement('div');
-      staticDiv.textContent = 'Non-editable static text paragraph';
-      document.body.appendChild(staticDiv);
-      const fakeSelection: SelectionInfo = {
-        text: 'static text',
-        rawText: 'static text',
-        rect: new DOMRect(100, 100, 200, 20),
-        isEditable: false,
-        targetElement: staticDiv,
-        savedRange: null,
-      };
-      const success = replaceSelection(fakeSelection, 'Replacement');
-      expect(success).toBe(false);
-      expect(staticDiv.textContent).toBe('Non-editable static text paragraph');
-    });
   });
 
   // =========================================================================

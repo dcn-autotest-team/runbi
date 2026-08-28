@@ -85,7 +85,7 @@ describe('Shared UI Components (@runbi/shared/components)', () => {
         <StyleTabs activeStyle="polished" onStyleChange={handleStyleChange} />
       );
 
-      const tabs = container.querySelectorAll('[role="tab"]');
+      const tabs = container.querySelectorAll('[role="menuitemradio"]');
       expect(tabs.length).toBe(7);
 
       const academicBtn = container.querySelector('[data-style="academic"]') as HTMLButtonElement;
@@ -98,6 +98,13 @@ describe('Shared UI Components (@runbi/shared/components)', () => {
   });
 
   describe('StreamingView Component', () => {
+    it('should render a clear ready state before generation starts', async () => {
+      await renderElement(<StreamingView content="" isGenerating={false} />);
+
+      expect(container.textContent).toContain('准备生成润色稿');
+      expect(container.querySelector('[aria-busy="false"]')).not.toBeNull();
+    });
+
     it('should render streaming content and stats', async () => {
       await renderElement(
         <StreamingView
@@ -201,6 +208,23 @@ describe('Shared UI Components (@runbi/shared/components)', () => {
 
       expect(handleSend).toHaveBeenCalledWith('赞同该观点，并补充细节与论据');
     });
+
+    it('should display attached files and submit with attached files', async () => {
+      const handleSend = vi.fn();
+      const files = [{ name: 'plan.md', content: 'Design specs', size: 100 }];
+      await renderElement(<InstructionInput onSubmit={handleSend} attachedFiles={files} />);
+
+      expect(container.textContent).toContain('plan.md');
+
+      const sendBtn = container.querySelector('#runbi-instruction-send') as HTMLButtonElement;
+      expect(sendBtn.disabled).toBe(false);
+
+      await act(async () => {
+        sendBtn.click();
+      });
+
+      expect(handleSend).toHaveBeenCalledWith('请参考附加资料进行回复', files);
+    });
   });
 
   describe('Toast Component', () => {
@@ -273,6 +297,46 @@ describe('Shared UI Components (@runbi/shared/components)', () => {
         diffBtn.click();
       });
       expect(handleToggleDiff).toHaveBeenCalledTimes(1);
+    });
+
+    it('should trigger clarify chip on number key 1 press when screenReplyAnalysis is present', async () => {
+      const handleClarify = vi.fn();
+      const analysis = {
+        conversation: [{ sender: 'other' as const, text: '这版周五能给吗？' }],
+        last_message_from_other: '这版周五能给吗？',
+        clarify_options: ['热情答应', '委婉推迟', '追问细节'],
+        draft_reply: '周五下班前准时交付！',
+      };
+
+      await renderElement(
+        <PolishPanel
+          originalText="聊天记录"
+          polishedText="周五下班前准时交付！"
+          isGenerating={false}
+          activeStyle="reply"
+          isDiffMode={false}
+          isEditable={true}
+          screenReplyAnalysis={analysis}
+          onSelectClarifyChip={handleClarify}
+          onClose={vi.fn()}
+          onStyleChange={vi.fn()}
+          onToggleDiff={vi.fn()}
+          onStop={vi.fn()}
+          onRegenerate={vi.fn()}
+          onCopy={vi.fn()}
+          onReplace={vi.fn()}
+        />
+      );
+
+      expect(container.textContent).toContain('已感知聊天上下文');
+      expect(container.textContent).toContain('这版周五能给吗？');
+      expect(container.textContent).toContain('热情答应');
+
+      await act(async () => {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: '1' }));
+      });
+
+      expect(handleClarify).toHaveBeenCalledWith('热情答应');
     });
   });
 });

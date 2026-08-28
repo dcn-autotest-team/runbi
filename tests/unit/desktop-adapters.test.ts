@@ -79,6 +79,32 @@ describe('Desktop Platform Adapters Unit Test Suite', () => {
       const can = await replacer.canReplace();
       expect(typeof can).toBe('boolean');
     });
+
+    it('does not overwrite a clipboard that Rust explicitly protected', async () => {
+      const invokeMock = vi.fn(async (cmd: string) => {
+        if (cmd === 'replace_text') {
+          return {
+            success: false,
+            safe_to_copy_fallback: false,
+            error: '剪贴板中含文件，已取消贴回。',
+          };
+        }
+        return null;
+      });
+      (window as any).__TAURI_INTERNALS__ = { invoke: invokeMock };
+
+      try {
+        const replacer = new TauriTextReplacer();
+        const copySpy = vi.spyOn(replacer, 'copyToClipboard');
+        const result = await replacer.replaceText('润色结果');
+
+        expect(result.success).toBe(false);
+        expect(result.fallbackCopied).toBe(false);
+        expect(copySpy).not.toHaveBeenCalled();
+      } finally {
+        delete (window as any).__TAURI_INTERNALS__;
+      }
+    });
   });
 
   describe('TauriStorageProvider', () => {
@@ -123,6 +149,85 @@ describe('Desktop Platform Adapters Unit Test Suite', () => {
       await storage.clear();
       const afterClear = await storage.getAll();
       expect(Object.keys(afterClear).length).toBe(0);
+    });
+
+    it('syncs with Rust load_app_config and save_app_config in Tauri environment', async () => {
+      const mockSavedConfig: Record<string, any> = {
+        apiKey: 'sk-rust-persisted',
+        endpoint: 'https://api.deepseek.com/v1/chat/completions',
+        model: 'deepseek-chat',
+        defaultStyle: 'academic',
+        autoCopyPopup: true,
+        autostart: true,
+        wakeShortcut: 'Ctrl+Shift+Space',
+        readChatScreenshot: true,
+      };
+
+      let rustSavedData: Record<string, any> = {};
+
+      const originalWindow = global.window;
+      const invokeMock = vi.fn(async (cmd: string, args?: any) => {
+        if (cmd === 'load_app_config') {
+          return mockSavedConfig;
+        }
+        if (cmd === 'save_app_config') {
+          rustSavedData = args?.config || {};
+          return null;
+        }
+        return null;
+      });
+      (window as any).__TAURI_INTERNALS__ = {
+        invoke: invokeMock,
+      };
+
+      try {
+        const storage = new TauriStorageProvider();
+        const loadedKey = await storage.get<string>('apiKey');
+        expect(loadedKey).toBe('sk-rust-persisted');
+
+        const loadedAutostart = await storage.get<boolean>('autostart');
+        expect(loadedAutostart).toBe(true);
+
+        const all = await storage.getAll();
+        expect(all.model).toBe('deepseek-chat');
+
+        invokeMock.mockClear();
+        await storage.setMany({
+          model: 'deepseek-coder',
+          apiKey: 'sk-updated',
+          autoCopyPopup: false,
+        });
+
+        expect(invokeMock.mock.calls.filter(([cmd]) => cmd === 'save_app_config')).toHaveLength(1);
+        expect(rustSavedData.model).toBe('deepseek-coder');
+        expect(rustSavedData.apiKey).toBe('sk-updated');
+        expect(rustSavedData.autoCopyPopup).toBe(false);
+        expect(localStorage.getItem('runbi:apiKey')).toBeNull();
+      } finally {
+        delete (window as any).__TAURI_INTERNALS__;
+      }
+    });
+
+    it('does not publish settings when the durable Rust save fails', async () => {
+      const invokeMock = vi.fn(async (cmd: string) => {
+        if (cmd === 'load_app_config') return {};
+        if (cmd === 'save_app_config') throw new Error('disk full');
+        return null;
+      });
+      (window as any).__TAURI_INTERNALS__ = { invoke: invokeMock };
+
+      try {
+        const storage = new TauriStorageProvider();
+        const subscriber = vi.fn();
+        storage.subscribe('model', subscriber);
+
+        await expect(storage.setMany({ model: 'deepseek-chat' })).rejects.toThrow('disk full');
+        expect(await storage.get('model')).toBeUndefined();
+        expect(localStorage.getItem('runbi:model')).toBeNull();
+        expect(subscriber).not.toHaveBeenCalled();
+      } finally {
+        delete (window as any).__TAURI_INTERNALS__;
+      }
     });
   });
 
