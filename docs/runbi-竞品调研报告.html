@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>runbi 竞品调研报告 — AI 划词即润色</title>
+<style>
+  :root{
+    --bg:#faf9f6;
+    --surface:#ffffff;
+    --ink:#1a1c18;
+    --muted:#6b6f68;
+    --line:#e5e4de;
+    --accent:#2f6b4f;      /* deep green — selected, not default indigo */
+    --accent-soft:#e7f0ea;
+    --accent-ink:#245437;
+    --danger:#b23a2e;
+    --danger-soft:#f9ecea;
+    --warn:#9a6a12;
+    --warn-soft:#faf3e2;
+    --ok:#2f6b4f;
+    --ok-soft:#e7f0ea;
+    --shadow:0 1px 2px rgba(20,22,18,.06),0 8px 24px rgba(20,22,18,.05);
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--ink);
+    font-family:"PingFang SC","Microsoft YaHei","Noto Sans CJK SC","Source Han Sans SC",system-ui,-apple-system,sans-serif;
+    line-height:1.65;
+    font-size:16px;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{
+    max-width:1100px;
+    margin:0 auto;
+    padding:0 24px;
+  }
+
+  /* ---------- layout: side rail ---------- */
+  .layout{
+    display:grid;
+    grid-template-columns:220px 1fr;
+    gap:48px;
+    padding:48px 0 80px;
+  }
+  nav.rail{
+    position:sticky;
+    top:24px;
+    align-self:start;
+    font-size:14px;
+    border-right:1px solid var(--line);
+    padding-right:24px;
+    min-height:60vh;
+  }
+  nav.rail .brand{
+    font-weight:700;
+    letter-spacing:.5px;
+    margin-bottom:20px;
+    font-size:15px;
+  }
+  nav.rail a{
+    display:block;
+    color:var(--muted);
+    text-decoration:none;
+    padding:7px 0;
+    border-bottom:1px solid transparent;
+    transition:color .15s;
+  }
+  nav.rail a:hover{color:var(--accent-ink)}
+  nav.rail a.on{color:var(--accent-ink);font-weight:600}
+  nav.rail .meta{
+    margin-top:28px;
+    font-size:12.5px;
+    color:var(--muted);
+    line-height:1.8;
+  }
+
+  /* ---------- header ---------- */
+  header.hero{
+    padding:64px 0 8px;
+    border-bottom:1px solid var(--line);
+  }
+  header.hero .kicker{
+    font-size:13px;
+    letter-spacing:3px;
+    text-transform:uppercase;
+    color:var(--accent);
+    font-weight:600;
+    margin-bottom:16px;
+  }
+  header.hero h1{
+    font-size:40px;
+    line-height:1.15;
+    margin:0 0 16px;
+    font-weight:750;
+    letter-spacing:-.5px;
+  }
+  header.hero .lede{
+    font-size:17px;
+    color:var(--muted);
+    max-width:72ch;
+    margin:0;
+  }
+  header.hero .chips{margin-top:24px;display:flex;flex-wrap:wrap;gap:8px}
+  .chip{
+    font-size:12.5px;
+    padding:5px 12px;
+    border-radius:999px;
+    background:var(--accent-soft);
+    color:var(--accent-ink);
+    font-weight:600;
+  }
+
+  /* ---------- sections ---------- */
+  section{padding:44px 0;border-bottom:1px solid var(--line)}
+  section h2{
+    font-size:15px;
+    letter-spacing:2px;
+    text-transform:uppercase;
+    color:var(--accent);
+    margin:0 0 20px;
+    font-weight:700;
+  }
+  section h3{
+    font-size:19px;
+    margin:28px 0 10px;
+    font-weight:700;
+  }
+  section p{color:#2b2e28}
+  .lead{
+    font-size:17px;
+    color:var(--ink);
+  }
+
+  /* ---------- verdict banner ---------- */
+  .verdict{
+    background:var(--surface);
+    border:1px solid var(--line);
+    border-left:4px solid var(--accent);
+    padding:22px 26px;
+    border-radius:10px;
+    box-shadow:var(--shadow);
+    font-size:17px;
+    font-weight:600;
+    margin:8px 0 4px;
+  }
+  .verdict .sub{font-weight:400;color:var(--muted);font-size:15px;margin-top:8px}
+
+  /* ---------- table ---------- */
+  .table-scroll{overflow-x:auto;border-radius:10px;border:1px solid var(--line);box-shadow:var(--shadow)}
+  table{width:100%;border-collapse:collapse;background:var(--surface);font-size:14px;min-width:820px}
+  thead th{
+    text-align:left;
+    font-size:12px;
+    letter-spacing:.5px;
+    text-transform:uppercase;
+    color:var(--muted);
+    font-weight:600;
+    padding:14px 16px;
+    border-bottom:1px solid var(--line);
+    background:#f4f3ef;
+  }
+  tbody td{
+    padding:14px 16px;
+    border-bottom:1px solid var(--line);
+    vertical-align:top;
+    color:#2b2e28;
+    font-weight:450;
+  }
+  tbody tr:last-child td{border-bottom:none}
+  tbody tr:hover td{background:#fbfaf7}
+  td strong{font-weight:700;color:var(--ink)}
+  .pill{
+    display:inline-block;
+    font-size:12px;
+    font-weight:700;
+    padding:3px 9px;
+    border-radius:6px;
+    white-space:nowrap;
+  }
+  .pill.yes{background:var(--ok-soft);color:var(--ok)}
+  .pill.no{background:var(--danger-soft);color:var(--danger)}
+  .pill.mid{background:var(--warn-soft);color:var(--warn)}
+  .pill.cn{background:var(--danger-soft);color:var(--danger);border:1px solid #e7c4bf}
+  .name-row{font-weight:700;display:flex;align-items:center;gap:8px}
+
+  /* ---------- cards: threats ---------- */
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+  .card{
+    background:var(--surface);
+    border:1px solid var(--line);
+    border-radius:10px;
+    padding:22px 24px;
+    box-shadow:var(--shadow);
+  }
+  .card h4{margin:0 0 6px;font-size:16px;font-weight:700}
+  .card .tag{font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--accent);margin-bottom:10px}
+  .card ul{margin:8px 0 0;padding-left:18px}
+  .card li{color:#2b2e28;margin:4px 0}
+
+  /* ---------- positioning ---------- */
+  .positioning{
+    background:var(--ink);
+    color:#f2f1ec;
+    border-radius:14px;
+    padding:34px 38px;
+    border:none;
+  }
+  .positioning h2{color:#9fc9b2}
+  .positioning .tagline{
+    font-size:26px;
+    font-weight:750;
+    line-height:1.35;
+    margin:6px 0 22px;
+    letter-spacing:-.3px;
+    color:#fff;
+  }
+  .pos-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+  .pos-item h4{color:#fff;margin:0 0 6px;font-size:16px}
+  .pos-item p{color:#c9ccc5;font-size:14.5px;margin:0}
+
+  /* ---------- sources ---------- */
+  .sources{list-style:none;margin:0;padding:0;font-size:14px}
+  .sources li{padding:10px 0;border-bottom:1px solid var(--line);display:flex;gap:12px;align-items:baseline}
+  .sources li:last-child{border-bottom:none}
+  .sources .n{color:var(--accent);font-weight:700;min-width:22px}
+  .sources code{background:#f2f1ec;padding:1px 6px;border-radius:5px;font-size:12.5px;word-break:break-all}
+  .todo{
+    background:var(--warn-soft);
+    border-left:4px solid var(--warn);
+    padding:14px 20px;
+    border-radius:8px;
+    font-size:14px;
+    color:var(--warn);
+  }
+
+  footer{padding:36px 0 60px;color:var(--muted);font-size:13px;text-align:center}
+
+  @media(max-width:860px){
+    .layout{grid-template-columns:1fr;padding-top:24px}
+    nav.rail{position:static;border-right:none;border-bottom:1px solid var(--line);padding-bottom:16px;min-height:0}
+    nav.rail .meta{display:none}
+    nav.rail a{display:inline-block;padding:6px 14px 6px 0}
+    .grid2,.pos-grid{grid-template-columns:1fr}
+    header.hero{padding:40px 0 8px}
+    header.hero h1{font-size:30px}
+  }
+  @media print{
+    nav.rail{display:none}
+    .layout{grid-template-columns:1fr;padding:0}
+    header.hero{padding:20px 0 8px}
+    section{page-break-inside:avoid}
+    .positioning{background:#fff;color:var(--ink);border:2px solid var(--ink)}
+    .positioning .tagline{color:var(--ink)}
+    .positioning h2{color:var(--accent)}
+    .pos-item h4{color:var(--ink)}
+    .pos-item p{color:var(--muted)}
+  }
+</style>
+</head>
+<body id="top">
+
+<header class="hero">
+  <div class="wrap">
+    <div class="kicker">Competitor Research · 竞品调研</div>
+    <h1>runbi 竞品调研报告<br>「AI 划词即润色」赛道格局</h1>
+    <p class="lede">runbi = 中文 AI 划词即润色工具。浏览器扩展 + Tauri 桌面端，选中文字 → 浮窗 → 一键润色 / 改写 / 换风格 → 原地替换。本报告横评 8 款直接与侧翼竞品，定位 runbi 的差异化空位。</p>
+    <div class="chips">
+      <span class="chip">调研日期 · 2026-08-29</span>
+      <span class="chip">中文区 4 款</span>
+      <span class="chip">海外 4 款</span>
+      <span class="chip">数据带来源</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap layout">
+  <nav class="rail">
+    <div class="brand">runbi · 竞品</div>
+    <a href="#verdict">01 · 核心结论</a>
+    <a href="#table">02 · 竞品全景表</a>
+    <a href="#diff">03 · 划词闭环差异</a>
+    <a href="#threats">04 · 威胁与打法</a>
+    <a href="#overseas">05 · 海外四款结论</a>
+    <a href="#positioning">06 · 差异化定位</a>
+    <a href="#sources">07 · 来源与待办</a>
+    <div class="meta">
+      产品定位：中文划词润色<br>
+      Tauri 桌面端 + Chrome 扩展<br>
+      数据访问于 2026-08-29
+    </div>
+  </nav>
+
+  <main>
+
+    <section id="verdict">
+      <h2>01 · 核心结论</h2>
+      <div class="verdict">
+        没有人把「划词即润色」这条闭环做全 —— runbi 的空位是「中文 × 主动划词触发 × 原地替换 × Windows 桌面端」四者组合。
+        <div class="sub">中文原生润色 + 轻交互，海外四款全都不做中文、且没有 Windows 原生客户端；中文竞品则形态不对，做润色的都是编辑器、做划词的白只翻译。</div>
+      </div>
+      <p class="lead">一句话定位：<strong>「在中文世界的任何角落，选中即润色，原地替换，隐私不上云。」</strong></p>
+    </section>
+
+    <section id="table">
+      <h2>02 · 竞品全景表</h2>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>竞品</th><th>类型</th><th>形态</th><th>触发方式</th><th>中文润色</th><th>Windows 桌面</th><th>定价</th><th>用户量</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="name-row">沉浸式翻译</td>
+              <td>划词翻译</td>
+              <td>扩展 + App</td>
+              <td>划词 / 悬停 / 整页</td>
+              <td><span class="pill mid">只翻译</span></td>
+              <td><span class="pill no">—</span></td>
+              <td>免费 + Pro 订阅</td>
+              <td>2000万+</td>
+            </tr>
+            <tr>
+              <td class="name-row">沙拉查词</td>
+              <td>划词词典</td>
+              <td>扩展</td>
+              <td>划词</td>
+              <td><span class="pill mid">只查词</span></td>
+              <td><span class="pill no">—</span></td>
+              <td>免费开源</td>
+              <td>—</td>
+            </tr>
+            <tr>
+              <td class="name-row">秘塔写作猫</td>
+              <td>AI 写作编辑器</td>
+              <td>网页</td>
+              <td>编辑器</td>
+              <td><span class="pill yes">✅ 编辑器内</span></td>
+              <td><span class="pill no">—</span></td>
+              <td>免费起步</td>
+              <td>—</td>
+            </tr>
+            <tr>
+              <td class="name-row">大厂侧边栏<br><span style="font-weight:400;font-size:12px;color:var(--muted)">豆包 / Kimi / 通义</span></td>
+              <td>AI 通用助手</td>
+              <td>扩展</td>
+              <td>侧边栏 + 划词</td>
+              <td><span class="pill yes">✅</span></td>
+              <td><span class="pill no">—</span></td>
+              <td>免费</td>
+              <td>大</td>
+            </tr>
+            <tr>
+              <td class="name-row">DeepL Write</td>
+              <td>写作工作台</td>
+              <td>网页 + 桌面</td>
+              <td>粘贴全文</td>
+              <td><span class="pill yes">✅ 后补</span></td>
+              <td><span class="pill yes">✅</span></td>
+              <td>$8.74+/月<br>Write Pro $7.49</td>
+              <td>—</td>
+            </tr>
+            <tr>
+              <td class="name-row">Grammarly</td>
+              <td>就地语法助手</td>
+              <td>扩展+桌面+移动</td>
+              <td>被动下划线</td>
+              <td><span class="pill no">✗ 仅英文</span></td>
+              <td><span class="pill yes">✅</span></td>
+              <td>免费 + Pro $12/月</td>
+              <td>4000万人<br>+5万机构</td>
+            </tr>
+            <tr>
+              <td class="name-row">QuillBot</td>
+              <td>改写润色全家桶</td>
+              <td>扩展 + 网页 + App</td>
+              <td>划词原地替换</td>
+              <td><span class="pill no">✗ 不含中文</span></td>
+              <td><span class="pill no">✗</span></td>
+              <td>免费 + Pre. ~$19.95²</td>
+              <td>3500万+<br>扩展500万</td>
+            </tr>
+            <tr>
+              <td class="name-row">Wordtune</td>
+              <td>逐句行内改写</td>
+              <td>扩展 + 网页</td>
+              <td>划词原地替换</td>
+              <td><span class="pill no">✗ 仅英文</span></td>
+              <td><span class="pill no">✗</span></td>
+              <td>$0 / $6.99 / $9.99月</td>
+              <td>1000万+</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p style="font-size:13px;color:var(--muted)">² QuillBot 官方定价页被 Cloudflare 拦截，$19.95/月为第三方口径，待直连官方页核实。</p>
+    </section>
+
+    <section id="diff">
+      <h2>03 · 「划词即润色」闭环差异</h2>
+      <p class="lead">runbi 的核心是「选中 → 浮窗 → 一键润色 → 原地替换」的轻交互闭环。横评后发现：<strong>四类竞品各卡在不同位置，没一个做全。</strong></p>
+      <div class="grid2">
+        <div class="card">
+          <div class="tag">中文竞品</div>
+          <h4>沉浸式翻译 / 沙拉查词</h4>
+          <p>交互是划词浮窗，但只做<strong>翻译 / 查词</strong>，不做润色改写。</p>
+        </div>
+        <div class="card">
+          <div class="tag">中文竞品</div>
+          <h4>秘塔写作猫</h4>
+          <p>做润色改写，但是<strong>编辑器形态</strong>，要打开网页，不能在任意页面原地划词替换。</p>
+        </div>
+        <div class="card">
+          <div class="tag">海外竞品</div>
+          <h4>DeepL Write</h4>
+          <p>重写能力强，但<strong>整篇粘贴进工作台</strong>，非划词触发、不侵入第三方应用。</p>
+        </div>
+        <div class="card">
+          <div class="tag">海外竞品 · 最接近</div>
+          <h4>Grammarly</h4>
+          <p>就地弹卡、原地替换、有桌面端；但是<strong>被动批改</strong>而非「选中哪段改哪段」，且<strong>基本不支持中文</strong>。</p>
+        </div>
+        <div class="card">
+          <div class="tag">海外竞品 · 交互重合</div>
+          <h4>QuillBot</h4>
+          <p>扩展支持「选中 → 浮窗 → 原地替换 (In-Page Editing)」——<strong>交互模型与 runbi 高度重合</strong>，但<strong>不含中文</strong>、<strong>无 Windows 桌面端</strong>。</p>
+        </div>
+        <div class="card">
+          <div class="tag">海外竞品</div>
+          <h4>Wordtune</h4>
+          <p>同样「选中 → 浮窗 → 原地替换」，但偏「多选一建议」而非一键；<strong>仅英文</strong>、<strong>无 Windows 桌面端</strong>。</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="threats">
+      <h2>04 · 两大直接威胁与对应打法</h2>
+      <div class="grid2">
+        <div class="card">
+          <div class="tag">威胁 1 · 国内</div>
+          <h4>大厂免费侧边栏助手（豆包 / Kimi / 通义）</h4>
+          <ul>
+            <li><strong>为何威胁最大：</strong>免费 + 大厂模型 + 品牌信任，划词问答 / 润色顺带覆盖。</li>
+            <li><strong>活路：</strong>不做「通用助手」，做「极轻专用」。通用助手交互重、要打开侧栏；runbi 主打划词即出、一秒换风格、原地替换，用完即走。</li>
+          </ul>
+        </div>
+        <div class="card">
+          <div class="tag">威胁 2 · 海外</div>
+          <h4>Grammarly × QuillBot × Wordtune</h4>
+          <ul>
+            <li><strong>为何要避开：</strong>形态最接近（Grammarly/QuillBot 都有划词就地替换），用户规模碾压（Grammarly 4000万 / QuillBot 3500万）。</li>
+            <li><strong>活路：</strong>三者<strong>都不支持中文原生润色</strong>，且无 Windows 原生客户端——runbi 切入中文场景，避开其主场。</li>
+          </ul>
+        </div>
+      </div>
+      <h3>已走通的独立工具变现路径</h3>
+      <p>沙拉查词、沉浸式翻译都验证了「<strong>免费铺量 + 开源 + 打赏 / 订阅</strong>」的独立开发者路径。商业模型可参考 <strong>QuillBot 慷慨免费拉规模</strong> + <strong>Wordtune $7–20/月分级订阅变现</strong>（Basic 免费 / Advanced $6.99 / Unlimited $9.99 以上）。</p>
+    </section>
+
+    <section id="overseas">
+      <h2>05 · 海外四款统一结论</h2>
+      <ul style="font-size:16px;line-height:1.8;padding-left:20px">
+        <li><strong>语言是最大机会</strong>：QuillBot（6 语不含中文）、Wordtune（仅英文）、Grammarly（基本英文）都不做中文润色——<strong>「中文划词即润色」是结构性空白</strong>。唯一含中文写作的 DeepL Write 是整篇工作台形态，不做划词。</li>
+        <li><strong>Windows 桌面端是差异化</strong>：QuillBot、Wordtune 都只有网页 + 扩展，无 Windows 原生客户端；Grammarly/DeepL 有桌面端但不支持中文划词润色闭环——<strong>runbi 的 Tauri 桌面端是壁垒</strong>。</li>
+        <li><strong>一键润色优于多选一</strong>：runbi 的一键润色比 Wordtune 的「多选一建议」交互更短，是可用性卖点。</li>
+      </ul>
+    </section>
+
+    <section id="positioning" class="positioning">
+      <h2>06 · 差异化定位建议</h2>
+      <div class="tagline">在中文世界的任何角落，<br>选中即润色，原地替换，隐私不上云。</div>
+      <div class="pos-grid">
+        <div class="pos-item">
+          <h4>⚡ 轻</h4>
+          <p>划词即出浮窗，一秒换风格（正式 / 学术 / 口语 / 职场…），原地替换。</p>
+        </div>
+        <div class="pos-item">
+          <h4>🔒 隐私</h4>
+          <p>用户自带 Key、数据不上云——沉浸式翻译已验证的隐私卖点，runbi 同样能讲。</p>
+        </div>
+        <div class="pos-item">
+          <h4>🖥️ 跨端</h4>
+          <p>浏览器 + 桌面全局覆盖，这是纯扩展类（沉浸式、沙拉查词）做不了的壁垒。</p>
+        </div>
+      </div>
+      <p style="color:#c9ccc5;font-size:14px;margin:22px 0 0">定价锚点参考：海外成熟竞品个人订阅约 $8.74–12/月，大厂中文免费。runbi 若走「免费基础 + 低价 Pro」，可参考 $5–8/月或国内 15–30 元/月。</p>
+    </section>
+
+    <section id="sources">
+      <h2>07 · 来源与待办</h2>
+      <ul class="sources">
+        <li><span class="n">1</span><span>沉浸式翻译官网</span><code>immersivetranslate.com/zh-Hans</code></li>
+        <li><span class="n">2</span><span>沙拉查词官网</span><code>saladict.crimx.com</code></li>
+        <li><span class="n">3</span><span>秘塔写作猫官网</span><code>xiezuocat.com</code></li>
+        <li><span class="n">4</span><span>Chrome 应用商店（豆包 / Kimi / 通义侧边栏）</span><code>chromewebstore.google.com</code></li>
+        <li><span class="n">5</span><span>DeepL Write 官网 + Pro 定价</span><code>deepl.com/en/write · deepl.com/en/pro</code></li>
+        <li><span class="n">6</span><span>Grammarly 官网 + 计划页</span><code>grammarly.com · grammarly.com/plans</code></li>
+        <li><span class="n">7</span><span>QuillBot 官网 / 帮助中心 / Chrome 商店</span><code>quillbot.com · help.quillbot.com</code></li>
+        <li><span class="n">8</span><span>Wordtune 官网（含定价）</span><code>wordtune.com</code></li>
+      </ul>
+      <div class="todo">
+        <strong>待办：</strong>QuillBot 官方定价页（quillbot.com/premium）被 Cloudflare 拦截，$19.95/月为第三方口径，需在可直连环境再核一次美元单价。
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<footer>
+  runbi 竞品调研报告 · 2026-08-29 · 数据访问时间与来源已在正文标注 · 供内部商业决策参考
+</footer>
+
+<script>
+  // Scroll-spy for the side rail
+  const links = document.querySelectorAll('nav.rail a');
+  const sections = [...document.querySelectorAll('main section')];
+  window.addEventListener('scroll', () => {
+    let on = sections[0];
+    for (const s of sections) {
+      if (s.getBoundingClientRect().top <= 120) on = s;
+    }
+    links.forEach(a => a.classList.toggle('on', a.getAttribute('href') === '#' + on.id));
+  }, {passive:true});
+</script>
+</body>
+</html>
