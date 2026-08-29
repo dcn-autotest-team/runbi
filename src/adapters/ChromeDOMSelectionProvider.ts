@@ -114,6 +114,13 @@ export class ChromeDOMSelectionProvider implements ISelectionProvider {
     let contextBefore: string | undefined = undefined;
     let contextAfter: string | undefined = undefined;
 
+    // Privacy guard: never capture text from password fields. Browser-
+    // autofilled credentials selected in a login form would otherwise be
+    // forwarded verbatim to the configured LLM endpoint.
+    if (activeEl instanceof HTMLInputElement && (activeEl.type || '').toLowerCase() === 'password') {
+      return null;
+    }
+
     // Case 1: Active element is an input or textarea
     if (
       activeEl &&
@@ -123,6 +130,12 @@ export class ChromeDOMSelectionProvider implements ISelectionProvider {
           /^(text|search|url|tel|password)$/i.test((activeEl as HTMLInputElement).type || 'text')))
     ) {
       const input = activeEl as HTMLInputElement | HTMLTextAreaElement;
+
+      // Second guard for shadow-DOM password inputs focused indirectly
+      if (input instanceof HTMLInputElement && (input.type || '').toLowerCase() === 'password') {
+        return null;
+      }
+
       const start = input.selectionStart ?? 0;
       const end = input.selectionEnd ?? 0;
 
