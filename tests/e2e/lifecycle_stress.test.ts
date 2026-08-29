@@ -9,7 +9,6 @@ import ReactDOM from 'react-dom/client';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   STREAM_CHANNEL_NAME,
-  DEFAULT_STYLE_PROMPTS,
   buildSystemPrompt,
   safePostMessage,
   streamRealCompletions,
@@ -17,6 +16,8 @@ import {
   testApiConnection,
   setupStreamPortHandler,
 } from '../../src/background/streamHandler';
+// Prompt text single source of truth lives in @runbi/shared/core.
+import { DEFAULT_STYLE_PROMPTS } from '@runbi/shared/core';
 import { App } from '../../src/content/App';
 import { OptionsApp, PROVIDER_PRESETS } from '../../src/options/OptionsApp';
 import { PopupApp } from '../../src/popup/PopupApp';
