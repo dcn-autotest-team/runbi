@@ -71,7 +71,91 @@ pub fn is_sensitive_or_password(text: &str) -> bool {
         }
     }
 
+    // 3. Chinese PII (whole-string-only policy: the trimmed text must BE the
+    // sensitive value, not merely contain one — polishing a business message
+    // that mentions a phone number must stay allowed). Catch: CN mobile
+    // number, GB 11643-1999 ID card (checksum verified), Luhn bank card.
+    if is_chinese_pii(s).is_some() {
+        return true;
+    }
+
     false
+}
+
+/// GB 11643-1999 ID card checksum (ISO 7064 MOD 11-2). `id` must be the full
+/// 18-char uppercased ID with a digit or 'X' check digit.
+fn id_card_checksum_valid(id: &str) -> bool {
+    const WEIGHTS: [u32; 17] = [7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2];
+    const CHECK: [char; 11] = ['1', '0', 'X', '9', '8', '7', '6', '5', '4', '3', '2'];
+
+    let chars: Vec<char> = id.chars().collect();
+    if chars.len() != 18 || chars[17] != 'X' && !chars[17].is_ascii_digit() {
+        return false;
+    }
+    let Some(sum) = chars[..17].iter().enumerate().try_fold(0u32, |acc, (i, c)| {
+        c.to_digit(10).map(|d| acc + d * WEIGHTS[i])
+    }) else {
+        return false;
+    };
+    CHECK[(sum % 11) as usize].eq_ignore_ascii_case(&chars[17])
+}
+
+/// Luhn checksum for 13–19 digit bank card numbers.
+fn luhn_valid(digits: &[u8]) -> bool {
+    if digits.len() < 13 || digits.len() > 19 {
+        return false;
+    }
+    let mut sum = 0u32;
+    for (i, d) in digits.iter().rev().enumerate() {
+        let mut d = *d as u32;
+        if i % 2 == 1 {
+            d *= 2;
+            if d > 9 {
+                d -= 9;
+            }
+        }
+        sum += d;
+    }
+    sum % 10 == 0
+}
+
+/// Detects Chinese high-frequency PII when the WHOLE trimmed string is that
+/// value. Returns Some(reason) for reporting/tests; never flags substrings.
+pub fn is_chinese_pii(s: &str) -> Option<&'static str> {
+    let t = s.trim();
+
+    // CN mobile number: 1[3-9] followed by 9 digits (11 total, digits only)
+    if t.len() == 11
+        && t.as_bytes()[0] == b'1'
+        && t.as_bytes()[1].is_ascii_digit()
+        && t.as_bytes()[1] >= b'3'
+        && t.bytes().all(|b| b.is_ascii_digit())
+    {
+        return Some("疑似手机号");
+    }
+
+    // CN resident ID card: 18 chars, first 17 digits, check digit 0-9/X,
+    // verified with the official MOD 11-2 weights to avoid false positives.
+    if t.len() == 18 {
+        let upper = t.to_ascii_uppercase();
+        let chars: Vec<char> = upper.chars().collect();
+        if chars[..17].iter().all(|c| c.is_ascii_digit())
+            && (chars[17].is_ascii_digit() || chars[17] == 'X')
+            && id_card_checksum_valid(&upper)
+        {
+            return Some("疑似身份证号");
+        }
+    }
+
+    // Bank card: 13–19 digits passing Luhn
+    if t.len() >= 13 && t.len() <= 19 && t.bytes().all(|b| b.is_ascii_digit()) {
+        let digits: Vec<u8> = t.bytes().map(|b| b - b'0').collect();
+        if luhn_valid(&digits) {
+            return Some("疑似银行卡号");
+        }
+    }
+
+    None
 }
 
 #[cfg(windows)]
@@ -346,5 +430,46 @@ mod tests {
         assert!(!is_blacklisted_app(Some("Code.exe")));
         assert!(!is_blacklisted_app(Some("chrome.exe")));
         assert!(!is_blacklisted_app(None));
+    }
+
+    #[test]
+    fn test_cn_mobile_number_filtered() {
+        assert!(is_sensitive_or_password("13812345678"));
+        assert!(is_sensitive_or_password("19912345678"));
+        // 12x/10x prefixes are not mobile numbers
+        assert!(!is_sensitive_or_password("12312345678"));
+        assert!(!is_sensitive_or_password("10412345678"));
+    }
+
+    #[test]
+    fn test_cn_id_card_checksum_enforced() {
+        // Checksum-valid samples (ISO 7064 MOD 11-2)
+        assert!(is_sensitive_or_password("11010519491231002X"));
+        assert!(is_sensitive_or_password("11010519491231002x"));
+        // 18 digits but checksum-invalid → likely an order number, allow it
+        assert!(!is_sensitive_or_password("110105194912310021"));
+        assert!(!is_sensitive_or_password("110105194912310022"));
+    }
+
+    #[test]
+    fn test_bank_card_luhn_enforced() {
+        // Luhn-valid test PANs
+        assert!(is_sensitive_or_password("4111111111111111"));
+        assert!(is_sensitive_or_password("5500005555555559"));
+        // 16 digits failing Luhn → allow
+        assert!(!is_sensitive_or_password("4111111111111112"));
+        // 8-digit short number is not a card
+        assert!(!is_sensitive_or_password("41111111"));
+    }
+
+    #[test]
+    fn test_normal_text_still_allowed() {
+        // Business text mentioning numbers inline must NOT be blocked
+        // (whole-string-only policy)
+        assert!(!is_sensitive_or_password(
+            "客户电话是13812345678，请今天回电。"
+        ));
+        assert!(!is_sensitive_or_password("订单号 20260829 已发货"));
+        assert!(!is_sensitive_or_password("会议改到明天下午三点"));
     }
 }
