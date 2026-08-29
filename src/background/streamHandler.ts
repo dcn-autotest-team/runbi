@@ -11,7 +11,7 @@ import type {
   ConnectionTestResult,
 } from '../types/stream';
 import { generateMockStreamMessages } from '../core/mockStream';
-import { resolveEndpoint } from '@runbi/shared/core';
+import { resolveEndpoint, buildSystemPrompt as sharedBuildSystemPrompt } from '@runbi/shared/core';
 
 export const STREAM_CHANNEL_NAME = 'runbi-stream-channel';
 
@@ -47,29 +47,19 @@ export async function ensureOriginPermission(endpoint: string): Promise<string |
   return `尚未授权访问 ${origin}。请点击扩展图标，在弹窗中点击「一键授权划词」，或到扩展详情页开启「网站访问权限」后重试。`;
 }
 
-export const DEFAULT_STYLE_PROMPTS: Record<PolishStyle, string> = {
-  polished: '你是一名文字润色专家。你的唯一职责是对用户的文本进行通用润色，消除语病，表达通顺自然，保持原意与语气。',
-  academic: '你是一名文字润色专家。你的唯一职责是对用户的文本进行学术规范化润色，符合SCI/顶会论文风格，用词客观、精炼、高级，论证严谨，消除中式口语。',
-  business: '你是一名文字润色专家。你的唯一职责是对用户的文本进行职场商务润色，礼貌得体、自信专业，适合邮件与汇报沟通。',
-  literary: '你是一名文字润色专家。你的唯一职责是对用户的文本进行文学润色，增强词藻意境，比喻生动，修辞优雅。',
-  concise: '你是一名文字润色专家。你的唯一职责是对用户的文本进行精简提炼，剔除冗词废话，字数缩减30%~50%，直奔主题。',
-  native_en: '你是一名文字润色与翻译专家。若原文为中文则意译为地道母语级英文；若原文为英文则地道化俚语与语法，表达纯正典雅。',
-  reply: '你是一名专业的文本回复与沟通助手。你的职责是针对用户提供的文本生成得体、逻辑严密、恰如其分的回复内容。',
-};
-
 /**
- * Builds the strict system prompt according to style, custom prompt overrides, and user custom instruction.
+ * Builds the strict system prompt.
+ *
+ * Single source of truth is `@runbi/shared/core/prompts.ts` — the desktop
+ * client and this background worker MUST produce identical prompts for the
+ * same style/instruction pair. Do NOT re-declare prompt text here.
  */
 export function buildSystemPrompt(style: PolishStyle, customPrompt?: string, userInstruction?: string): string {
-  let base = (customPrompt && customPrompt.trim())
-    ? customPrompt.trim()
-    : (DEFAULT_STYLE_PROMPTS[style] || DEFAULT_STYLE_PROMPTS.polished);
-
-  if (userInstruction && userInstruction.trim()) {
-    base += `\n用户提出了特定的回复与处理要求：“${userInstruction.trim()}”。请在生成时重点满足该要求。`;
-  }
-
-  return `${base}\n\n【极其严苛的规则】：\n1. 直接输出润色后的终稿内容。\n2. 严禁包含任何前缀或后缀客套话（如“好的，这是润色后的版本：”、“希望对你有帮助”等）。\n3. 严禁添加引号包裹，严禁自行添加 markdown 标题。\n4. 保持原文的段落排版格式。`;
+  return sharedBuildSystemPrompt({
+    style,
+    customPromptOverride: customPrompt,
+    userInstruction,
+  });
 }
 
 /**

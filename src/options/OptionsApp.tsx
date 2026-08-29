@@ -245,6 +245,23 @@ export const OptionsApp: React.FC<OptionsAppProps> = ({
         };
 
         try {
+          // Self-healing permission grant: saving settings is a user gesture,
+          // so request the exact endpoint origin here. This closes the loop
+          // where a user who denied the popup's <all_urls> request had no
+          // other in-product way to authorize their LLM endpoint.
+          if (typeof chrome !== 'undefined' && chrome.permissions?.request && payload.baseUrl) {
+            try {
+              const origin = new URL(payload.baseUrl).origin;
+              const already = await chrome.permissions.contains({ origins: [origin] });
+              if (!already) {
+                await chrome.permissions.request({ origins: [origin] });
+              }
+            } catch {
+              // Invalid URL or user denial — streamHandler reports a clear
+              // guidance message at request time, so stay silent here.
+            }
+          }
+
           if (typeof chrome !== 'undefined' && chrome.storage?.local) {
             await chrome.storage.local.set(payload);
           } else {
