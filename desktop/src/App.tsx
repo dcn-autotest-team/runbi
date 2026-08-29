@@ -144,6 +144,7 @@ export const App: React.FC = () => {
   const [showEpoch, setShowEpoch] = useState<number>(0);
   const [persona, setPersona] = useState<PersonaType>('standard');
   const [customPersonaPrompt, setCustomPersonaPrompt] = useState<string>('');
+  const [glitchtipDsn, setGlitchtipDsn] = useState<string>('http://33bea17d-95fb-4472-9d42-f666a65376f9@localhost:3000/1');
   const [attachedFiles, setAttachedFiles] = useState<AttachedFileContext[]>([]);
   const [clipboardRef, setClipboardRef] = useState<string | null>(null);
 
@@ -763,6 +764,7 @@ export const App: React.FC = () => {
       const savedAutostart = await adapters.storageProvider.get<boolean>('autostart', false);
       const savedPersona = await adapters.storageProvider.get<PersonaType>('persona', 'standard');
       const savedCustomPersona = await adapters.storageProvider.get<string>('customPersonaPrompt', '');
+      const savedDsn = await adapters.storageProvider.get<string>('glitchtipDsn', 'http://33bea17d-95fb-4472-9d42-f666a65376f9@localhost:3000/1');
 
       if (savedKey) setApiKey(savedKey);
       if (savedEndpoint) setEndpoint(savedEndpoint);
@@ -770,6 +772,7 @@ export const App: React.FC = () => {
       if (savedStyle) setActiveStyle(savedStyle);
       if (savedPersona) setPersona(savedPersona);
       if (savedCustomPersona) setCustomPersonaPrompt(savedCustomPersona);
+      if (savedDsn) setGlitchtipDsn(savedDsn);
 
       const savedHistory = await adapters.storageProvider.get<HistoryRecord[]>('generationHistory', []);
       if (Array.isArray(savedHistory)) setHistory(savedHistory);
@@ -1007,6 +1010,7 @@ export const App: React.FC = () => {
         wakeShortcut: sc,
         persona,
         customPersonaPrompt: customPersonaPrompt.trim(),
+        glitchtipDsn: glitchtipDsn.trim(),
       });
 
       if (isTauri) {
@@ -1654,6 +1658,29 @@ export const App: React.FC = () => {
                 )}
 
                 <UpdateCheckRow />
+
+                {/* Error Telemetry / DSN Configuration */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label htmlFor="glitchtip-dsn" className="block font-medium text-slate-300">
+                      遥测监控 DSN (GlitchTip / Sentry)
+                    </label>
+                    <span className="text-[10px] text-teal-400 font-mono">
+                      {glitchtipDsn ? '已启用 (实时同步)' : '未配置 (仅本地存储)'}
+                    </span>
+                  </div>
+                  <input
+                    id="glitchtip-dsn"
+                    type="text"
+                    placeholder="http://<key>@localhost:3000/1"
+                    value={glitchtipDsn}
+                    onChange={(e) => setGlitchtipDsn(e.target.value)}
+                    className="runbi-form-control font-mono text-[11px]"
+                  />
+                  <p className="text-[10px] text-slate-500">
+                    配置后，用户提交的反馈与异常崩溃将实时推送到 GlitchTip 监控看板。
+                  </p>
+                </div>
 
                 {/* User feedback */}
                 <div className="rounded-xl border border-white/10 bg-black/20 p-3">

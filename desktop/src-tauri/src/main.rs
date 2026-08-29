@@ -7,22 +7,46 @@ mod tray;
 use tauri::{Emitter, Manager, WindowEvent};
 use tauri_plugin_global_shortcut::ShortcutState;
 
+fn resolve_sentry_dsn() -> Option<String> {
+    if let Ok(dsn) = std::env::var("RUNBI_GLITCHTIP_DSN") {
+        let trimmed = dsn.trim().to_string();
+        if !trimmed.is_empty() {
+            return Some(trimmed);
+        }
+    }
+    #[cfg(windows)]
+    {
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            let path = std::path::PathBuf::from(appdata)
+                .join("com.runbi.desktop")
+                .join("config.json");
+            if let Ok(content) = std::fs::read_to_string(path) {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                    if let Some(dsn) = json.get("glitchtipDsn").and_then(|v| v.as_str()) {
+                        let trimmed = dsn.trim().to_string();
+                        if !trimmed.is_empty() {
+                            return Some(trimmed);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 fn main() {
-    // 错误遥测(GlitchTip/Sentry 协议):仅在设置 RUNBI_GLITCHTIP_DSN 时启用,默认完全关闭。
-    // 隐私红线(P0-3 同款):遥测永远 opt-in,绝不默认上报。私有化部署时 DSN 指向客户内网 GlitchTip。
-    let _sentry_guard = std::env::var("RUNBI_GLITCHTIP_DSN")
-        .ok()
-        .filter(|dsn| !dsn.trim().is_empty())
-        .map(|dsn| {
-            sentry::init((
-                dsn,
-                sentry::ClientOptions {
-                    release: sentry::release_name!(),
-                    shutdown_timeout: std::time::Duration::from_secs(10),
-                    ..Default::default()
-                },
-            ))
-        });
+    // 错误遥测(GlitchTip/Sentry 协议):仅在设置 DSN 时启用，可来自环境变量或 config.json
+    let _sentry_guard = resolve_sentry_dsn().map(|dsn| {
+        sentry::init((
+            dsn,
+            sentry::ClientOptions {
+                release: sentry::release_name!(),
+                shutdown_timeout: std::time::Duration::from_secs(10),
+                ..Default::default()
+            },
+        ))
+    });
 
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {

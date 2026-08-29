@@ -35,8 +35,24 @@ pub fn submit_feedback(app: tauri::AppHandle, message: String) -> Result<String,
     }
 
     // 3. Optional Sentry/GlitchTip reporting if configured
-    let dsn = std::env::var("RUNBI_GLITCHTIP_DSN").unwrap_or_default();
-    let dsn = dsn.trim();
+    let dsn = std::env::var("RUNBI_GLITCHTIP_DSN")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| {
+            app.path().app_config_dir().ok().and_then(|dir| {
+                let path = dir.join("config.json");
+                std::fs::read_to_string(path).ok().and_then(|c| {
+                    serde_json::from_str::<serde_json::Value>(&c).ok().and_then(|j| {
+                        j.get("glitchtipDsn")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                    })
+                })
+            })
+        })
+        .unwrap_or_default();
+
     if !dsn.is_empty() {
         let msg = format!("[用户反馈] {}", clean_msg);
         let event_id = sentry::capture_message(&msg, sentry::Level::Info);
