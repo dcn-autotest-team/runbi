@@ -1,73 +1,109 @@
-# Runbi Desktop 发布流程 (Windows)
+# Runbi Desktop 发布与自动更新手册
 
-## 0. 前置条件
-- 更新签名密钥(已生成,私钥**不在仓库内**):
-  - 私钥: `C:\Users\54191\.runbi-keys\runbi-updater.key`
-  - 公钥: 已写入 `desktop/src-tauri/tauri.conf.json` → `plugins.updater.pubkey`
-  - ⚠️ 私钥丢失 = 已发出去的客户端无法再自动更新,务必备份
-- 签名证书(见 §3)
+最后更新：2026-08-29。当前更新通道：<https://github.com/dcn-autotest-team/runbi-updates>。
 
-## 1. 构建
-```powershell
-cd desktop
-$env:TAURI_SIGNING_PRIVATE_KEY = Get-Content "C:\Users\54191\.runbi-keys\runbi-updater.key" -Raw
-$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ""
-node ..\node_modules\@tauri-apps\cli\tauri.js build
-```
+## 当前状态与交接结论
 
-> ⚠️ **坑：在 LobsterAI cowork 会话里跑构建**，其 `node` shim 会让 `process.argv[0]`
-> 变成 `D:\LobsterAI\LobsterAI.exe`，tauri CLI 报 `unrecognized subcommand`。
-> 此时必须用真实 node 全路径：
-> `& "C:\Program Files\nodejs\node.exe" ..\node_modules\@tauri-apps\cli\tauri.js build`
-> （用户自己的终端 / npm 均不受影响）
+- 已发布版本：`v1.0.1`，Release 同时包含 NSIS 安装包、Tauri `.sig` 和 `latest.json`。
+- 源码仓库保持私有；`runbi-updates` 是公开的二进制分发仓库，不能上传源代码或私钥。
+- `1.0.0` 内置的是旧私钥对应公钥和私有更新地址，无法信任新链路。用户需手动安装一次 `1.0.1`；从 `1.0.1` 起，后续发布可在应用内自动升级。
 
-构建时代码签名已配置（`tauri.conf.json → bundle.windows.certificateThumbprint`，
-证书 `CN=Runbi Dev`，指纹 `E31B0322...`），安装包自动带 Authenticode 签名。
-若 updater `.sig` 未生成（CLI 曾在无 TTY 时卡密码提示），补签：
+## 密钥与证书
 
-```powershell
-& "C:\Program Files\nodejs\node.exe" ..\node_modules\@tauri-apps\cli\tauri.js signer sign `
-  -k (Get-Content "C:\Users\54191\.runbi-keys\runbi-updater.key" -Raw) "<安装包路径>"
-```
+| 用途 | 位置 | 规则 |
+| --- | --- | --- |
+| Tauri 更新私钥 | `C:\Users\54191\.tauri\runbi-updater.key` | 绝不提交、上传或粘贴到日志 |
+| 更新私钥密码 | `C:\Users\54191\.tauri\runbi-updater.password.clixml` | Windows DPAPI，仅当前用户可解密 |
+| 更新公钥 | `desktop/src-tauri/tauri.conf.json` 的 `plugins.updater.pubkey` | 可公开，必须与私钥匹配 |
+| Windows 代码签名 | 证书指纹 `E31B0322E9D634FC9011931F7C57175CC6AEC7CF` | 构建时自动对 EXE/安装包签名 |
 
-注意：`-k` 传**密钥内容**（不是路径）；一次只收一个 `<FILE>`；密码为空时直接回车。
-产物:
-- `target\release\bundle\nsis\Runbi_<ver>_x64-setup.exe`  ← 主分发安装包
-- `target\release\bundle\msi\Runbi_<ver>_x64_en-US.msi`
-- NSIS 目录下同时生成 `*.exe.sig`(minisign 签名,供 updater 校验)
+私钥丢失会使已安装客户端无法验证未来升级包；先在受控密码库备份私钥和密码文件，再开始下一次发布。
 
-## 2. 版本号(三处同步)
-- `desktop/src-tauri/tauri.conf.json` → `version`
-- `desktop/src-tauri/Cargo.toml` → `version`
-- `desktop/package.json`(如有)
+## 发布新版本
 
-## 3. 代码签名
-当前状态:**自签测试证书**(本机信任后无告警,他人机器 SmartScreen 仍会提示)。
+1. 同步版本号：
 
-一次性创建自签证书:
-```powershell
-$cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=Runbi" -CertStoreLocation Cert:\CurrentUser\My
-$pwd = ConvertTo-SecureString -String "<导出密码>" -Force -AsPlainText
-Export-PfxCertificate -Cert $cert -FilePath "C:\Users\54191\.runbi-keys\runbi-codesign.pfx" -Password $pwd
-```
+   - `desktop/package.json`
+   - `desktop/src-tauri/Cargo.toml`
+   - `desktop/src-tauri/tauri.conf.json`
+   - `desktop/src-tauri/Cargo.lock` 的 `runbi-desktop` 条目
 
-签名安装包:
-```powershell
-.\scripts\sign-release.ps1 -Pfx "C:\Users\54191\.runbi-keys\runbi-codesign.pfx" -Password "<导出密码>" `
-  -Target "desktop\src-tauri\target\release\bundle\nsis\Runbi_1.0.0_x64-setup.exe"
-```
+2. 在仓库根目录执行验证：
 
-**正式产品化**:购买 OV/EV 代码签名证书(DigiCert/Sectigo/GlobalSign,EV 立刻消除 SmartScreen 告警),
-或用 Azure Trusted Signing(按月计费,免管理证书文件)。拿到证书后把 `sign-release.ps1` 换成对应 PFX 即可,流程不变。
+   ```powershell
+   npm test -- --run
+   cd desktop/src-tauri
+   cargo test
+   ```
 
-## 4. 发布 → 自动更新生效
-1. `git tag v<版本> && git push --tags`
-2. GitHub Releases 上传: `Runbi_<ver>_x64-setup.exe`、`*.exe.sig`、`latest.json`
-3. `latest.json` 由 Tauri 生成(或在 CI 中用 `tauri-action` 自动生成),指向新安装包下载地址
-4. 端点约定(已写入 tauri.conf.json):
-   `https://github.com/dcn-autotest-team/runbi/releases/latest/download/latest.json`
-5. 已安装用户在「设置 → 软件更新 → 检查更新」即可收到并一键安装
+3. 在 `desktop` 目录构建并生成 updater 签名。以下脚本不会输出私钥或密码：
 
-## 5. CI 建议(下一步)
-用 `tauri-apps/tauri-action` GitHub Action:打 tag 自动构建 + 签名 + 生成 latest.json + 发 Release,
-本地就不再需要手工构建。
+   ```powershell
+   $keyPath = 'C:\Users\54191\.tauri\runbi-updater.key'
+   $passwordPath = 'C:\Users\54191\.tauri\runbi-updater.password.clixml'
+   $securePassword = Import-Clixml -LiteralPath $passwordPath
+   $passwordPtr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePassword)
+   try {
+     $env:TAURI_SIGNING_PRIVATE_KEY = Get-Content -LiteralPath $keyPath -Raw
+     $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($passwordPtr)
+     npx tauri build --bundles nsis
+   } finally {
+     [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($passwordPtr)
+     Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY -ErrorAction SilentlyContinue
+     Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD -ErrorAction SilentlyContinue
+   }
+   ```
+
+4. 确认构建产物（版本以 `1.0.2` 为例）：
+
+   ```text
+   desktop/src-tauri/target/release/bundle/nsis/Runbi_1.0.2_x64-setup.exe
+   desktop/src-tauri/target/release/bundle/nsis/Runbi_1.0.2_x64-setup.exe.sig
+   ```
+
+5. 在同一目录创建 `latest.json`。当前产品仅支持 Windows，可用动态清单：
+
+   ```json
+   {
+     "version": "1.0.2",
+     "notes": "本版本更新说明。",
+     "pub_date": "2026-08-29T12:00:00Z",
+     "url": "https://github.com/dcn-autotest-team/runbi-updates/releases/download/v1.0.2/Runbi_1.0.2_x64-setup.exe",
+     "signature": "完整复制 Runbi_1.0.2_x64-setup.exe.sig 的内容"
+   }
+   ```
+
+6. 发布到公开分发仓库：
+
+   ```powershell
+   gh release create v1.0.2 --repo dcn-autotest-team/runbi-updates --target main `
+     --title 'Runbi 1.0.2' --notes '本版本更新说明。' --latest `
+     .\Runbi_1.0.2_x64-setup.exe `
+     .\Runbi_1.0.2_x64-setup.exe.sig `
+     .\latest.json
+   ```
+
+7. 用匿名网络验证，不能依赖本机 GitHub 登录态：
+
+   ```powershell
+   $manifest = curl.exe -fsSL https://github.com/dcn-autotest-team/runbi-updates/releases/latest/download/latest.json | ConvertFrom-Json
+   $manifest.version
+   $manifest.url
+   curl.exe -fsSL -o .\verify.exe $manifest.url
+   Get-AuthenticodeSignature .\verify.exe
+   Get-FileHash .\verify.exe -Algorithm SHA256
+   ```
+
+## 发布前检查清单
+
+- `latest.json` 的版本高于已发布版本，URL、`.sig` 和安装包文件名一致。
+- 下载 URL 与 `latest.json` 都可匿名访问，HTTP 200。
+- `Get-AuthenticodeSignature` 返回 `Valid`。
+- `latest.json` 中的 `signature` 与 `.sig` 内容逐字一致。
+- 不提交 `C:\Users\54191\.tauri\runbi-updater.key`、密码文件、安装包或签名私钥。
+
+## 后续维护边界
+
+- 客户端更新地址和公钥在 `desktop/src-tauri/tauri.conf.json`。
+- 更新失败提示在 `desktop/src/components/UpdateCheckRow.tsx`；404、超时和签名失败均有明确中文提示。
+- 需要 CI 时，在私有源码仓库配置 GitHub Actions Secrets 后再引入自动发布；当前手工流程已经可发布，避免把私钥放进公开仓库。

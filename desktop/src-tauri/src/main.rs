@@ -7,6 +7,14 @@ mod tray;
 use tauri::{Emitter, Manager, WindowEvent};
 use tauri_plugin_global_shortcut::ShortcutState;
 
+const LEGACY_DEV_DSN_FRAGMENT: &str = "@localhost:3000/1";
+
+fn usable_config_dsn(dsn: &str) -> Option<String> {
+    let trimmed = dsn.trim();
+    (!trimmed.is_empty() && !trimmed.contains(LEGACY_DEV_DSN_FRAGMENT))
+        .then(|| trimmed.to_string())
+}
+
 fn resolve_sentry_dsn() -> Option<String> {
     if let Ok(dsn) = std::env::var("RUNBI_GLITCHTIP_DSN") {
         let trimmed = dsn.trim().to_string();
@@ -23,9 +31,8 @@ fn resolve_sentry_dsn() -> Option<String> {
             if let Ok(content) = std::fs::read_to_string(path) {
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
                     if let Some(dsn) = json.get("glitchtipDsn").and_then(|v| v.as_str()) {
-                        let trimmed = dsn.trim().to_string();
-                        if !trimmed.is_empty() {
-                            return Some(trimmed);
+                        if let Some(dsn) = usable_config_dsn(dsn) {
+                            return Some(dsn);
                         }
                     }
                 }
@@ -170,10 +177,10 @@ fn main() {
                     .build(),
             )?;
 
-            // Start Background Clipboard Copy Monitor
+            // Clipboard monitoring is opt-in. Its Win32 listener thread starts
+            // lazily only when the saved setting or user enables it.
             let monitor_state = commands::clipboard_monitor::ClipboardMonitorState::default();
-            app.manage(monitor_state.clone());
-            commands::clipboard_monitor::start_clipboard_monitor(app.handle(), monitor_state);
+            app.manage(monitor_state);
 
             // Start Global Mouse Drag-Selection Monitor (Doubao / Cherry Studio style)
             let selection_state = commands::mouse_hook::SelectionMonitorState::default();
@@ -253,6 +260,18 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    use super::usable_config_dsn;
+
+    #[test]
+    fn config_telemetry_is_opt_in_and_ignores_legacy_dev_dsn() {
+        assert_eq!(usable_config_dsn(""), None);
+        assert_eq!(usable_config_dsn("http://abc@localhost:3000/1"), None);
+        assert_eq!(
+            usable_config_dsn(" https://key@errors.example.com/1 "),
+            Some("https://key@errors.example.com/1".to_string())
+        );
+    }
+
     /// 冒烟测试:需要本地 GlitchTip 运行(infra/glitchtip/docker-compose.yml)。
     /// 运行: $env:RUNBI_GLITCHTIP_DSN="http://<public_key>@localhost:3000/1"; cargo test --release -- --ignored
     #[test]

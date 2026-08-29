@@ -203,6 +203,14 @@ describe('Desktop Platform Adapters Unit Test Suite', () => {
         expect(rustSavedData.apiKey).toBe('sk-updated');
         expect(rustSavedData.autoCopyPopup).toBe(false);
         expect(localStorage.getItem('runbi:apiKey')).toBeNull();
+
+        invokeMock.mockClear();
+        await storage.setMany({
+          model: 'deepseek-coder',
+          apiKey: 'sk-updated',
+          autoCopyPopup: false,
+        });
+        expect(invokeMock).not.toHaveBeenCalled();
       } finally {
         delete (window as any).__TAURI_INTERNALS__;
       }

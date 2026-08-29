@@ -3,7 +3,7 @@
 //! Features privacy safeguards: default opt-in, sensitive password heuristics, and process blacklist.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use crate::commands::position::position_window_at_cursor;
@@ -11,6 +11,7 @@ use crate::commands::position::position_window_at_cursor;
 #[derive(Clone)]
 pub struct ClipboardMonitorState {
     pub enabled: Arc<AtomicBool>,
+    pub started: Arc<AtomicBool>,
     pub last_content: Arc<Mutex<String>>,
     pub is_internal_action: Arc<AtomicBool>,
 }
@@ -20,6 +21,7 @@ impl Default for ClipboardMonitorState {
         Self {
             // Default opt-in to avoid unwanted popups and protect user privacy
             enabled: Arc::new(AtomicBool::new(false)),
+            started: Arc::new(AtomicBool::new(false)),
             last_content: Arc::new(Mutex::new(String::new())),
             is_internal_action: Arc::new(AtomicBool::new(false)),
         }
@@ -77,7 +79,7 @@ pub fn read_system_clipboard() -> Option<String> {
     use windows_sys::Win32::System::DataExchange::{
         CloseClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
     };
-    use windows_sys::Win32::System::Memory::{GlobalLock, GlobalUnlock};
+    use windows_sys::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
 
     const CF_UNICODETEXT: u32 = 13;
 
@@ -90,12 +92,10 @@ pub fn read_system_clipboard() -> Option<String> {
             if !handle.is_null() {
                 let ptr = GlobalLock(handle) as *const u16;
                 if !ptr.is_null() {
-                    let mut len = 0;
-                    while *ptr.add(len) != 0 {
-                        len += 1;
-                    }
-                    let slice = std::slice::from_raw_parts(ptr, len);
-                    let s = String::from_utf16_lossy(slice);
+                    let max_units = GlobalSize(handle) / std::mem::size_of::<u16>();
+                    let bounded = std::slice::from_raw_parts(ptr, max_units);
+                    let len = bounded.iter().position(|&c| c == 0).unwrap_or(max_units);
+                    let s = String::from_utf16_lossy(&bounded[..len]);
                     GlobalUnlock(handle);
                     Some(s)
                 } else {
@@ -189,6 +189,9 @@ pub fn handle_clipboard_change(app: &AppHandle, state: &ClipboardMonitorState) {
 }
 
 pub fn start_clipboard_monitor(app: &AppHandle, state: ClipboardMonitorState) {
+    if state.started.swap(true, Ordering::SeqCst) {
+        return;
+    }
     let app_handle = app.clone();
 
     // Initialize with current clipboard content so it doesn't pop up on app start
@@ -215,8 +218,8 @@ pub fn start_clipboard_monitor(app: &AppHandle, state: ClipboardMonitorState) {
         let app_clone = app_handle.clone();
 
         std::thread::spawn(move || unsafe {
-            static mut GLOBAL_STATE: Option<(ClipboardMonitorState, AppHandle)> = None;
-            GLOBAL_STATE = Some((state_clone, app_clone));
+            static GLOBAL_STATE: OnceLock<(ClipboardMonitorState, AppHandle)> = OnceLock::new();
+            let _ = GLOBAL_STATE.set((state_clone, app_clone));
 
             unsafe extern "system" fn window_proc(
                 hwnd: HWND,
@@ -226,7 +229,7 @@ pub fn start_clipboard_monitor(app: &AppHandle, state: ClipboardMonitorState) {
             ) -> LRESULT {
                 match msg {
                     WM_CLIPBOARDUPDATE => {
-                        if let Some((ref s, ref a)) = GLOBAL_STATE {
+                        if let Some((s, a)) = GLOBAL_STATE.get() {
                             handle_clipboard_change(a, s);
                         }
                         0
@@ -293,10 +296,14 @@ pub fn start_clipboard_monitor(app: &AppHandle, state: ClipboardMonitorState) {
 
 #[tauri::command]
 pub fn set_clipboard_monitor_enabled(
+    app: AppHandle,
     state: tauri::State<ClipboardMonitorState>,
     enabled: bool,
 ) -> Result<bool, String> {
     state.enabled.store(enabled, Ordering::SeqCst);
+    if enabled {
+        start_clipboard_monitor(&app, state.inner().clone());
+    }
     Ok(enabled)
 }
 

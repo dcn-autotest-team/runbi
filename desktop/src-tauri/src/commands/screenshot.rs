@@ -80,11 +80,33 @@ pub fn capture_foreground_screenshot() -> Result<String, String> {
             GetWindowRect(hwnd, &mut rect);
             let width = (rect.right - rect.left).max(1);
             let height = (rect.bottom - rect.top).max(1);
+            let pixel_count = (width as usize)
+                .checked_mul(height as usize)
+                .filter(|count| *count <= 100_000_000)
+                .ok_or_else(|| format!("Capture dimensions too large: {}x{}", width, height))?;
 
             let hdc_screen = GetDC(std::ptr::null_mut());
+            if hdc_screen.is_null() {
+                return Err("Failed to acquire screen DC".to_string());
+            }
             let hdc_mem = CreateCompatibleDC(hdc_screen);
+            if hdc_mem.is_null() {
+                ReleaseDC(std::ptr::null_mut(), hdc_screen);
+                return Err("Failed to create capture DC".to_string());
+            }
             let h_bitmap = CreateCompatibleBitmap(hdc_screen, width, height);
+            if h_bitmap.is_null() {
+                DeleteDC(hdc_mem);
+                ReleaseDC(std::ptr::null_mut(), hdc_screen);
+                return Err("Failed to create capture bitmap".to_string());
+            }
             let h_old_bmp = SelectObject(hdc_mem, h_bitmap);
+            if h_old_bmp.is_null() {
+                DeleteObject(h_bitmap);
+                DeleteDC(hdc_mem);
+                ReleaseDC(std::ptr::null_mut(), hdc_screen);
+                return Err("Failed to select capture bitmap".to_string());
+            }
 
             // Try PrintWindow first with PW_RENDERFULLCONTENT (2) for hardware-accelerated / DWM windows
             let printed = PrintWindow(hwnd, hdc_mem, 2);
@@ -114,8 +136,8 @@ pub fn capture_foreground_screenshot() -> Result<String, String> {
             bmi.bmiHeader.biBitCount = 32;
             bmi.bmiHeader.biCompression = BI_RGB;
 
-            let mut buffer: Vec<u8> = vec![0u8; (width * height * 4) as usize];
-            GetDIBits(
+            let mut buffer: Vec<u8> = vec![0u8; pixel_count * 4];
+            let copied_rows = GetDIBits(
                 hdc_mem,
                 h_bitmap,
                 0,
@@ -129,6 +151,10 @@ pub fn capture_foreground_screenshot() -> Result<String, String> {
             DeleteObject(h_bitmap);
             DeleteDC(hdc_mem);
             ReleaseDC(std::ptr::null_mut(), hdc_screen);
+
+            if copied_rows == 0 {
+                return Err("Failed to read captured pixels".to_string());
+            }
 
             let data_url = encode_bgra_to_jpeg(width, height, buffer)?;
             // Keep the screenshot Rust-side: large base64 payloads get silently
@@ -255,4 +281,3 @@ mod tests {
         assert!(out.is_err(), "crate now supports RGBA-Jpeg; revisit encode_bgra_to_jpeg comment");
     }
 }
-

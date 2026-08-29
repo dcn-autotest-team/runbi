@@ -141,8 +141,12 @@ export class TauriStorageProvider implements IStorageProvider {
     for (const [key, value] of Object.entries(values)) {
       const fullKey = this.normalizeKey(key);
       const oldValue = this.cache.get(fullKey);
-      changes.push([fullKey, value, oldValue]);
+      if (!Object.is(value, oldValue)) {
+        changes.push([fullKey, value, oldValue]);
+      }
     }
+
+    if (changes.length === 0) return;
 
     // Persist the complete next snapshot before publishing it to memory/UI. A failed
     // disk write must never look like a successful settings save.

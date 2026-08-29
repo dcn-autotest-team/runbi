@@ -3406,7 +3406,7 @@ dependencies = [
 
 [[package]]
 name = "runbi-desktop"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "base64 0.22.1",
  "futures-util",
@@ -3424,6 +3424,7 @@ dependencies = [
  "tauri-plugin-store",
  "tauri-plugin-updater",
  "tokio",
+ "windows",
  "windows-sys 0.59.0",
 ]
 

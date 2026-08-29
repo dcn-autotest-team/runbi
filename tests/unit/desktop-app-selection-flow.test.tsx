@@ -69,7 +69,9 @@ describe('Desktop selection-to-polish flow', () => {
           trigger: 'selection',
         },
       });
-      await vi.runAllTimersAsync();
+      // Advance only through the finite mock stream. `runAllTimers` also chases
+      // the panel's recurring UI timers and correctly treats them as infinite.
+      await vi.advanceTimersByTimeAsync(3000);
     });
 
     expect(host.textContent).toContain('经过润色与调整后');

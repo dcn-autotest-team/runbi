@@ -10,6 +10,7 @@ import { PolishPanel, HistoryDrawer, Toast, type AttachedFileContext } from '@ru
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { readText as readClipboard } from '@tauri-apps/plugin-clipboard-manager';
 import { createDesktopAdapters } from './adapters';
 
 // ---- Boot + crash diagnostics (writes to runbi.log via Rust) ----
@@ -33,8 +34,11 @@ import {
   type ScreenReplyAnalysis,
 } from '@runbi/shared/core';
 import { RunbiLogo, Settings, X, Pin, PinOff, RefreshCw, History } from './components/Icons';
-import { UpdateCheckRow } from './components/UpdateCheckRow';
 import { OnboardingView } from './components/OnboardingView';
+
+const UpdateCheckRow = React.lazy(() =>
+  import('./components/UpdateCheckRow').then((module) => ({ default: module.UpdateCheckRow }))
+);
 
 const STYLE_NAMES: Record<PolishStyle, string> = {
   polished: '通用润色',
@@ -139,12 +143,11 @@ export const App: React.FC = () => {
     message: string;
   }>({ status: 'idle', message: '' });
   const [currentScreenshot, setCurrentScreenshot] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<'idle' | 'capsule' | 'panel'>(autoCopyPopup ? 'panel' : 'capsule');
   const [screenReplyAnalysis, setScreenReplyAnalysis] = useState<ScreenReplyAnalysis | null>(null);
   const [showEpoch, setShowEpoch] = useState<number>(0);
   const [persona, setPersona] = useState<PersonaType>('standard');
   const [customPersonaPrompt, setCustomPersonaPrompt] = useState<string>('');
-  const [glitchtipDsn, setGlitchtipDsn] = useState<string>('http://33bea17d-95fb-4472-9d42-f666a65376f9@localhost:3000/1');
+  const [glitchtipDsn, setGlitchtipDsn] = useState<string>('');
   const [attachedFiles, setAttachedFiles] = useState<AttachedFileContext[]>([]);
   const [clipboardRef, setClipboardRef] = useState<string | null>(null);
 
@@ -155,6 +158,11 @@ export const App: React.FC = () => {
   const [settingsTab, setSettingsTab] = useState<'model' | 'desktop' | 'persona'>('model');
   const [recoverableDraft, setRecoverableDraft] = useState<DraftSnapshot | null>(null);
   const [lastReplacement, setLastReplacement] = useState<LastReplacementSnapshot | null>(null);
+  const persistedNativeSettingsRef = useRef<{
+    autoCopyPopup: boolean;
+    autostart: boolean;
+    wakeShortcut: string;
+  } | null>(null);
 
   const activePersonaPrompt = useMemo(() => {
     if (persona === 'custom') {
@@ -196,7 +204,6 @@ export const App: React.FC = () => {
     isPinned,
     readChatScreenshot,
     autoCopyPopup,
-    viewMode,
     screenReplyAnalysis,
     handleStartPolish: (_t: string, _s: PolishStyle, _c?: string, _img?: string | null) => {},
     handleStartScreenReplyAnalysis: (_hint?: string) => {},
@@ -215,17 +222,24 @@ export const App: React.FC = () => {
   stateRef.current.readChatScreenshot = readChatScreenshot;
   stateRef.current.autoCopyPopup = autoCopyPopup;
   stateRef.current.screenReplyAnalysis = screenReplyAnalysis;
-  stateRef.current.viewMode = viewMode;
 
   const isTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
 
   // Show Toast
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const showToast = useCallback((msg: string, durationMs = 2000) => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     setToastMessage(msg);
     setToastVisible(true);
-    setTimeout(() => {
+    toastTimerRef.current = setTimeout(() => {
       setToastVisible(false);
+      toastTimerRef.current = null;
     }, durationMs);
+  }, []);
+
+  useEffect(() => () => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
   }, []);
 
   // History & Draft Operations
@@ -283,8 +297,7 @@ export const App: React.FC = () => {
   const readClipboardText = useCallback(async (): Promise<string> => {
     try {
       if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
-        const { readText } = await import('@tauri-apps/plugin-clipboard-manager');
-        const t = await readText();
+        const t = await readClipboard();
         if (t) return t;
       }
     } catch {
@@ -754,17 +767,19 @@ export const App: React.FC = () => {
   // Load Saved Settings on Mount
   useEffect(() => {
     const loadConfig = async () => {
-      const savedKey = await adapters.storageProvider.get<string>('apiKey', '');
-      const savedEndpoint = await adapters.storageProvider.get<string>('endpoint', 'https://api.deepseek.com/v1/chat/completions');
-      const savedModel = await adapters.storageProvider.get<string>('model', 'deepseek-chat');
-      const savedStyle = await adapters.storageProvider.get<PolishStyle>('defaultStyle', 'academic');
-      const savedAutoPopup = await adapters.storageProvider.get<boolean>('autoCopyPopup', false);
-      const savedReadScreenshot = await adapters.storageProvider.get<boolean>('readChatScreenshot', true);
-      const savedWakeShortcut = await adapters.storageProvider.get<string>('wakeShortcut', DEFAULT_SHORTCUT);
-      const savedAutostart = await adapters.storageProvider.get<boolean>('autostart', false);
-      const savedPersona = await adapters.storageProvider.get<PersonaType>('persona', 'standard');
-      const savedCustomPersona = await adapters.storageProvider.get<string>('customPersonaPrompt', '');
-      const savedDsn = await adapters.storageProvider.get<string>('glitchtipDsn', 'http://33bea17d-95fb-4472-9d42-f666a65376f9@localhost:3000/1');
+      const config = await adapters.storageProvider.getAll();
+      const savedKey = String(config.apiKey || '');
+      const savedEndpoint = String(config.endpoint || 'https://api.deepseek.com/v1/chat/completions');
+      const savedModel = String(config.model || 'deepseek-chat');
+      const savedStyle = (config.defaultStyle || 'academic') as PolishStyle;
+      const savedAutoPopup = Boolean(config.autoCopyPopup ?? false);
+      const savedReadScreenshot = Boolean(config.readChatScreenshot ?? true);
+      const savedWakeShortcut = String(config.wakeShortcut || DEFAULT_SHORTCUT);
+      const savedAutostart = Boolean(config.autostart ?? false);
+      const savedPersona = (config.persona || 'standard') as PersonaType;
+      const savedCustomPersona = String(config.customPersonaPrompt || '');
+      const rawDsn = String(config.glitchtipDsn || '');
+      const savedDsn = rawDsn.includes('@localhost:3000/1') ? '' : rawDsn;
 
       if (savedKey) setApiKey(savedKey);
       if (savedEndpoint) setEndpoint(savedEndpoint);
@@ -774,10 +789,10 @@ export const App: React.FC = () => {
       if (savedCustomPersona) setCustomPersonaPrompt(savedCustomPersona);
       if (savedDsn) setGlitchtipDsn(savedDsn);
 
-      const savedHistory = await adapters.storageProvider.get<HistoryRecord[]>('generationHistory', []);
+      const savedHistory = (config.generationHistory || []) as HistoryRecord[];
       if (Array.isArray(savedHistory)) setHistory(savedHistory);
 
-      const savedDraft = await adapters.storageProvider.get<DraftSnapshot | null>('activeDraft', null);
+      const savedDraft = (config.activeDraft || null) as DraftSnapshot | null;
       if (savedDraft && savedDraft.timestamp && Date.now() - savedDraft.timestamp < 15 * 60 * 1000) {
         if (savedDraft.polishedText || savedDraft.originalText) {
           setRecoverableDraft(savedDraft);
@@ -786,33 +801,42 @@ export const App: React.FC = () => {
 
       setAutoCopyPopup(savedAutoPopup);
       stateRef.current.autoCopyPopup = savedAutoPopup;
-      const initialMode = savedAutoPopup ? 'panel' : 'capsule';
-      setViewMode(initialMode);
-      stateRef.current.viewMode = initialMode;
       setReadChatScreenshot(savedReadScreenshot);
       stateRef.current.readChatScreenshot = savedReadScreenshot;
       if (savedWakeShortcut) setWakeShortcut(savedWakeShortcut);
       setAutostart(savedAutostart);
+      persistedNativeSettingsRef.current = {
+        autoCopyPopup: savedAutoPopup,
+        autostart: savedAutostart,
+        wakeShortcut: savedWakeShortcut,
+      };
+
+      if (rawDsn && !savedDsn) {
+        adapters.storageProvider.set('glitchtipDsn', '').catch(() => {});
+      }
 
       // Load the persisted global wake shortcut and clipboard monitor state from Rust.
       if (isTauri) {
-        let sc = '';
         try {
-          sc = await invoke<string>('get_global_shortcut');
+          const [sc] = await Promise.all([
+            invoke<string>('get_global_shortcut'),
+            savedAutoPopup
+              ? Promise.all([
+                  invoke('set_auto_popup_enabled', { enabled: true }),
+                  invoke('set_clipboard_monitor_enabled', { enabled: true }),
+                ])
+              : Promise.resolve(false),
+          ]);
           if (sc) {
             setWakeShortcut(sc);
+            persistedNativeSettingsRef.current.wakeShortcut = sc;
           }
-          await invoke('set_clipboard_monitor_enabled', { enabled: savedAutoPopup });
-          await invoke('set_selection_monitor_enabled', { enabled: true });
-          await invoke('set_auto_popup_enabled', { enabled: savedAutoPopup });
-          const autoStartEnabled = await invoke<boolean>('is_autostart_enabled');
-          setAutostart(Boolean(autoStartEnabled));
         } catch (e) {
           console.warn('load shortcut/monitor/autostart state failed:', e);
         }
 
         // First-run onboarding: if not yet onboarded, show the micro-onboarding view
-        const onboarded = await adapters.storageProvider.get<boolean>('onboardingDone', false);
+        const onboarded = Boolean(config.onboardingDone ?? false);
         if (!onboarded) {
           setShowOnboarding(true);
         }
@@ -876,14 +900,10 @@ export const App: React.FC = () => {
           stateRef.current.originalText = '';
           setPolishedText('');
           setError(null);
-          setViewMode('panel');
-          stateRef.current.viewMode = 'panel';
           showToast('已拦截疑似密码或密钥，内容未发送给模型', 4000);
         } else if (isScreenReply) {
                     setCurrentScreenshot(null);
           stateRef.current.currentScreenshot = null;
-          setViewMode('panel');
-          stateRef.current.viewMode = 'panel';
           setActiveStyle('reply');
           stateRef.current.activeStyle = 'reply';
           const hint = event.payload.text?.trim() || '';
@@ -919,8 +939,6 @@ export const App: React.FC = () => {
           stateRef.current.activeStyle = targetStyle;
           setActiveStyle(targetStyle);
 
-          setViewMode('panel');
-          stateRef.current.viewMode = 'panel';
           if (cls.confidence >= 0.7 && targetStyle !== 'polished') {
             showToast(`💡 智能识别【${STYLE_NAMES[targetStyle]}】(${cls.reason})`);
           }
@@ -932,8 +950,6 @@ export const App: React.FC = () => {
             stateRef.current.handleStartPolish(captured, targetStyle, undefined, screenshot);
           }
         } else if (event?.payload?.trigger === 'shortcut') {
-          setViewMode('panel');
-          stateRef.current.viewMode = 'panel';
           showToast('未检测到选中文本');
         } else if (event?.payload?.trigger === 'screen-reply') {
           // Screen-reply trigger but no screenshot available — never stay silent.
@@ -948,8 +964,6 @@ export const App: React.FC = () => {
 
       // Tray "设置" menu → show window & open the settings form
       unlistens.push(listen('runbi://open-settings', () => {
-        setViewMode('panel');
-        stateRef.current.viewMode = 'panel';
         setShowEpoch((n) => n + 1);
         setShowSettings(true);
       }).then((un) => un, (e) => { console.warn('listen open-settings failed:', e); return undefined; }));
@@ -977,19 +991,23 @@ export const App: React.FC = () => {
     }
 
     setConnectionTest({ status: 'testing', message: '正在发送最小测试请求…' });
-    const result = await adapters.llmTransport.testConnection({
-      style: activeStyle,
-      apiKey: key,
-      baseUrl: targetEndpoint,
-      model: targetModel,
-    });
+    try {
+      const result = await adapters.llmTransport.testConnection({
+        style: activeStyle,
+        apiKey: key,
+        baseUrl: targetEndpoint,
+        model: targetModel,
+      });
 
-    if (result.success) {
-      const latency = typeof result.latencyMs === 'number' ? ` · ${result.latencyMs} ms` : '';
-      setConnectionTest({ status: 'success', message: `连接成功${latency}` });
-    } else {
-      const reason = (result.error || '请检查密钥、地址与模型名称').replace(/\s+/g, ' ').slice(0, 180);
-      setConnectionTest({ status: 'error', message: `连接失败：${reason}` });
+      if (result.success) {
+        const latency = typeof result.latencyMs === 'number' ? ` · ${result.latencyMs} ms` : '';
+        setConnectionTest({ status: 'success', message: `连接成功${latency}` });
+      } else {
+        const reason = (result.error || '请检查密钥、地址与模型名称').replace(/\s+/g, ' ').slice(0, 180);
+        setConnectionTest({ status: 'error', message: `连接失败：${reason}` });
+      }
+    } catch (e) {
+      setConnectionTest({ status: 'error', message: `连接失败：${String(e).slice(0, 180)}` });
     }
   };
 
@@ -1014,18 +1032,30 @@ export const App: React.FC = () => {
       });
 
       if (isTauri) {
-        await Promise.all([
-          saveConfig,
-          invoke('set_selection_monitor_enabled', { enabled: true }),
-          invoke('set_auto_popup_enabled', { enabled: autoCopyPopup }),
-          invoke('set_clipboard_monitor_enabled', { enabled: autoCopyPopup }),
-          invoke('set_autostart', { enabled: autostart }),
-          invoke('set_global_shortcut', { shortcut: sc }),
-        ]);
+        const previous = persistedNativeSettingsRef.current;
+        const nativeUpdates: Promise<unknown>[] = [];
+        if (!previous || previous.autoCopyPopup !== autoCopyPopup) {
+          nativeUpdates.push(
+            invoke('set_auto_popup_enabled', { enabled: autoCopyPopup }),
+            invoke('set_clipboard_monitor_enabled', { enabled: autoCopyPopup }),
+          );
+        }
+        if (!previous || previous.autostart !== autostart) {
+          nativeUpdates.push(invoke('set_autostart', { enabled: autostart }));
+        }
+        if (!previous || previous.wakeShortcut !== sc) {
+          nativeUpdates.push(invoke('set_global_shortcut', { shortcut: sc }));
+        }
+        await Promise.all([saveConfig, ...nativeUpdates]);
       } else {
         await saveConfig;
       }
 
+      persistedNativeSettingsRef.current = {
+        autoCopyPopup,
+        autostart,
+        wakeShortcut: sc,
+      };
       stateRef.current.autoCopyPopup = autoCopyPopup;
       stateRef.current.readChatScreenshot = readChatScreenshot;
       setShowSettings(false);
@@ -1130,12 +1160,14 @@ export const App: React.FC = () => {
     if (res.success) {
       setAttachedFiles([]);
       setClipboardRef(null);
-      showToast(stateRef.current.isPinned ? '已贴回原文 (窗口保持置顶)' : '已贴回原文');
-      if (shouldHide) {
-        const nextMode = stateRef.current.autoCopyPopup ? 'panel' : 'capsule';
-        setViewMode(nextMode);
-        stateRef.current.viewMode = nextMode;
-      }
+      showToast(
+        res.restoredClipboard === false
+          ? '未确认目标应用已接收；结果暂留剪贴板，可按 Ctrl+V 重试'
+          : stateRef.current.isPinned
+            ? '已贴回原文 (窗口保持置顶)'
+            : '已贴回原文',
+        res.restoredClipboard === false ? 5000 : 2000
+      );
     } else if (res.fallbackCopied) {
       // Pasting failed but the text IS on the clipboard — keep the panel open
       // and tell the truth about what happened.
@@ -1156,9 +1188,6 @@ export const App: React.FC = () => {
     setShowOnboarding(false);
     setAttachedFiles([]);
     setClipboardRef(null);
-    const nextMode = stateRef.current.autoCopyPopup ? 'panel' : 'capsule';
-    setViewMode(nextMode);
-    stateRef.current.viewMode = nextMode;
     if (isTauri) {
       // Play the exit animation first, then hide (fallback hides immediately).
       const el = document.querySelector('.runbi-window');
@@ -1280,36 +1309,6 @@ export const App: React.FC = () => {
       window.removeEventListener('blur', onBlur);
     };
   }, [handleReplace, handleStyleChange, isTauri]);
-
-  if (viewMode === 'capsule') {
-    return (
-      <div className="w-screen h-screen flex justify-start items-start p-1 bg-transparent select-none overflow-hidden">
-        <button
-          id="runbi-trigger-capsule"
-          type="button"
-          aria-label="打开润笔面板"
-          onClick={async () => {
-            setShowEpoch((n) => n + 1);
-            setViewMode('panel');
-            stateRef.current.viewMode = 'panel';
-            if (isTauri) {
-              await invoke('position_window_at_cursor', { isCapsule: false }).catch(() => {});
-            }
-            const captured = stateRef.current.originalText;
-            const targetStyle = stateRef.current.activeStyle;
-            stateRef.current.handleStartPolish(captured, targetStyle, undefined, stateRef.current.currentScreenshot);
-          }}
-          onMouseDown={(e) => {
-            e.stopPropagation();
-          }}
-          className="runbi-focus-ring flex h-9 w-9 cursor-pointer select-none items-center justify-center rounded-full border border-teal-100/60 bg-teal-500 text-white shadow-[0_4px_16px_rgba(0,191,165,0.58)] transition-all duration-150 ease-out hover:scale-105 hover:bg-teal-400 hover:shadow-[0_6px_22px_rgba(0,191,165,0.72)] active:scale-95"
-          title="点击展开润笔润色"
-        >
-          <RunbiLogo className="w-5 h-5 text-white drop-shadow-sm" />
-        </button>
-      </div>
-    );
-  }
 
   return (
     <div className="flex h-screen w-screen flex-col items-center justify-start overflow-hidden bg-transparent p-3 font-sans select-none">
@@ -1603,8 +1602,8 @@ export const App: React.FC = () => {
                 </div>
 
                 <SettingsToggle
-                  label="复制后自动唤起"
-                  description="监控剪贴板中的新复制文本，直接弹出润笔。"
+                  label="划词/复制后自动唤起"
+                  description="开启后监控划词与新复制文本；关闭后仅响应全局快捷键。"
                   checked={autoCopyPopup}
                   onChange={setAutoCopyPopup}
                 />
@@ -1657,7 +1656,9 @@ export const App: React.FC = () => {
                   </div>
                 )}
 
-                <UpdateCheckRow />
+                <React.Suspense fallback={<div className="h-[58px] animate-pulse rounded-lg border border-white/10 bg-white/5" />}>
+                  <UpdateCheckRow />
+                </React.Suspense>
 
                 {/* Error Telemetry / DSN Configuration */}
                 <div className="space-y-1.5">

@@ -16,40 +16,24 @@ pub struct ReplacerResponse {
     pub error: Option<String>,
 }
 
-fn paste_settle_delay(text_len: usize) -> Duration {
-    Duration::from_millis((120 + text_len as u64 / 50).min(500))
+fn deferred_restore_delay(text_len: usize) -> Duration {
+    Duration::from_millis((10_000 + text_len as u64 / 2).min(30_000))
 }
 
-const CLIPBOARD_POLL_INTERVAL: Duration = Duration::from_millis(20);
-
-/// Waits for the synthetic paste to be consumed before restoring the original
-/// clipboard. Polls `GetClipboardSequenceNumber`: a change means the target
-/// app (or the user) has read/replaced the clipboard, so we restore early.
-/// Bounded by a text-length deadline so we never hang on apps that paste
-/// without modifying the clipboard sequence number.
-async fn wait_for_paste_consumed(pre_seq: u32, text_len: usize) -> Duration {
-    let deadline = paste_settle_delay(text_len);
-    let start = std::time::Instant::now();
-    loop {
-        if get_clipboard_seq() != pre_seq {
-            return start.elapsed();
-        }
-        if start.elapsed() >= deadline {
-            return deadline;
-        }
-        tokio::time::sleep(CLIPBOARD_POLL_INTERVAL).await;
+async fn wait_for_uia_paste_ack(expected: &str) -> bool {
+    #[cfg(windows)]
+    {
+        let expected = expected.to_string();
+        let task = tokio::task::spawn_blocking(move || {
+            crate::commands::uia::wait_for_pasted_text(&expected, Duration::from_millis(900))
+        });
+        matches!(tokio::time::timeout(Duration::from_millis(1_100), task).await, Ok(Ok(true)))
     }
-}
-
-#[cfg(windows)]
-fn get_clipboard_seq() -> u32 {
-    use windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber;
-    unsafe { GetClipboardSequenceNumber() }
-}
-
-#[cfg(not(windows))]
-fn get_clipboard_seq() -> u32 {
-    0
+    #[cfg(not(windows))]
+    {
+        let _ = expected;
+        false
+    }
 }
 
 #[tauri::command]
@@ -109,31 +93,48 @@ pub async fn replace_text(
         });
     }
 
-    let pre_paste_seq = get_clipboard_seq();
-
-    // 4. Simulate Ctrl+V to paste
-    #[cfg(windows)]
-    unsafe {
-        crate::commands::input::simulate_ctrl_v();
+    // 4. Standard edit controls acknowledge WM_PASTE synchronously. Other
+    // apps retain Ctrl+V compatibility and are verified through UIA below.
+    let direct_ack = unsafe { crate::commands::input::paste_via_focused_control() };
+    if !direct_ack {
+        unsafe { crate::commands::input::simulate_ctrl_v() };
     }
 
     // 5. Restore the original text, image, or empty clipboard after the target
-    // has had enough time to consume the synthetic paste event. Poll the
-    // clipboard sequence number so we restore as soon as the app has read it,
-    // bounded by a text-length deadline to avoid hanging.
+    // acknowledges the paste. Clipboard sequence numbers cannot prove reads,
+    // so they are deliberately not used as an acknowledgement.
     let actually_restored = if should_restore {
-        // Wait for target app to consume Ctrl+V from input queue and read clipboard
-        wait_for_paste_consumed(pre_paste_seq, new_text.chars().count()).await;
-        let restored = snapshot.restore(app);
-        let monitor_text = if restored {
-            snapshot.text_for_monitor()
+        let acknowledged = direct_ack || wait_for_uia_paste_ack(&new_text).await;
+        if acknowledged {
+            let restored = snapshot.restore(app);
+            let monitor_text = if restored {
+                snapshot.text_for_monitor()
+            } else {
+                new_text.as_str()
+            };
+            crate::commands::input::set_internal_action(app, false, Some(monitor_text));
+            restored
         } else {
-            new_text.as_str()
-        };
-        crate::commands::input::set_internal_action(app, false, Some(monitor_text));
-        restored
+            // Unknown custom controls get a conservative, asynchronous restore.
+            // Restore only while our exact text is still on the clipboard, so a
+            // later user copy is never overwritten.
+            crate::commands::input::set_internal_action(app, false, Some(&new_text));
+            let app = app.clone();
+            let snapshot = snapshot.clone();
+            let expected = new_text.clone();
+            let delay = deferred_restore_delay(new_text.chars().count());
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(delay).await;
+                if app.clipboard().read_text().ok().as_deref() == Some(expected.as_str()) {
+                    crate::commands::input::set_internal_action(&app, true, None);
+                    let restored = snapshot.restore(&app);
+                    let monitor_text = restored.then(|| snapshot.text_for_monitor());
+                    crate::commands::input::set_internal_action(&app, false, monitor_text);
+                }
+            });
+            false
+        }
     } else {
-        tokio::time::sleep(Duration::from_millis(100)).await;
         crate::commands::input::set_internal_action(app, false, Some(&new_text));
         false
     };
@@ -149,25 +150,12 @@ pub async fn replace_text(
 
 #[cfg(test)]
 mod tests {
-    use super::paste_settle_delay;
-    use super::wait_for_paste_consumed;
-    use super::get_clipboard_seq;
+    use super::deferred_restore_delay;
 
     #[test]
-    fn paste_delay_scales_without_becoming_unbounded() {
-        assert_eq!(paste_settle_delay(0).as_millis(), 120);
-        assert!(paste_settle_delay(5_000).as_millis() > 120);
-        assert_eq!(paste_settle_delay(1_000_000).as_millis(), 500);
-    }
-
-    #[tokio::test]
-    async fn paste_waits_full_deadline_when_clipboard_unchanged() {
-        // When the clipboard sequence doesn't change, we must wait out the
-        // text-length deadline and then restore — never hang, never return early.
-        let seq = get_clipboard_seq();
-        let start = std::time::Instant::now();
-        let waited = wait_for_paste_consumed(seq, 0).await;
-        assert!(waited.as_millis() >= 120, "expected >= deadline, got {}", waited.as_millis());
-        assert!(start.elapsed().as_millis() >= 120);
+    fn deferred_restore_is_conservative_but_bounded() {
+        assert_eq!(deferred_restore_delay(0).as_millis(), 10_000);
+        assert!(deferred_restore_delay(5_000).as_millis() > 10_000);
+        assert_eq!(deferred_restore_delay(1_000_000).as_millis(), 30_000);
     }
 }

@@ -21,7 +21,7 @@ impl Default for SelectionMonitorState {
     fn default() -> Self {
         Self {
             enabled: Arc::new(AtomicBool::new(true)),
-            auto_popup: Arc::new(AtomicBool::new(true)),
+            auto_popup: Arc::new(AtomicBool::new(false)),
             is_internal_action: Arc::new(AtomicBool::new(false)),
             last_selected_text: Arc::new(Mutex::new(String::new())),
         }
@@ -43,6 +43,12 @@ fn current_time_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+fn should_handle_selection(state: &SelectionMonitorState) -> bool {
+    state.enabled.load(Ordering::Relaxed)
+        && state.auto_popup.load(Ordering::Relaxed)
+        && !state.is_internal_action.load(Ordering::Relaxed)
 }
 
 #[cfg(windows)]
@@ -90,9 +96,7 @@ unsafe extern "system" fn low_level_mouse_proc(
             if is_selection_gesture {
                 if let Ok(guard) = MONITOR_STATE.lock() {
                     if let Some((state, app_handle)) = guard.as_ref() {
-                        if state.enabled.load(Ordering::Relaxed)
-                            && !state.is_internal_action.load(Ordering::Relaxed)
-                        {
+                        if should_handle_selection(state) {
                             let app = app_handle.clone();
                             let state_clone = state.clone();
 
@@ -101,6 +105,9 @@ unsafe extern "system" fn low_level_mouse_proc(
                                 // The low-level hook sees mouse-up before the target control does.
                                 // Let it commit the selection before sending Ctrl+C.
                                 tokio::time::sleep(Duration::from_millis(35)).await;
+                                if !should_handle_selection(&state_clone) {
+                                    return;
+                                }
 
                                 // 1. Check if the mouse is currently over our own Runbi window
                                 if let Some(win) = app.get_webview_window("main") {
@@ -125,9 +132,16 @@ unsafe extern "system" fn low_level_mouse_proc(
                                     return;
                                 }
 
-                                // 3. Grab selection text via dynamic short-polling (typically 15ms, max 150ms)
-                                // Capture screen context first (stored Rust-side; for vision reply).
-                                let has_screenshot = crate::commands::screenshot::capture_foreground_screenshot().is_ok();
+                                // Screenshots are useful only for conversation windows. Capturing
+                                // every ordinary selection was the dominant hot-path cost.
+                                let is_chat = crate::commands::screenshot::is_likely_conversation_window(
+                                    source_app.as_deref(),
+                                    window_title.as_deref(),
+                                );
+                                let has_screenshot = is_chat
+                                    && crate::commands::screenshot::capture_foreground_screenshot().is_ok();
+
+                                // 3. Grab selection text via UIA / clipboard fallback.
                                 let captured_text = match crate::commands::selection::grab_selected_text_with_retry(&app).await {
                                     Some(t) => t,
                                     None => return,
@@ -238,4 +252,22 @@ pub fn set_auto_popup_enabled(
 ) -> Result<bool, String> {
     state.auto_popup.store(enabled, Ordering::SeqCst);
     Ok(enabled)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{should_handle_selection, SelectionMonitorState};
+    use std::sync::atomic::Ordering;
+
+    #[test]
+    fn automatic_selection_popup_is_opt_in_and_obeys_internal_guard() {
+        let state = SelectionMonitorState::default();
+        assert!(!should_handle_selection(&state));
+
+        state.auto_popup.store(true, Ordering::Relaxed);
+        assert!(should_handle_selection(&state));
+
+        state.is_internal_action.store(true, Ordering::Relaxed);
+        assert!(!should_handle_selection(&state));
+    }
 }

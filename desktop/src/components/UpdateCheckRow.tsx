@@ -3,6 +3,21 @@ import { check, type Update } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { RefreshCw } from './Icons';
 
+export function formatUpdateError(error: unknown): string {
+  const message = String(error).replace(/\s+/g, ' ').trim();
+  const lower = message.toLowerCase();
+  if (lower.includes('404') || lower.includes('not found')) {
+    return '升级源不可访问（404）。请确认已发布 latest.json，且下载地址允许匿名访问。';
+  }
+  if (lower.includes('signature') || lower.includes('签名')) {
+    return '升级包签名校验失败，请使用最新的完整安装包。';
+  }
+  if (lower.includes('timed out') || lower.includes('timeout')) {
+    return '检查更新超时，请检查网络后重试。';
+  }
+  return `检查失败：${message.slice(0, 90)}`;
+}
+
 /**
  * Settings row: check GitHub Releases for app updates via tauri-plugin-updater.
  * Fails gracefully (inline note) when offline / endpoint not published yet.
@@ -16,7 +31,7 @@ export function UpdateCheckRow() {
     setPhase('checking');
     setNote('');
     try {
-      const u = await check();
+      const u = await check({ timeout: 15_000 });
       if (u) {
         setUpdate(u);
         setPhase('done');
@@ -28,7 +43,7 @@ export function UpdateCheckRow() {
       }
     } catch (e) {
       setPhase('done');
-      setNote(`检查失败：${String(e).slice(0, 90)}`);
+      setNote(formatUpdateError(e));
     }
   };
 
@@ -44,7 +59,7 @@ export function UpdateCheckRow() {
       }, 800);
     } catch (e) {
       setPhase('done');
-      setNote(`安装失败：${String(e).slice(0, 90)}`);
+      setNote(formatUpdateError(e).replace(/^检查失败：/, '安装失败：'));
     }
   };
 

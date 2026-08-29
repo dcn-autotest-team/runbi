@@ -17,6 +17,17 @@ static CURRENT: Mutex<Option<String>> = Mutex::new(None);
 
 /// Read the persisted shortcut (or the default on first run).
 pub fn load_shortcut(app: &AppHandle) -> String {
+    if let Some(shortcut) = app
+        .store("settings.json")
+        .ok()
+        .and_then(|store| store.get("wakeShortcut"))
+        .and_then(|value| value.as_str().map(str::to_string))
+    {
+        if !shortcut.trim().is_empty() {
+            return shortcut;
+        }
+    }
+
     if let Ok(cfg) = super::config::load_app_config(app.clone()) {
         if let Some(s) = cfg.get("wakeShortcut").or_else(|| cfg.get("runbi:wakeShortcut")).and_then(|v| v.as_str()) {
             if !s.trim().is_empty() {
@@ -24,28 +35,29 @@ pub fn load_shortcut(app: &AppHandle) -> String {
             }
         }
     }
-    app.store("settings.json")
-        .ok()
-        .and_then(|s| s.get("wakeShortcut"))
-        .and_then(|v| v.as_str().map(|s| s.to_string()))
-        .unwrap_or_else(|| DEFAULT_SHORTCUT.to_string())
+    DEFAULT_SHORTCUT.to_string()
 }
 
 /// Register the given shortcut, replacing the previously registered one.
 pub fn register_shortcut(app: &AppHandle, shortcut_str: &str) -> Result<(), String> {
     let shortcut: Shortcut = shortcut_str.parse().map_err(|e| format!("Invalid shortcut: {}", e))?;
 
-    // Unregister the previous one to avoid conflicts.
     let prev = CURRENT.lock().unwrap().clone();
+    if prev.as_deref() == Some(shortcut_str) {
+        return Ok(());
+    }
+
+    // Register first so a conflicting replacement never leaves the app without
+    // its previous working shortcut.
+    app.global_shortcut()
+        .register(shortcut)
+        .map_err(|e| format!("Failed to register shortcut: {}", e))?;
+
     if let Some(prev_str) = prev {
         if let Ok(prev_shortcut) = prev_str.parse::<Shortcut>() {
             let _ = app.global_shortcut().unregister(prev_shortcut);
         }
     }
-
-    app.global_shortcut()
-        .register(shortcut)
-        .map_err(|e| format!("Failed to register shortcut: {}", e))?;
 
     *CURRENT.lock().unwrap() = Some(shortcut_str.to_string());
     Ok(())

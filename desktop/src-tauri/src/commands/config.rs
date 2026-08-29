@@ -155,6 +155,15 @@ fn unsecure_from_disk(cfg: &mut serde_json::Value) {
     }
 }
 
+fn has_plaintext_secret(cfg: &serde_json::Value) -> bool {
+    SECRET_FIELDS.iter().any(|field| {
+        cfg.get(field)
+            .and_then(|value| value.as_str())
+            .map(|value| !value.is_empty() && !value.starts_with(DPAPI_PREFIX))
+            .unwrap_or(false)
+    })
+}
+
 #[cfg(not(windows))]
 fn secure_for_disk(_: &mut serde_json::Value) {}
 #[cfg(not(windows))]
@@ -177,17 +186,14 @@ pub fn load_app_config(app: AppHandle) -> Result<serde_json::Value, String> {
     let mut val: serde_json::Value =
         serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({}));
 
+    // Detect legacy plaintext before decrypting. Checking afterwards made every
+    // normal DPAPI-backed startup rewrite config.json unnecessarily.
+    let needs_secret_migration = has_plaintext_secret(&val);
     unsecure_from_disk(&mut val);
 
     // Migration: if a secret was stored in plaintext (pre-DPAPI build),
     // rewrite the file with the encrypted form immediately.
-    let has_plaintext_secret = SECRET_FIELDS.iter().any(|f| {
-        val.get(f)
-            .and_then(|v| v.as_str())
-            .map(|s| !s.starts_with(DPAPI_PREFIX))
-            .unwrap_or(false)
-    });
-    if has_plaintext_secret {
+    if needs_secret_migration {
         let mut to_write = val.clone();
         secure_for_disk(&mut to_write);
         if let Ok(out) = serde_json::to_string_pretty(&to_write) {
@@ -196,6 +202,18 @@ pub fn load_app_config(app: AppHandle) -> Result<serde_json::Value, String> {
     }
 
     Ok(val)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::has_plaintext_secret;
+
+    #[test]
+    fn only_legacy_plaintext_secrets_need_migration() {
+        assert!(has_plaintext_secret(&serde_json::json!({ "apiKey": "legacy-key" })));
+        assert!(!has_plaintext_secret(&serde_json::json!({ "apiKey": "dpapi:encrypted" })));
+        assert!(!has_plaintext_secret(&serde_json::json!({ "apiKey": "" })));
+    }
 }
 
 #[tauri::command]

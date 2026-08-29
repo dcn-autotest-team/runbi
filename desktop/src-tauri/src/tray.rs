@@ -14,18 +14,8 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
 
     let menu = Menu::with_items(app, &[&show_i, &settings_i, &hide_i, &quit_i])?;
 
-    // Embed icon bytes at compile time so the tray icon is guaranteed to show on Windows
-    let icon_bytes = include_bytes!("../icons/icon.png");
-    let embedded_icon = image::load_from_memory(icon_bytes)
-        .ok()
-        .map(|img| {
-            let rgba_img = img.to_rgba8();
-            let (w, h) = rgba_img.dimensions();
-            tauri::image::Image::new_owned(rgba_img.into_raw(), w, h)
-        });
-
     let mut tray_builder = TrayIconBuilder::new().tooltip("润笔 (Runbi) - AI 划词润色");
-    if let Some(icon) = embedded_icon.or_else(|| app.default_window_icon().cloned()) {
+    if let Some(icon) = app.default_window_icon().cloned() {
         tray_builder = tray_builder.icon(icon);
     }
 

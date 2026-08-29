@@ -121,6 +121,62 @@ pub unsafe fn simulate_ctrl_v() {
 #[cfg(not(windows))]
 pub unsafe fn simulate_ctrl_v() {}
 
+fn supports_synchronous_paste(class_name: &str) -> bool {
+    let class = class_name.to_ascii_lowercase();
+    class == "edit" || class.contains("richedit") || class.contains("scintilla")
+}
+
+/// Uses WM_PASTE only for standard editable controls. SendMessageTimeout
+/// returns after the target has synchronously consumed the clipboard, giving
+/// the replacer a real acknowledgement instead of a guessed delay.
+#[cfg(windows)]
+pub unsafe fn paste_via_focused_control() -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetClassNameW, GetForegroundWindow, GetGUIThreadInfo, GetWindowLongPtrW,
+        GetWindowThreadProcessId, SendMessageTimeoutW, GUITHREADINFO, GWL_STYLE,
+        SMTO_ABORTIFHUNG, SMTO_BLOCK, WM_PASTE,
+    };
+
+    let foreground = GetForegroundWindow();
+    if foreground.is_null() {
+        return false;
+    }
+    let thread_id = GetWindowThreadProcessId(foreground, std::ptr::null_mut());
+    let mut info: GUITHREADINFO = std::mem::zeroed();
+    info.cbSize = std::mem::size_of::<GUITHREADINFO>() as u32;
+    if thread_id == 0 || GetGUIThreadInfo(thread_id, &mut info) == 0 {
+        return false;
+    }
+    let target = if info.hwndFocus.is_null() { foreground } else { info.hwndFocus };
+    let mut class_buf = [0u16; 128];
+    let class_len = GetClassNameW(target, class_buf.as_mut_ptr(), class_buf.len() as i32);
+    if class_len <= 0
+        || !supports_synchronous_paste(&String::from_utf16_lossy(&class_buf[..class_len as usize]))
+    {
+        return false;
+    }
+    const ES_READONLY: isize = 0x0800;
+    if GetWindowLongPtrW(target, GWL_STYLE) & ES_READONLY != 0 {
+        return false;
+    }
+
+    let mut message_result = 0usize;
+    SendMessageTimeoutW(
+        target,
+        WM_PASTE,
+        0,
+        0,
+        SMTO_ABORTIFHUNG | SMTO_BLOCK,
+        2_000,
+        &mut message_result,
+    ) != 0
+}
+
+#[cfg(not(windows))]
+pub unsafe fn paste_via_focused_control() -> bool {
+    false
+}
+
 /// Sets `is_internal_action` flag across all monitor states and optionally updates recorded texts.
 pub fn set_internal_action(app: &AppHandle, is_internal: bool, updated_text: Option<&str>) {
     if let Some(state) = app.try_state::<crate::commands::clipboard_monitor::ClipboardMonitorState>() {
@@ -138,5 +194,18 @@ pub fn set_internal_action(app: &AppHandle, is_internal: bool, updated_text: Opt
                 *last = text.to_string();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::supports_synchronous_paste;
+
+    #[test]
+    fn only_direct_pastes_into_known_edit_controls() {
+        assert!(supports_synchronous_paste("Edit"));
+        assert!(supports_synchronous_paste("RICHEDIT50W"));
+        assert!(supports_synchronous_paste("Scintilla"));
+        assert!(!supports_synchronous_paste("Chrome_RenderWidgetHostHWND"));
     }
 }

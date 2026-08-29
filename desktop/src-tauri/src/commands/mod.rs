@@ -10,6 +10,8 @@ pub mod autostart;
 pub mod screenshot;
 pub mod config;
 pub mod input;
+#[cfg(windows)]
+pub mod uia;
 pub mod feedback;
 
 use tauri::Manager;

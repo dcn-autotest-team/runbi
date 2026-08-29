@@ -154,14 +154,54 @@ fn is_fresh_clipboard_text(
         && (current_seq != initial_seq || candidate != original_text)
 }
 
+fn spawn_uia_selection() -> tokio::task::JoinHandle<Option<String>> {
+    #[cfg(windows)]
+    {
+        tokio::task::spawn_blocking(crate::commands::uia::selected_text)
+    }
+    #[cfg(not(windows))]
+    {
+        tokio::spawn(async { None })
+    }
+}
+
+async fn await_uia_selection(
+    task: &mut Option<tokio::task::JoinHandle<Option<String>>>,
+    timeout: Duration,
+) -> Option<String> {
+    let outcome = tokio::time::timeout(timeout, task.as_mut()?).await;
+    match outcome {
+        Ok(Ok(text)) => {
+            task.take();
+            text
+        }
+        Ok(Err(_)) => {
+            task.take();
+            None
+        }
+        Err(_) => None,
+    }
+}
+
 /// Robustly captures selected text from the active foreground window via simulated Ctrl+C
 pub async fn grab_selected_text_with_retry(app: &tauri::AppHandle) -> Option<String> {
     use tauri_plugin_clipboard_manager::ClipboardExt;
 
+    // UIA is both faster and clipboard-free when the target exposes TextPattern.
+    // Start it first, then keep it running as the fallback while Ctrl+C is tried.
+    let mut uia_task = Some(spawn_uia_selection());
+    if let Some(text) = await_uia_selection(&mut uia_task, Duration::from_millis(80)).await {
+        eprintln!("[Runbi] selection captured via UI Automation");
+        return Some(text);
+    }
+
     let snapshot = crate::commands::clipboard_snapshot::ClipboardSnapshot::capture(app);
     if !snapshot.can_restore() {
-        eprintln!("[Runbi] Selection capture skipped to preserve unsupported clipboard content");
-        return None;
+        let text = await_uia_selection(&mut uia_task, Duration::from_millis(350)).await;
+        if text.is_none() {
+            eprintln!("[Runbi] Selection capture skipped to preserve unsupported clipboard content");
+        }
+        return text;
     }
 
     crate::commands::input::set_internal_action(app, true, None);
@@ -197,7 +237,11 @@ pub async fn grab_selected_text_with_retry(app: &tauri::AppHandle) -> Option<Str
             false,
             restored.then(|| snapshot.text_for_monitor()),
         );
-        return None;
+        let text = await_uia_selection(&mut uia_task, Duration::from_millis(200)).await;
+        if text.is_some() {
+            eprintln!("[Runbi] Ctrl+C failed; selection recovered via UI Automation");
+        }
+        return text;
     };
 
     let restored = snapshot.restore(app);

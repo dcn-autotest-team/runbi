@@ -4,6 +4,7 @@
 use tauri::{image::Image, AppHandle};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
+#[derive(Clone)]
 pub enum ClipboardSnapshot {
     Text(String),
     Image {
