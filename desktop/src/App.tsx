@@ -511,6 +511,13 @@ export const App: React.FC = () => {
       currentModel = 'glm-4v-flash';
     } else if (currentEndpoint.includes('api.openai.com') && !currentModel.includes('gpt-4')) {
       currentModel = 'gpt-4o-mini';
+    } else if (currentEndpoint.includes('api.deepseek.com')) {
+      // DeepSeek models accept no image input: the screenshot would be
+      // silently dropped by the fallback path. Skip vision entirely and tell
+      // the user once, instead of pretending screen understanding happened.
+      showToast('当前 DeepSeek 模型不支持读屏，已切换为文本智能回复（在设置中更换模型可启用视觉）', 4000);
+      stateRef.current.handleStartTextReplyAnalysis(existingHint?.trim() || '');
+      return;
     }
 
     let rawOutput = '';
