@@ -1,37 +1,67 @@
-//! User-facing feedback submission.
+//! User-facing feedback submission and external URL opening.
 //!
-//! Privacy-first: feedback is only actually reported when the user has opted in
-//! to telemetry (RUNBI_GLITCHTIP_DSN set). Otherwise we return a clear
-//! "telemetry disabled" signal so the UI can guide the user instead of silently
-//! dropping the feedback.
+//! Privacy-first: feedback is always saved to the local log and feedback store.
+//! If telemetry (RUNBI_GLITCHTIP_DSN) is configured, it is also sent to GlitchTip/Sentry.
 
-/// Submit a user feedback message to the configured GlitchTip/Sentry endpoint.
-///
-/// Returns:
-///   Ok("telemetry_disabled")   -> no DSN configured, feedback NOT sent
-///   Ok("queued")               -> sent for processing
-///   Ok("event_id=<id>")        -> sent synchronously, event id returned
+use tauri::Manager;
+
+/// Submit a user feedback message to the local log and configured GlitchTip/Sentry endpoint.
 #[tauri::command]
 pub fn submit_feedback(app: tauri::AppHandle, message: String) -> Result<String, String> {
-    let dsn = std::env::var("RUNBI_GLITCHTIP_DSN").unwrap_or_default();
-    let dsn = dsn.trim();
-
-    if dsn.is_empty() {
-        // Telemetry off — do NOT send anything. Return a clear signal so the
-        // frontend can show "错误上报未启用" and point to the settings toggle.
-        crate::commands::file_log(&app, &format!("feedback skipped (telemetry disabled): {}", message));
-        return Ok("telemetry_disabled".to_string());
+    let clean_msg = message.trim().to_string();
+    if clean_msg.is_empty() {
+        return Err("Feedback message cannot be empty".to_string());
     }
 
-    let msg = format!("[用户反馈] {}", message);
-    // main.rs already init'd sentry with the same DSN when it was set, so the
-    // global client is live and capture_message will reach GlitchTip.
-    let event_id = sentry::capture_message(&msg, sentry::Level::Info);
-    crate::commands::file_log(&app, &format!("feedback submitted: {}", message));
+    // 1. Always record feedback to local file_log
+    crate::commands::file_log(&app, &format!("[USER_FEEDBACK] {}", clean_msg));
 
-    if event_id.is_nil() {
-        Ok("queued".to_string())
-    } else {
-        Ok(format!("event_id={}", event_id))
+    // 2. Also append to dedicated user_feedback.txt in app data directory
+    if let Ok(dir) = app.path().app_config_dir() {
+        let _ = std::fs::create_dir_all(&dir);
+        let feedback_file = dir.join("user_feedback.txt");
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(feedback_file)
+        {
+            let _ = writeln!(f, "[{}] {}", ts, clean_msg);
+        }
+    }
+
+    // 3. Optional Sentry/GlitchTip reporting if configured
+    let dsn = std::env::var("RUNBI_GLITCHTIP_DSN").unwrap_or_default();
+    let dsn = dsn.trim();
+    if !dsn.is_empty() {
+        let msg = format!("[用户反馈] {}", clean_msg);
+        let event_id = sentry::capture_message(&msg, sentry::Level::Info);
+        if !event_id.is_nil() {
+            return Ok(format!("event_id={}", event_id));
+        }
+    }
+
+    Ok("saved_locally".to_string())
+}
+
+/// Open an external URL in the user's default browser.
+#[tauri::command]
+pub fn open_url(url: String) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use std::process::Command;
+        Command::new("cmd")
+            .args(["/C", "start", "", &url])
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(())
     }
 }

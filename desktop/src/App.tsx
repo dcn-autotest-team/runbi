@@ -6,7 +6,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import type { PolishStyle, StreamConfig, PersonaType, HistoryRecord, DraftSnapshot, LastReplacementSnapshot } from '@runbi/shared/types';
 import { PERSONA_PRESETS } from '@runbi/shared/types';
-import { PolishPanel, HistoryDrawer, type AttachedFileContext } from '@runbi/shared/components';
+import { PolishPanel, HistoryDrawer, Toast, type AttachedFileContext } from '@runbi/shared/components';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -151,6 +151,7 @@ export const App: React.FC = () => {
   const [history, setHistory] = useState<HistoryRecord[]>([]);
   const [showHistory, setShowHistory] = useState<boolean>(false);
   const [showOnboarding, setShowOnboarding] = useState<boolean>(false);
+  const [settingsTab, setSettingsTab] = useState<'model' | 'desktop' | 'persona'>('model');
   const [recoverableDraft, setRecoverableDraft] = useState<DraftSnapshot | null>(null);
   const [lastReplacement, setLastReplacement] = useState<LastReplacementSnapshot | null>(null);
 
@@ -1032,7 +1033,8 @@ export const App: React.FC = () => {
     }
   };
 
-  // Submit user feedback (opt-in: only sent when telemetry DSN is configured).
+  // Submit user feedback (always records to local log, reports upstream if configured).
+  const [feedbackSent, setFeedbackSent] = useState(false);
   const handleSubmitFeedback = async () => {
     const msg = feedbackText.trim();
     if (!msg) {
@@ -1043,14 +1045,11 @@ export const App: React.FC = () => {
     setFeedbackSending(true);
     try {
       if (isTauri) {
-        const result = await invoke<string>('submit_feedback', { message: msg });
-        if (result === 'telemetry_disabled') {
-          showToast('错误上报未启用：请在运行目录设置 RUNBI_GLITCHTIP_DSN 后可上报', 4500);
-          setFeedbackText('');
-        } else {
-          showToast(`反馈已提交，谢谢！(${result})`);
-          setFeedbackText('');
-        }
+        await invoke<string>('submit_feedback', { message: msg });
+        showToast('✓ 反馈已收到，非常感谢您的支持！', 3000);
+        setFeedbackText('');
+        setFeedbackSent(true);
+        setTimeout(() => setFeedbackSent(false), 5000);
       } else {
         showToast('网页预览模式不支持提交反馈，请在桌面端使用', 4000);
       }
@@ -1438,34 +1437,64 @@ export const App: React.FC = () => {
               handleSaveSettings();
             }}
           >
-            <div className="runbi-settings-scroll min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
-              <div className="flex items-start justify-between border-b border-white/10 pb-3">
-                <div>
-                  <h2 className="text-sm font-semibold text-white">设置</h2>
-                  <p className="mt-0.5 text-[10px] text-slate-400">模型连接与桌面行为</p>
-                </div>
-                <span className="rounded-full border border-teal-400/20 bg-teal-400/10 px-2 py-1 text-[10px] font-medium text-teal-300">
-                  BYOK · 本地保存
-                </span>
+            {/* Settings Header with 3 Tabs */}
+            <div className="flex shrink-0 items-center justify-between border-b border-white/10 px-4 py-2.5 bg-black/20">
+              <div className="flex items-center gap-1 rounded-lg bg-black/40 p-0.5 border border-white/10">
+                <button
+                  type="button"
+                  onClick={() => setSettingsTab('model')}
+                  className={`rounded-md px-3 py-1 text-xs font-medium transition-all cursor-pointer ${
+                    settingsTab === 'model'
+                      ? 'bg-teal-500/20 text-teal-300 shadow-sm border border-teal-500/30'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  模型服务
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSettingsTab('desktop')}
+                  className={`rounded-md px-3 py-1 text-xs font-medium transition-all cursor-pointer ${
+                    settingsTab === 'desktop'
+                      ? 'bg-teal-500/20 text-teal-300 shadow-sm border border-teal-500/30'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  桌面体验
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSettingsTab('persona')}
+                  className={`rounded-md px-3 py-1 text-xs font-medium transition-all cursor-pointer ${
+                    settingsTab === 'persona'
+                      ? 'bg-teal-500/20 text-teal-300 shadow-sm border border-teal-500/30'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  人设与高级
+                </button>
               </div>
 
-              <section aria-labelledby="model-settings-title" className="space-y-3">
-                <h3 id="model-settings-title" className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
-                  模型服务
-                </h3>
+              <span className="rounded-full border border-teal-400/20 bg-teal-400/10 px-2 py-0.5 text-[10px] font-medium text-teal-300 font-mono">
+                BYOK · 本地加密
+              </span>
+            </div>
 
+            {/* Tab 1: Model Settings */}
+            {settingsTab === 'model' && (
+              <div className="runbi-settings-scroll min-h-0 flex-1 space-y-3 overflow-y-auto p-4 animate-in fade-in duration-150">
                 <div className="space-y-1.5">
-                  <label htmlFor="provider-preset" className="block font-medium text-slate-300">服务商</label>
+                  <label htmlFor="provider-preset" className="block font-medium text-slate-300">服务商预设</label>
                   <select
                     id="provider-preset"
                     value={getProviderPreset(endpoint, model)}
                     onChange={(e) => handleSelectPreset(e.target.value)}
                     className="runbi-form-control cursor-pointer"
                   >
-                    <option value="deepseek">DeepSeek</option>
-                    <option value="zhipu">智谱 glm-4</option>
-                    <option value="openai">OpenAI</option>
-                    <option value="custom">自定义</option>
+                    <option value="deepseek">DeepSeek (官方 API)</option>
+                    <option value="zhipu">智谱 GLM-4 (官方 API)</option>
+                    <option value="openai">OpenAI (官方 API)</option>
+                    <option value="custom">自定义兼容端点 (SiliconFlow/Ollama等)</option>
                   </select>
                 </div>
 
@@ -1475,7 +1504,7 @@ export const App: React.FC = () => {
                     id="api-key"
                     type="password"
                     autoComplete="off"
-                    placeholder="输入服务商 API Key"
+                    placeholder="输入服务商 API Key（留空体验内置 Mock 演示）"
                     value={apiKey}
                     onChange={(e) => {
                       setApiKey(e.target.value);
@@ -1485,73 +1514,114 @@ export const App: React.FC = () => {
                     className="runbi-form-control font-mono"
                   />
                   <p id="api-key-help" className="text-[10px] leading-relaxed text-slate-500">
-                    使用 Windows 加密后仅保存在本机；留空可体验演示模式。
+                    使用 Windows DPAPI 本地加密存储，绝不上报云端。
                   </p>
                 </div>
 
-                <div className="space-y-1.5">
-                  <label htmlFor="api-endpoint" className="block font-medium text-slate-300">API Endpoint</label>
-                  <input
-                    id="api-endpoint"
-                    type="url"
-                    required
-                    value={endpoint}
-                    onChange={(e) => {
-                      setEndpoint(e.target.value);
-                      setConnectionTest({ status: 'idle', message: '' });
-                    }}
-                    className="runbi-form-control font-mono"
-                  />
-                  {endpoint && endpoint.trim().startsWith('http://') && !endpoint.includes('localhost') && !endpoint.includes('127.0.0.1') && (
-                    <p role="alert" className="text-[10px] leading-relaxed text-amber-300">远程地址使用明文 HTTP，API Key 与文本可能被窃听，建议改用 HTTPS。</p>
-                  )}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <label htmlFor="api-endpoint" className="block font-medium text-slate-300">API Endpoint</label>
+                    <input
+                      id="api-endpoint"
+                      type="url"
+                      required
+                      value={endpoint}
+                      onChange={(e) => {
+                        setEndpoint(e.target.value);
+                        setConnectionTest({ status: 'idle', message: '' });
+                      }}
+                      className="runbi-form-control font-mono text-[11px]"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label htmlFor="model-name" className="block font-medium text-slate-300">模型名称</label>
+                    <input
+                      id="model-name"
+                      type="text"
+                      required
+                      value={model}
+                      onChange={(e) => {
+                        setModel(e.target.value);
+                        setConnectionTest({ status: 'idle', message: '' });
+                      }}
+                      className="runbi-form-control font-mono text-[11px]"
+                    />
+                  </div>
                 </div>
 
-                <div className="space-y-1.5">
-                  <label htmlFor="model-name" className="block font-medium text-slate-300">模型名称</label>
-                  <input
-                    id="model-name"
-                    type="text"
-                    required
-                    value={model}
-                    onChange={(e) => {
-                      setModel(e.target.value);
-                      setConnectionTest({ status: 'idle', message: '' });
-                    }}
-                    className="runbi-form-control font-mono"
-                  />
-                </div>
+                {endpoint && endpoint.trim().startsWith('http://') && !endpoint.includes('localhost') && !endpoint.includes('127.0.0.1') && (
+                  <p role="alert" className="text-[10px] leading-relaxed text-amber-300">远程地址使用明文 HTTP，建议改用 HTTPS。</p>
+                )}
 
-                <div className="runbi-settings-card flex items-center justify-between gap-3 px-3 py-2.5">
+                <div className="runbi-settings-card flex items-center justify-between gap-3 px-3 py-2">
                   <div className="min-w-0" aria-live="polite">
                     <p className="font-medium text-slate-200">连接检查</p>
-                    <p className={`mt-0.5 break-words text-[10px] leading-relaxed ${
+                    <p className={`mt-0.5 truncate text-[10px] leading-relaxed ${
                       connectionTest.status === 'success'
                         ? 'text-emerald-300'
                         : connectionTest.status === 'error'
                           ? 'text-rose-300'
                           : 'text-slate-500'
                     }`}>
-                      {connectionTest.message || '保存前验证密钥、地址与模型是否可用。'}
+                      {connectionTest.message || '测试网络连通性与模型可用性。'}
                     </p>
                   </div>
                   <button
                     type="button"
                     onClick={handleTestConnection}
                     disabled={connectionTest.status === 'testing'}
-                    className="runbi-secondary-button runbi-focus-ring shrink-0"
+                    className="runbi-secondary-button runbi-focus-ring shrink-0 cursor-pointer"
                   >
                     <RefreshCw className={`h-3.5 w-3.5 ${connectionTest.status === 'testing' ? 'animate-spin' : ''}`} />
                     {connectionTest.status === 'testing' ? '测试中' : '测试连接'}
                   </button>
                 </div>
-              </section>
+              </div>
+            )}
 
-              <section aria-labelledby="persona-settings-title" className="space-y-3 border-t border-white/10 pt-4">
-                <h3 id="persona-settings-title" className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
-                  个性人设与说话风格
-                </h3>
+            {/* Tab 2: Desktop Settings */}
+            {settingsTab === 'desktop' && (
+              <div className="runbi-settings-scroll min-h-0 flex-1 space-y-2.5 overflow-y-auto p-4 animate-in fade-in duration-150">
+                <div className="space-y-1">
+                  <label className="block font-medium text-slate-300">全局唤醒快捷键</label>
+                  <button
+                    type="button"
+                    onClick={() => setRecording(true)}
+                    aria-pressed={recording}
+                    className={`runbi-form-control runbi-focus-ring text-left font-mono ${
+                      recording ? 'border-teal-400 bg-teal-500/15 text-teal-200' : ''
+                    }`}
+                  >
+                    {recording ? '请按新的组合键…（Esc 取消）' : wakeShortcut}
+                  </button>
+                  <p className="text-[10px] text-slate-500">点击后直接在键盘按下新快捷键，保存后即时生效。</p>
+                </div>
 
+                <SettingsToggle
+                  label="复制后自动唤起"
+                  description="监控剪贴板中的新复制文本，直接弹出润笔。"
+                  checked={autoCopyPopup}
+                  onChange={setAutoCopyPopup}
+                />
+                <SettingsToggle
+                  label="开机自动启动"
+                  description="在系统托盘静默待命，不主动打扰。"
+                  checked={autostart}
+                  onChange={setAutostart}
+                />
+                <SettingsToggle
+                  label="读取聊天上下文截图"
+                  description="在微信/飞书等聊天窗口，智能识别上文对方说的话。"
+                  checked={readChatScreenshot}
+                  onChange={setReadChatScreenshot}
+                />
+              </div>
+            )}
+
+            {/* Tab 3: Persona & Advanced */}
+            {settingsTab === 'persona' && (
+              <div className="runbi-settings-scroll min-h-0 flex-1 space-y-3 overflow-y-auto p-4 animate-in fade-in duration-150">
                 <div className="space-y-1.5">
                   <label htmlFor="persona-preset" className="block font-medium text-slate-300">我的人设偏好</label>
                   <select
@@ -1574,80 +1644,58 @@ export const App: React.FC = () => {
                     <label htmlFor="custom-persona-prompt" className="block font-medium text-slate-300">自定义人设描述</label>
                     <textarea
                       id="custom-persona-prompt"
-                      rows={3}
-                      placeholder="例：互联网大厂高级产品经理，注重商业价值和用户体验，语气自信沉稳且有条理..."
+                      rows={2}
+                      placeholder="例：互联网大厂高级产品经理，语气自信沉稳且有条理..."
                       value={customPersonaPrompt}
                       onChange={(e) => setCustomPersonaPrompt(e.target.value)}
                       className="runbi-form-control resize-none font-sans text-xs"
                     />
                   </div>
                 )}
-              </section>
 
-              <section aria-labelledby="desktop-settings-title" className="space-y-2.5 border-t border-white/10 pt-4">
-                <h3 id="desktop-settings-title" className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
-                  桌面体验
-                </h3>
-
-                <div className="space-y-1.5">
-                  <label className="block font-medium text-slate-300">全局唤醒快捷键</label>
-                  <button
-                    type="button"
-                    onClick={() => setRecording(true)}
-                    aria-pressed={recording}
-                    className={`runbi-form-control runbi-focus-ring text-left font-mono ${
-                      recording ? 'border-teal-400 bg-teal-500/15 text-teal-200' : ''
-                    }`}
-                  >
-                    {recording ? '请按新的组合键…（Esc 取消）' : wakeShortcut}
-                  </button>
-                  <p className="text-[10px] text-slate-500">需包含 Ctrl、Alt 或 Shift，保存后即时生效。</p>
-                </div>
-
-                <SettingsToggle
-                  label="复制后自动唤起"
-                  description="监控剪贴板中的新文本，并直接开始润色。"
-                  checked={autoCopyPopup}
-                  onChange={setAutoCopyPopup}
-                />
-                <SettingsToggle
-                  label="开机自动启动"
-                  description="在系统托盘静默待命，不主动打扰。"
-                  checked={autostart}
-                  onChange={setAutostart}
-                />
-                <SettingsToggle
-                  label="读取聊天上下文截图"
-                  description="仅在智能回复模式下理解当前聊天窗口。"
-                  checked={readChatScreenshot}
-                  onChange={setReadChatScreenshot}
-                />
                 <UpdateCheckRow />
 
-                {/* User feedback — submit an issue/request to GlitchTip (opt-in) */}
-                <div className="mt-4 border-t border-white/10 pt-4">
-                  <label className="block font-medium text-slate-300 mb-1">问题反馈</label>
+                {/* User feedback */}
+                <div className="rounded-xl border border-white/10 bg-black/20 p-3">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="block font-medium text-slate-300 text-xs">问题反馈与建议</label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (isTauri) {
+                          invoke('open_url', { url: 'https://github.com/dcn-autotest-team/runbi/issues' }).catch(() => {});
+                        } else {
+                          window.open('https://github.com/dcn-autotest-team/runbi/issues', '_blank');
+                        }
+                      }}
+                      className="text-[10px] text-teal-400 hover:text-teal-300 hover:underline cursor-pointer"
+                    >
+                      在 GitHub 提 Issue →
+                    </button>
+                  </div>
                   <textarea
                     rows={2}
                     value={feedbackText}
                     onChange={(e) => setFeedbackText(e.target.value)}
-                    placeholder="遇到问题或想提需求？写在这里，一键上报（仅在开启错误上报后发送）"
-                    className="runbi-form-control runbi-focus-ring w-full resize-none text-sm"
+                    placeholder="遇到问题或有想法？写在这里，一键提交反馈..."
+                    className="runbi-form-control runbi-focus-ring w-full resize-none text-xs"
                   />
                   <div className="mt-2 flex items-center justify-between">
-                    <span className="text-[10px] text-slate-500">隐私：仅在你启用错误上报后才发送</span>
+                    <span className="text-[10px] text-slate-500">
+                      {feedbackSent ? '✓ 反馈已记录，感谢您的支持！' : '文字保存在本地日志，随时查看'}
+                    </span>
                     <button
                       type="button"
                       disabled={feedbackSending || !feedbackText.trim()}
                       onClick={handleSubmitFeedback}
-                      className="runbi-focus-ring rounded-lg bg-teal-500/20 px-3 py-1.5 text-xs font-medium text-teal-200 transition-colors hover:bg-teal-500/30 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                      className="runbi-focus-ring rounded-lg bg-teal-500/20 px-3 py-1 text-xs font-medium text-teal-200 transition-colors hover:bg-teal-500/30 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                     >
-                      {feedbackSending ? '提交中…' : '提交反馈'}
+                      {feedbackSending ? '提交中…' : feedbackSent ? '已提交 ✓' : '提交反馈'}
                     </button>
                   </div>
                 </div>
-              </section>
-            </div>
+              </div>
+            )}
 
             <div className="flex shrink-0 items-center justify-between border-t border-white/10 bg-black/20 px-4 py-3">
               <div className="flex items-center gap-3">
@@ -1762,6 +1810,13 @@ export const App: React.FC = () => {
             replaceLabel="贴回"
           />
         )}
+
+        {/* Global Toast Pill: Always visible across all views (Settings, History, Onboarding, Panel) */}
+        <Toast
+          visible={toastVisible}
+          message={toastMessage}
+          onDismiss={() => setToastVisible(false)}
+        />
 
       </div>
     </div>
