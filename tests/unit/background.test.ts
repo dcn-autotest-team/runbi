@@ -6,7 +6,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   STREAM_CHANNEL_NAME,
-  DEFAULT_STYLE_PROMPTS,
   buildSystemPrompt,
   safePostMessage,
   streamRealCompletions,
@@ -14,6 +13,9 @@ import {
   testApiConnection,
   setupStreamPortHandler,
 } from '../../src/background/streamHandler';
+// Single source of truth for prompt text is @runbi/shared/core — the
+// background worker now delegates there instead of keeping its own copy.
+import { DEFAULT_STYLE_PROMPTS } from '@runbi/shared/core';
 import '../../src/background/index';
 import type { PolishStyle, StreamConfig, StreamServerMessage } from '../../src/types/stream';
 import { MockPort } from '../setup';
