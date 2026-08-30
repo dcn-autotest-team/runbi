@@ -352,10 +352,23 @@ mod tests {
     #[cfg(debug_assertions)]
     #[test]
     fn debug_vite_entry_resolves_in_the_npm_workspace() {
-        let desktop_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap();
-        assert!(super::resolve_vite_entry(desktop_dir).is_file());
+        let root = std::env::temp_dir().join(format!(
+            "runbi-vite-entry-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let desktop_dir = root.join("desktop");
+        let vite_entry = root.join("node_modules/vite/bin/vite.js");
+        std::fs::create_dir_all(vite_entry.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(&desktop_dir).unwrap();
+        std::fs::write(&vite_entry, "").unwrap();
+
+        assert!(super::resolve_vite_entry(&desktop_dir).is_file());
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
