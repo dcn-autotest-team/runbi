@@ -1,10 +1,10 @@
 # Runbi Desktop 发布与自动更新手册
 
-最后更新：2026-08-29。当前更新通道：<https://github.com/dcn-autotest-team/runbi-updates>。
+最后更新：2026-08-30。当前更新通道：<https://github.com/dcn-autotest-team/runbi-updates>。
 
 ## 当前状态与交接结论
 
-- 已发布版本：`v1.0.2`，Release 同时包含 NSIS 安装包、Tauri `.sig` 和 `latest.json`。
+- 已发布版本：`v1.0.3`，Release 同时包含 NSIS 安装包、Tauri `.sig` 和 `latest.json`。
 - 源码仓库保持私有；`runbi-updates` 是公开的二进制分发仓库，不能上传源代码或私钥。
 - `1.0.0` 内置的是旧私钥对应公钥和私有更新地址，无法信任新链路。用户需手动安装一次 `1.0.1`；从 `1.0.1` 起，后续发布可在应用内自动升级。
 
@@ -54,32 +54,32 @@
    }
    ```
 
-4. 确认构建产物（版本以 `1.0.2` 为例）：
+4. 确认构建产物（版本以 `1.0.3` 为例）：
 
    ```text
-   desktop/src-tauri/target/release/bundle/nsis/Runbi_1.0.2_x64-setup.exe
-   desktop/src-tauri/target/release/bundle/nsis/Runbi_1.0.2_x64-setup.exe.sig
+desktop/src-tauri/target/release/bundle/nsis/Runbi_1.0.3_x64-setup.exe
+desktop/src-tauri/target/release/bundle/nsis/Runbi_1.0.3_x64-setup.exe.sig
    ```
 
 5. 在同一目录创建 `latest.json`。当前产品仅支持 Windows，可用动态清单：
 
    ```json
    {
-     "version": "1.0.2",
+    "version": "1.0.3",
      "notes": "本版本更新说明。",
      "pub_date": "2026-08-29T12:00:00Z",
-     "url": "https://github.com/dcn-autotest-team/runbi-updates/releases/download/v1.0.2/Runbi_1.0.2_x64-setup.exe",
-     "signature": "完整复制 Runbi_1.0.2_x64-setup.exe.sig 的内容"
+    "url": "https://github.com/dcn-autotest-team/runbi-updates/releases/download/v1.0.3/Runbi_1.0.3_x64-setup.exe",
+    "signature": "完整复制 Runbi_1.0.3_x64-setup.exe.sig 的内容"
    }
    ```
 
 6. 发布到公开分发仓库：
 
    ```powershell
-   gh release create v1.0.2 --repo dcn-autotest-team/runbi-updates --target main `
-     --title 'Runbi 1.0.2' --notes '本版本更新说明。' --latest `
-     .\Runbi_1.0.2_x64-setup.exe `
-     .\Runbi_1.0.2_x64-setup.exe.sig `
+   gh release create v1.0.3 --repo dcn-autotest-team/runbi-updates --target main `
+     --title 'Runbi 1.0.3' --notes '本版本更新说明。' --latest `
+     .\Runbi_1.0.3_x64-setup.exe `
+     .\Runbi_1.0.3_x64-setup.exe.sig `
      .\latest.json
    ```
 

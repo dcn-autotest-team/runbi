@@ -11,12 +11,17 @@ export interface OnboardingViewProps {
   onDismiss: () => void;
   shortcut?: string;
   autoCloseSeconds?: number;
+  /** 未配置 API Key 时为 false:引导页展示"开箱即用"出路,不吓退新手 */
+  hasApiKey?: boolean;
+  onOpenSettings?: () => void;
 }
 
 export const OnboardingView: React.FC<OnboardingViewProps> = ({
   onDismiss,
   shortcut = 'Ctrl+Shift+Space',
   autoCloseSeconds = 5,
+  hasApiKey = true,
+  onOpenSettings,
 }) => {
   const [countdown, setCountdown] = useState(autoCloseSeconds);
   const [isPaused, setIsPaused] = useState(false);
@@ -82,17 +87,17 @@ export const OnboardingView: React.FC<OnboardingViewProps> = ({
                 就绪
               </span>
             </div>
-            <p className="text-[11px] text-slate-400">原生·毫秒级·沉浸式 AI 划词润色</p>
+            <p className="text-[11px] text-slate-400">划词即润色 · 原地替换 · 数据不出电脑</p>
           </div>
         </div>
 
         <button
           type="button"
           onClick={onDismiss}
-          aria-label="跳过并收入托盘"
+          aria-label="跳过引导"
           className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-medium text-slate-400 hover:bg-white/10 hover:text-white transition-colors cursor-pointer"
         >
-          跳过
+          开始使用
         </button>
       </div>
 
@@ -141,10 +146,30 @@ export const OnboardingView: React.FC<OnboardingViewProps> = ({
           </div>
         </div>
 
+        {/* No-API-Key first-run guidance: give beginners an immediate path */}
+        {!hasApiKey && (
+          <div className="mt-3 flex items-center justify-between rounded-xl border border-teal-500/30 bg-teal-500/10 p-3">
+            <div>
+              <p className="text-xs font-medium text-teal-300">现在就能试，不用注册任何账号</p>
+              <p className="mt-0.5 text-[10px] text-slate-400 leading-relaxed">
+                未配置密钥时会用内置演示模式，效果一样、内容为演示文案。
+                之后想接自己的 AI，再到 设置 → 模型服务 里填 Key。
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => onOpenSettings?.()}
+              className="runbi-focus-ring shrink-0 rounded-lg border border-teal-500/40 bg-teal-500/20 px-2.5 py-1 text-[11px] font-medium text-teal-300 hover:bg-teal-500/25 transition-all cursor-pointer"
+            >
+              去配置
+            </button>
+          </div>
+        )}
+
         {/* Interactive Try-it Demo Simulator */}
         <div className="mt-3 rounded-xl border border-white/10 bg-black/40 p-3">
           <div className="flex items-center justify-between text-[11px] text-slate-400 mb-1.5">
-            <span>✨ 模拟体验区（点击感受润色效果）</span>
+            <span>模拟体验区（点击感受润色效果）</span>
             <span className="text-[10px] text-teal-400/80">交互演示</span>
           </div>
 
@@ -195,7 +220,7 @@ export const OnboardingView: React.FC<OnboardingViewProps> = ({
           onClick={onDismiss}
           className="runbi-focus-ring flex items-center gap-1.5 rounded-lg border border-teal-500/40 bg-teal-500/20 px-3.5 py-1.5 text-xs font-medium text-teal-300 hover:bg-teal-500/30 transition-all cursor-pointer shadow-sm shadow-teal-950"
         >
-          <span>立即体验 · 收入托盘</span>
+          <span>开始体验 · 缩到托盘</span>
           <span className="rounded-full bg-teal-400/20 px-1.5 py-0.2 font-mono text-[10px] text-teal-200">
             {isPaused ? '已暂停' : `${countdown}s`}
           </span>

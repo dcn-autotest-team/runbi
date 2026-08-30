@@ -56,3 +56,6 @@ Thumbs.db
 .tmp/
 desktop/src-tauri/target-iconfix/
 .cowork-temp/
+
+# Agent session state
+.zcode/

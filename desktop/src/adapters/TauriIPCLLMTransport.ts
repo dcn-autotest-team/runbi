@@ -93,6 +93,12 @@ export class TauriIPCLLMTransport implements ILLMTransport {
       style: config.style,
       userInstruction: config.userInstruction,
       customPromptOverride: config.customPrompt,
+      personaPrompt: config.personaPrompt,
+      packPrompt: config.packPrompt,
+      glossaryPrompt: config.glossaryPrompt,
+      styleSamplesPrompt: config.styleSamplesPrompt,
+      appStylePrompt: config.appStylePrompt,
+      latexGuard: config.latexGuard,
       hasVisionContext,
     });
     const userPrompt = buildUserPrompt({

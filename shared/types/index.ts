@@ -8,3 +8,4 @@ export * from './diff';
 export * from './stream';
 export * from './settings';
 export * from './history';
+export * from './library';

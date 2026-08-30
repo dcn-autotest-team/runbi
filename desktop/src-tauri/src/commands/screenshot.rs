@@ -10,7 +10,11 @@
 /// error was swallowed by `.is_ok()` upstream and screen-reply never fired.
 /// We convert BGRA->RGB8 (alpha dropped) BEFORE encoding and unit-test this
 /// helper so the failure mode can never silently return.
-pub(crate) fn encode_bgra_to_jpeg(width: i32, height: i32, bgra: Vec<u8>) -> Result<String, String> {
+pub(crate) fn encode_bgra_to_jpeg(
+    width: i32,
+    height: i32,
+    bgra: Vec<u8>,
+) -> Result<String, String> {
     if width <= 0 || height <= 0 {
         return Err(format!("Invalid capture dimensions: {}x{}", width, height));
     }
@@ -33,7 +37,12 @@ pub(crate) fn encode_bgra_to_jpeg(width: i32, height: i32, bgra: Vec<u8>) -> Res
     // Downscale to max width 1280 to keep latency minimal (< 10ms with Nearest)
     let target_img = if width > 1280 {
         let target_height = (height as f32 * 1280.0 / width as f32) as u32;
-        image::imageops::resize(&img, 1280, target_height, image::imageops::FilterType::Nearest)
+        image::imageops::resize(
+            &img,
+            1280,
+            target_height,
+            image::imageops::FilterType::Nearest,
+        )
     } else {
         img
     };
@@ -53,123 +62,235 @@ pub(crate) fn encode_bgra_to_jpeg(width: i32, height: i32, bgra: Vec<u8>) -> Res
 pub fn capture_foreground_screenshot() -> Result<String, String> {
     #[cfg(windows)]
     {
-        use windows_sys::Win32::Foundation::{HWND, RECT, BOOL};
-        use windows_sys::Win32::Graphics::Gdi::{
-            BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC,
-            GetDIBits, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
-            SRCCOPY, HDC,
-        };
-        use windows_sys::Win32::UI::WindowsAndMessaging::{
-            GetAncestor, GetForegroundWindow, GetWindowRect,
-        };
-
-        extern "system" {
-            fn PrintWindow(hwnd: HWND, hdc_blt: HDC, n_flags: u32) -> BOOL;
-        }
+        use windows_sys::Win32::UI::WindowsAndMessaging::{GetAncestor, GetForegroundWindow};
 
         unsafe {
-            let raw_hwnd: HWND = GetForegroundWindow();
+            let raw_hwnd: windows_sys::Win32::Foundation::HWND = GetForegroundWindow();
             if raw_hwnd.is_null() {
                 return Err("No active foreground window".to_string());
             }
-
-            let root_hwnd = GetAncestor(raw_hwnd, 2 /* GA_ROOT */);
-            let hwnd = if !root_hwnd.is_null() { root_hwnd } else { raw_hwnd };
-
-            let mut rect: RECT = std::mem::zeroed();
-            GetWindowRect(hwnd, &mut rect);
-            let width = (rect.right - rect.left).max(1);
-            let height = (rect.bottom - rect.top).max(1);
-            let pixel_count = (width as usize)
-                .checked_mul(height as usize)
-                .filter(|count| *count <= 100_000_000)
-                .ok_or_else(|| format!("Capture dimensions too large: {}x{}", width, height))?;
-
-            let hdc_screen = GetDC(std::ptr::null_mut());
-            if hdc_screen.is_null() {
-                return Err("Failed to acquire screen DC".to_string());
-            }
-            let hdc_mem = CreateCompatibleDC(hdc_screen);
-            if hdc_mem.is_null() {
-                ReleaseDC(std::ptr::null_mut(), hdc_screen);
-                return Err("Failed to create capture DC".to_string());
-            }
-            let h_bitmap = CreateCompatibleBitmap(hdc_screen, width, height);
-            if h_bitmap.is_null() {
-                DeleteDC(hdc_mem);
-                ReleaseDC(std::ptr::null_mut(), hdc_screen);
-                return Err("Failed to create capture bitmap".to_string());
-            }
-            let h_old_bmp = SelectObject(hdc_mem, h_bitmap);
-            if h_old_bmp.is_null() {
-                DeleteObject(h_bitmap);
-                DeleteDC(hdc_mem);
-                ReleaseDC(std::ptr::null_mut(), hdc_screen);
-                return Err("Failed to select capture bitmap".to_string());
-            }
-
-            // Try PrintWindow first with PW_RENDERFULLCONTENT (2) for hardware-accelerated / DWM windows
-            let printed = PrintWindow(hwnd, hdc_mem, 2);
-            if printed == 0 {
-                let src_x = rect.left.max(0);
-                let src_y = rect.top.max(0);
-                let blt_w = (rect.right - src_x).min(width).max(1);
-                let blt_h = (rect.bottom - src_y).min(height).max(1);
-                BitBlt(
-                    hdc_mem,
-                    0,
-                    0,
-                    blt_w,
-                    blt_h,
-                    hdc_screen,
-                    src_x,
-                    src_y,
-                    SRCCOPY,
-                );
-            }
-
-            let mut bmi: BITMAPINFO = std::mem::zeroed();
-            bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
-            bmi.bmiHeader.biWidth = width;
-            bmi.bmiHeader.biHeight = -height; // Top-down DIB
-            bmi.bmiHeader.biPlanes = 1;
-            bmi.bmiHeader.biBitCount = 32;
-            bmi.bmiHeader.biCompression = BI_RGB;
-
-            let mut buffer: Vec<u8> = vec![0u8; pixel_count * 4];
-            let copied_rows = GetDIBits(
-                hdc_mem,
-                h_bitmap,
-                0,
-                height as u32,
-                buffer.as_mut_ptr() as *mut _,
-                &mut bmi,
-                DIB_RGB_COLORS,
-            );
-
-            SelectObject(hdc_mem, h_old_bmp);
-            DeleteObject(h_bitmap);
-            DeleteDC(hdc_mem);
-            ReleaseDC(std::ptr::null_mut(), hdc_screen);
-
-            if copied_rows == 0 {
-                return Err("Failed to read captured pixels".to_string());
-            }
-
-            let data_url = encode_bgra_to_jpeg(width, height, buffer)?;
-            // Keep the screenshot Rust-side: large base64 payloads get silently
-            // dropped crossing the IPC bridge (WebView2 postMessage), so the
-            // frontend only ever receives a hasScreenshot flag and the LLM call
-            // pulls the image from here via use_last_screenshot.
-            if let Ok(mut slot) = LAST_SCREENSHOT.lock() {
-                *slot = Some(data_url.clone());
-            }
-            Ok(data_url)
+            let root = GetAncestor(raw_hwnd, 2 /* GA_ROOT */);
+            let hwnd = if !root.is_null() { root } else { raw_hwnd };
+            capture_hwnd_to_jpeg(hwnd)
         }
     }
     #[cfg(not(windows))]
     {
         Err("Screenshot not supported on non-windows platform".to_string())
+    }
+}
+
+/// Capture a chat app window WITHOUT focusing it (e.g. reply to WeChat while
+/// staying in the current app). Matches a top-level visible window by process
+/// image name (case-insensitive, `.exe` suffix optional), prefers the largest.
+#[tauri::command]
+pub fn capture_app_screenshot(process_name: String) -> Result<String, String> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::WindowsAndMessaging::GetAncestor;
+
+        let want = process_name.trim().to_ascii_lowercase();
+        let want = want
+            .strip_suffix(".exe")
+            .unwrap_or(&want)
+            .trim()
+            .to_string();
+        if want.is_empty() {
+            return Err("Empty process name".to_string());
+        }
+        unsafe {
+            let hwnd = find_window_by_process(&want)
+                .ok_or_else(|| format!("No visible window found for process '{}'", want))?;
+            let root = GetAncestor(hwnd, 2 /* GA_ROOT */);
+            capture_hwnd_to_jpeg(if !root.is_null() { root } else { hwnd })
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = process_name;
+        Err("Screenshot not supported on non-windows platform".to_string())
+    }
+}
+
+#[cfg(windows)]
+fn process_name_matches(process_id: u32, want_lower: &str) -> bool {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_id);
+        if handle.is_null() {
+            return false;
+        }
+        let mut buf = [0u16; 1024];
+        let mut len = buf.len() as u32;
+        let ok = QueryFullProcessImageNameW(handle, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len);
+        CloseHandle(handle);
+        if ok == 0 || len == 0 {
+            return false;
+        }
+        let path = String::from_utf16_lossy(&buf[..len as usize]);
+        // 两侧都去掉 .exe 后缀后精确相等：source_app 本就是映像文件名，
+        // contains 会误伤同名前缀进程（如 "test" 命中 "latest.exe"）
+        let name = path
+            .rsplit(['\\', '/'])
+            .next()
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let name = name.strip_suffix(".exe").unwrap_or(&name);
+        name == want_lower
+    }
+}
+
+#[cfg(windows)]
+unsafe fn find_window_by_process(want_lower: &str) -> Option<windows_sys::Win32::Foundation::HWND> {
+    use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsWindowVisible,
+        GWL_EXSTYLE, WS_EX_TOOLWINDOW,
+    };
+
+    struct Scan {
+        want: String,
+        best: Option<HWND>,
+        best_area: i64,
+    }
+    unsafe extern "system" fn on_window(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let scan = &mut *(lparam as *mut Scan);
+        if IsWindowVisible(hwnd) == 0 {
+            return 1;
+        }
+        let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE as i32);
+        if (ex & WS_EX_TOOLWINDOW as isize) != 0 {
+            return 1;
+        }
+        let mut pid: u32 = 0;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if pid == 0 || !process_name_matches(pid, &scan.want) {
+            return 1;
+        }
+        let mut rect: RECT = std::mem::zeroed();
+        GetWindowRect(hwnd, &mut rect);
+        let area = (rect.right - rect.left) as i64 * (rect.bottom - rect.top) as i64;
+        if area > scan.best_area {
+            scan.best = Some(hwnd);
+            scan.best_area = area;
+        }
+        1
+    }
+
+    let mut scan = Scan {
+        want: want_lower.to_string(),
+        best: None,
+        best_area: 0,
+    };
+    EnumWindows(Some(on_window), &mut scan as *mut Scan as LPARAM);
+    scan.best
+}
+
+#[cfg(windows)]
+unsafe fn capture_hwnd_to_jpeg(
+    hwnd: windows_sys::Win32::Foundation::HWND,
+) -> Result<String, String> {
+    use windows_sys::Win32::Foundation::{BOOL, HWND, RECT};
+    use windows_sys::Win32::Graphics::Gdi::{
+        BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC,
+        GetDIBits, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
+        HDC, SRCCOPY,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowRect;
+
+    extern "system" {
+        fn PrintWindow(hwnd: HWND, hdc_blt: HDC, n_flags: u32) -> BOOL;
+    }
+
+    unsafe {
+        let mut rect: RECT = std::mem::zeroed();
+        GetWindowRect(hwnd, &mut rect);
+        let width = (rect.right - rect.left).max(1);
+        let height = (rect.bottom - rect.top).max(1);
+        let pixel_count = (width as usize)
+            .checked_mul(height as usize)
+            .filter(|count| *count <= 100_000_000)
+            .ok_or_else(|| format!("Capture dimensions too large: {}x{}", width, height))?;
+
+        let hdc_screen = GetDC(std::ptr::null_mut());
+        if hdc_screen.is_null() {
+            return Err("Failed to acquire screen DC".to_string());
+        }
+        let hdc_mem = CreateCompatibleDC(hdc_screen);
+        if hdc_mem.is_null() {
+            ReleaseDC(std::ptr::null_mut(), hdc_screen);
+            return Err("Failed to create capture DC".to_string());
+        }
+        let h_bitmap = CreateCompatibleBitmap(hdc_screen, width, height);
+        if h_bitmap.is_null() {
+            DeleteDC(hdc_mem);
+            ReleaseDC(std::ptr::null_mut(), hdc_screen);
+            return Err("Failed to create capture bitmap".to_string());
+        }
+        let h_old_bmp = SelectObject(hdc_mem, h_bitmap);
+        if h_old_bmp.is_null() {
+            DeleteObject(h_bitmap);
+            DeleteDC(hdc_mem);
+            ReleaseDC(std::ptr::null_mut(), hdc_screen);
+            return Err("Failed to select capture bitmap".to_string());
+        }
+
+        // Try PrintWindow first with PW_RENDERFULLCONTENT (2) — it renders the
+        // window itself, so this also works while the window is in the
+        // background. Fall back to screen BitBlt only if PrintWindow refuses.
+        let printed = PrintWindow(hwnd, hdc_mem, 2);
+        if printed == 0 {
+            let src_x = rect.left.max(0);
+            let src_y = rect.top.max(0);
+            let blt_w = (rect.right - src_x).min(width).max(1);
+            let blt_h = (rect.bottom - src_y).min(height).max(1);
+            BitBlt(
+                hdc_mem, 0, 0, blt_w, blt_h, hdc_screen, src_x, src_y, SRCCOPY,
+            );
+        }
+
+        let mut bmi: BITMAPINFO = std::mem::zeroed();
+        bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+        bmi.bmiHeader.biWidth = width;
+        bmi.bmiHeader.biHeight = -height; // Top-down DIB
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = BI_RGB;
+
+        let mut buffer: Vec<u8> = vec![0u8; pixel_count * 4];
+        let copied_rows = GetDIBits(
+            hdc_mem,
+            h_bitmap,
+            0,
+            height as u32,
+            buffer.as_mut_ptr() as *mut _,
+            &mut bmi,
+            DIB_RGB_COLORS,
+        );
+
+        SelectObject(hdc_mem, h_old_bmp);
+        DeleteObject(h_bitmap);
+        DeleteDC(hdc_mem);
+        ReleaseDC(std::ptr::null_mut(), hdc_screen);
+
+        if copied_rows == 0 {
+            return Err("Failed to read captured pixels".to_string());
+        }
+
+        let data_url = encode_bgra_to_jpeg(width, height, buffer)?;
+        // Keep the screenshot Rust-side: large base64 payloads get silently
+        // dropped crossing the IPC bridge (WebView2 postMessage), so the
+        // frontend only ever receives a hasScreenshot flag and the LLM call
+        // pulls the image from here via use_last_screenshot.
+        if let Ok(mut slot) = LAST_SCREENSHOT.lock() {
+            *slot = Some(data_url.clone());
+        }
+        Ok(data_url)
     }
 }
 
@@ -195,8 +316,8 @@ pub fn is_likely_conversation_window(source_app: Option<&str>, window_title: Opt
     let title_lower = window_title.unwrap_or_default().to_ascii_lowercase();
 
     let chat_apps = [
-        "wechat", "weixin", "wxwork", "dingtalk", "feishu", "lark",
-        "slack", "teams", "telegram", "discord", "qq", "whatsapp", "skype", "line",
+        "wechat", "weixin", "wxwork", "dingtalk", "feishu", "lark", "slack", "teams", "telegram",
+        "discord", "qq", "whatsapp", "skype", "line",
     ];
 
     for app in &chat_apps {
@@ -206,8 +327,19 @@ pub fn is_likely_conversation_window(source_app: Option<&str>, window_title: Opt
     }
 
     let chat_titles = [
-        "微信", "企业微信", "钉钉", "飞书", "slack", "teams", "telegram",
-        "discord", "qq", "whatsapp", "群聊", "会话", "chat",
+        "微信",
+        "企业微信",
+        "钉钉",
+        "飞书",
+        "slack",
+        "teams",
+        "telegram",
+        "discord",
+        "qq",
+        "whatsapp",
+        "群聊",
+        "会话",
+        "chat",
     ];
 
     for title in &chat_titles {
@@ -229,15 +361,28 @@ mod tests {
         assert!(is_likely_conversation_window(Some("Feishu.exe"), None));
         assert!(is_likely_conversation_window(Some("Lark.exe"), None));
         assert!(is_likely_conversation_window(Some("DingTalk.exe"), None));
-        assert!(is_likely_conversation_window(Some("chrome.exe"), Some("微信网页版")));
-        assert!(is_likely_conversation_window(Some("msedge.exe"), Some("飞书 - 沟通")));
-        assert!(!is_likely_conversation_window(Some("notepad.exe"), Some("未命名 - 记事本")));
+        assert!(is_likely_conversation_window(
+            Some("chrome.exe"),
+            Some("微信网页版")
+        ));
+        assert!(is_likely_conversation_window(
+            Some("msedge.exe"),
+            Some("飞书 - 沟通")
+        ));
+        assert!(!is_likely_conversation_window(
+            Some("notepad.exe"),
+            Some("未命名 - 记事本")
+        ));
     }
 
     #[test]
     fn test_capture_foreground_screenshot_does_not_panic() {
         let res = capture_foreground_screenshot();
-        eprintln!("[test_capture] res is_ok: {}, err: {:?}", res.is_ok(), res.as_ref().err());
+        eprintln!(
+            "[test_capture] res is_ok: {}, err: {:?}",
+            res.is_ok(),
+            res.as_ref().err()
+        );
     }
 
     #[test]
@@ -278,6 +423,9 @@ mod tests {
             let r = img.write_to(&mut c, image::ImageFormat::Jpeg);
             r.map(|_| c.into_inner())
         };
-        assert!(out.is_err(), "crate now supports RGBA-Jpeg; revisit encode_bgra_to_jpeg comment");
+        assert!(
+            out.is_err(),
+            "crate now supports RGBA-Jpeg; revisit encode_bgra_to_jpeg comment"
+        );
     }
 }

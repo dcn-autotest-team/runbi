@@ -20,7 +20,9 @@ fn get_config_file_path(app: &AppHandle) -> Result<PathBuf, String> {
             #[cfg(not(windows))]
             {
                 if let Ok(home) = std::env::var("HOME") {
-                    PathBuf::from(home).join(".config").join("com.runbi.desktop")
+                    PathBuf::from(home)
+                        .join(".config")
+                        .join("com.runbi.desktop")
                 } else {
                     PathBuf::from(".").join(".config").join("com.runbi.desktop")
                 }
@@ -29,7 +31,8 @@ fn get_config_file_path(app: &AppHandle) -> Result<PathBuf, String> {
     };
 
     if !dir.exists() {
-        fs::create_dir_all(&dir).map_err(|e| format!("Failed to create config directory: {}", e))?;
+        fs::create_dir_all(&dir)
+            .map_err(|e| format!("Failed to create config directory: {}", e))?;
     }
 
     Ok(dir.join("config.json"))
@@ -46,10 +49,8 @@ const DPAPI_PREFIX: &str = "dpapi:";
 #[cfg(windows)]
 fn dpapi_protect(plain: &str) -> Result<String, String> {
     use base64::Engine;
-    use windows_sys::Win32::Security::Cryptography::{
-        CryptProtectData, CRYPT_INTEGER_BLOB,
-    };
     use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Cryptography::{CryptProtectData, CRYPT_INTEGER_BLOB};
 
     unsafe {
         let bytes = plain.as_bytes();
@@ -83,10 +84,8 @@ fn dpapi_protect(plain: &str) -> Result<String, String> {
 #[cfg(windows)]
 fn dpapi_unprotect(stored: &str) -> Result<String, String> {
     use base64::Engine;
-    use windows_sys::Win32::Security::Cryptography::{
-        CryptUnprotectData, CRYPT_INTEGER_BLOB,
-    };
     use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Cryptography::{CryptUnprotectData, CRYPT_INTEGER_BLOB};
 
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(stored)
@@ -176,8 +175,8 @@ pub fn load_app_config(app: AppHandle) -> Result<serde_json::Value, String> {
         return Ok(serde_json::json!({}));
     }
 
-    let content = fs::read_to_string(&path)
-        .map_err(|e| format!("Failed to read config file: {}", e))?;
+    let content =
+        fs::read_to_string(&path).map_err(|e| format!("Failed to read config file: {}", e))?;
 
     if content.trim().is_empty() {
         return Ok(serde_json::json!({}));
@@ -210,8 +209,12 @@ mod tests {
 
     #[test]
     fn only_legacy_plaintext_secrets_need_migration() {
-        assert!(has_plaintext_secret(&serde_json::json!({ "apiKey": "legacy-key" })));
-        assert!(!has_plaintext_secret(&serde_json::json!({ "apiKey": "dpapi:encrypted" })));
+        assert!(has_plaintext_secret(
+            &serde_json::json!({ "apiKey": "legacy-key" })
+        ));
+        assert!(!has_plaintext_secret(
+            &serde_json::json!({ "apiKey": "dpapi:encrypted" })
+        ));
         assert!(!has_plaintext_secret(&serde_json::json!({ "apiKey": "" })));
     }
 }
@@ -224,8 +227,7 @@ pub fn save_app_config(app: AppHandle, config: serde_json::Value) -> Result<(), 
     let serialized = serde_json::to_string_pretty(&content)
         .map_err(|e| format!("Failed to serialize config: {}", e))?;
 
-    fs::write(&path, serialized)
-        .map_err(|e| format!("Failed to write config file: {}", e))?;
+    fs::write(&path, serialized).map_err(|e| format!("Failed to write config file: {}", e))?;
 
     Ok(())
 }

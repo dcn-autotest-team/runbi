@@ -5,9 +5,9 @@
  * Three Rust emit sites (regression contract — keep in sync):
  *   - main.rs              trigger: screen-reply | shortcut | sensitive-blocked
  *                          keys: text, sourceApp, windowTitle, hasScreenshot, trigger
- *   - commands/mouse_hook.rs   trigger: selection (same keys as main.rs)
- *   - commands/clipboard_monitor.rs  trigger: clipboard (screenshot key instead
- *                          of hasScreenshot; see isScreenReplyPayload)
+ *   - commands/mouse_hook.rs   trigger: selection, capsule: true
+ *   - commands/clipboard_monitor.rs  trigger: clipboard, capsule: true
+ *                          (screenshot key instead of hasScreenshot)
  *
  * Regression note (2026-08-29): the frontend gates screen-reply on
  * `trigger === 'screen-reply' && hasScreenshot`. The screenshot JPEG encoder
@@ -30,6 +30,8 @@ export interface CapturedSelectionPayload {
   hasScreenshot?: boolean;
   /** legacy key (clipboard_monitor): full data URL or null */
   screenshot?: string | null;
+  /** Selection and clipboard entry points must render the compact toolbar. */
+  capsule?: boolean;
   trigger: CapturedSelectionTrigger;
 }
 

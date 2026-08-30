@@ -62,6 +62,8 @@ export function classifyContext(signals: ContextSignals): ContextClassification 
   const windowTitle = signals.windowTitle || '';
 
   // 1. Reply Check (Chat / Instant Messaging / Question / Requests)
+  // 无实质内容(纯标点/空白)不应被当沟通措辞送进回复链路
+  const hasSubstance = /[a-zA-Z0-9\u4e00-\u9fa5]/.test(text);
   let replyScore = 0;
   const replyReasons: string[] = [];
 
@@ -74,11 +76,11 @@ export function classifyContext(signals: ContextSignals): ContextClassification 
     replyReasons.push('会话窗口');
   }
   const questionMarks = (text.match(/[?？]/g) || []).length;
-  if (questionMarks > 0) {
+  if (hasSubstance && questionMarks > 0) {
     replyScore += Math.min(0.35, 0.2 * questionMarks);
     replyReasons.push('包含疑问标点');
   }
-  if (REPLY_PATTERN.test(text)) {
+  if (hasSubstance && REPLY_PATTERN.test(text)) {
     replyScore += 0.3;
     replyReasons.push('包含沟通/提问措辞');
   }
@@ -179,4 +181,17 @@ export function classifyContext(signals: ContextSignals): ContextClassification 
     confidence: 0.6,
     reason: '通用润色',
   };
+}
+
+/**
+ * 微胶囊（Mini Capsule）防误触过滤（缺陷2）：
+ * 短选区——无 CJK 时 ≤4 个字符，或有 CJK 时 ≤2 个汉字——多半是双击选词/看字数，
+ * 不弹胶囊，静默忽略。
+ */
+export function shouldSuppressCapsule(text: string): boolean {
+  const t = (text || '').trim();
+  if (!t) return true;
+  const cjk = (t.match(/[\u4e00-\u9fa5]/g) || []).length;
+  if (cjk > 0) return cjk <= 2;
+  return t.length <= 4;
 }

@@ -5,7 +5,7 @@
  */
 
 /**
- * 7 Polishing Style Presets supported across all platforms.
+ * Polishing Style Presets supported across all platforms.
  */
 export type PolishStyle =
   | 'polished'
@@ -14,7 +14,8 @@ export type PolishStyle =
   | 'literary'
   | 'concise'
   | 'native_en'
-  | 'reply';
+  | 'reply'
+  | 'translate';
 
 /**
  * Supported LLM Provider Types.
@@ -37,6 +38,15 @@ export interface StreamConfig {
   customPrompt?: string;
   userInstruction?: string;
   personaPrompt?: string;
+  packPrompt?: string;
+  /** 个人词库硬约束段（buildGlossaryPrompt 产物，含标题行），'' = 未配置。 */
+  glossaryPrompt?: string;
+  /** 文风标杆 few-shot 段（buildStyleSamplesPrompt 产物），'' = 未配置。 */
+  styleSamplesPrompt?: string;
+  /** 宿主应用细粒度风格附注（buildAppStylePrompt 产物），'' = 无匹配。 */
+  appStylePrompt?: string;
+  /** 原文含 LaTeX 标记时追加语法保护段。 */
+  latexGuard?: boolean;
   temperature?: number;
   maxTokens?: number;
   imageDataUrl?: string;

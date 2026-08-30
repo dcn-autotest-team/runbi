@@ -150,8 +150,7 @@ fn is_fresh_clipboard_text(
     original_text: &str,
     candidate: &str,
 ) -> bool {
-    !candidate.trim().is_empty()
-        && (current_seq != initial_seq || candidate != original_text)
+    !candidate.trim().is_empty() && (current_seq != initial_seq || candidate != original_text)
 }
 
 fn spawn_uia_selection() -> tokio::task::JoinHandle<Option<String>> {
@@ -196,13 +195,10 @@ pub async fn grab_selected_text_with_retry(app: &tauri::AppHandle) -> Option<Str
     }
 
     let snapshot = crate::commands::clipboard_snapshot::ClipboardSnapshot::capture(app);
-    if !snapshot.can_restore() {
-        let text = await_uia_selection(&mut uia_task, Duration::from_millis(350)).await;
-        if text.is_none() {
-            eprintln!("[Runbi] Selection capture skipped to preserve unsupported clipboard content");
-        }
-        return text;
-    }
+    // ponytail: Unsupported(文件列表/私有格式)快照无法原样恢复,以前直接放弃 Ctrl+C
+    // 兜底,导致微信/网盘等自绘应用(UIA 无 TextPattern)划词必失败——豆包的做法是
+    // 照抓不误,抓不到或不完整时由用户重新复制。restore 失败仅损失旧剪贴板。
+    let strict_restore = snapshot.can_restore();
 
     crate::commands::input::set_internal_action(app, true, None);
 
@@ -231,12 +227,17 @@ pub async fn grab_selected_text_with_retry(app: &tauri::AppHandle) -> Option<Str
     }
 
     let Some(captured_text) = captured_text else {
-        let restored = snapshot.restore(app);
+        let restored = strict_restore && snapshot.restore(app);
         crate::commands::input::set_internal_action(
             app,
             false,
             restored.then(|| snapshot.text_for_monitor()),
         );
+        // The first UIA probe can finish before a busy target has committed
+        // WM_LBUTTONUP. Probe again instead of reusing a completed task.
+        if uia_task.is_none() {
+            uia_task = Some(spawn_uia_selection());
+        }
         let text = await_uia_selection(&mut uia_task, Duration::from_millis(200)).await;
         if text.is_some() {
             eprintln!("[Runbi] Ctrl+C failed; selection recovered via UI Automation");
@@ -244,7 +245,7 @@ pub async fn grab_selected_text_with_retry(app: &tauri::AppHandle) -> Option<Str
         return text;
     };
 
-    let restored = snapshot.restore(app);
+    let restored = strict_restore && snapshot.restore(app);
     let final_clipboard = if restored {
         snapshot.text_for_monitor()
     } else {
@@ -254,9 +255,24 @@ pub async fn grab_selected_text_with_retry(app: &tauri::AppHandle) -> Option<Str
     Some(captured_text)
 }
 
+/// 剪贴板监听与划词钩子共用一块"上次内容"记录。划词路径(UIA 成功或 Ctrl+C 兜底)
+/// 会让前台应用的剪贴板被写入/更新,若不同步监听器的 last_content,它的监听循环会把
+/// 同一份文本当"新复制"再弹一次完整面板,把刚弹出的胶囊顶掉(实测必现)。
+pub fn sync_clipboard_monitor_baseline(app: &tauri::AppHandle, text: &str) {
+    if let Some(state) =
+        app.try_state::<crate::commands::clipboard_monitor::ClipboardMonitorState>()
+    {
+        if let Ok(mut last) = state.last_content.lock() {
+            *last = text.to_string();
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn get_current_selection(window: WebviewWindow) -> Result<SelectionResult, String> {
-    let cursor_pos = window.cursor_position().unwrap_or(tauri::PhysicalPosition::new(200.0, 200.0));
+    let cursor_pos = window
+        .cursor_position()
+        .unwrap_or(tauri::PhysicalPosition::new(200.0, 200.0));
     let (source_app, window_title) = get_foreground_context();
     let app = window.app_handle();
 

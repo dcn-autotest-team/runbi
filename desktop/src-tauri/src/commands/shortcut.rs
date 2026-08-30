@@ -4,13 +4,18 @@
 use std::sync::Mutex;
 use tauri::AppHandle;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
-use tauri_plugin_store::{StoreExt, JsonValue};
+use tauri_plugin_store::{JsonValue, StoreExt};
 
 pub const DEFAULT_SHORTCUT: &str = "Ctrl+Shift+Space";
 
 /// Fallback candidates when the preferred shortcut is already taken
 /// by another application (e.g. Antigravity / Cherry Studio floating panels).
-const FALLBACK_SHORTCUTS: &[&str] = &["Ctrl+Alt+Space", "Ctrl+Shift+R", "Alt+Shift+R", "Ctrl+Alt+R"];
+const FALLBACK_SHORTCUTS: &[&str] = &[
+    "Ctrl+Alt+Space",
+    "Ctrl+Shift+R",
+    "Alt+Shift+R",
+    "Ctrl+Alt+R",
+];
 
 /// Tracks the currently registered shortcut so we can swap it at runtime.
 static CURRENT: Mutex<Option<String>> = Mutex::new(None);
@@ -29,7 +34,11 @@ pub fn load_shortcut(app: &AppHandle) -> String {
     }
 
     if let Ok(cfg) = super::config::load_app_config(app.clone()) {
-        if let Some(s) = cfg.get("wakeShortcut").or_else(|| cfg.get("runbi:wakeShortcut")).and_then(|v| v.as_str()) {
+        if let Some(s) = cfg
+            .get("wakeShortcut")
+            .or_else(|| cfg.get("runbi:wakeShortcut"))
+            .and_then(|v| v.as_str())
+        {
             if !s.trim().is_empty() {
                 return s.to_string();
             }
@@ -40,7 +49,9 @@ pub fn load_shortcut(app: &AppHandle) -> String {
 
 /// Register the given shortcut, replacing the previously registered one.
 pub fn register_shortcut(app: &AppHandle, shortcut_str: &str) -> Result<(), String> {
-    let shortcut: Shortcut = shortcut_str.parse().map_err(|e| format!("Invalid shortcut: {}", e))?;
+    let shortcut: Shortcut = shortcut_str
+        .parse()
+        .map_err(|e| format!("Invalid shortcut: {}", e))?;
 
     let prev = CURRENT.lock().unwrap().clone();
     if prev.as_deref() == Some(shortcut_str) {
@@ -83,7 +94,11 @@ pub fn register_with_fallback(app: &AppHandle, preferred: &str) -> Result<(Strin
 /// Get the currently active shortcut.
 #[tauri::command]
 pub fn get_global_shortcut(app: AppHandle) -> Result<String, String> {
-    Ok(CURRENT.lock().unwrap().clone().unwrap_or_else(|| load_shortcut(&app)))
+    Ok(CURRENT
+        .lock()
+        .unwrap()
+        .clone()
+        .unwrap_or_else(|| load_shortcut(&app)))
 }
 
 /// Set and persist a new wake shortcut. Returns the registered shortcut on success.

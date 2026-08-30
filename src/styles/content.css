@@ -39,18 +39,28 @@
   background: rgba(148, 163, 184, 0.7);
 }
 
-/* Jade glow animation */
-@keyframes runbi-pulse-glow {
-  0%, 100% {
-    box-shadow: 0 0 10px rgba(0, 191, 165, 0.4), 0 0 20px rgba(0, 191, 165, 0.2);
-  }
-  50% {
-    box-shadow: 0 0 16px rgba(0, 191, 165, 0.7), 0 0 30px rgba(0, 191, 165, 0.4);
-  }
+.runbi-trigger-capsule {
+  color: #0f766e;
+  background: rgba(255, 255, 255, 0.97);
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.20), 0 2px 6px rgba(15, 23, 42, 0.12);
+  transform-origin: 50% 50%;
+  transition: transform 140ms ease, box-shadow 140ms ease, border-color 140ms ease;
 }
 
-.animate-pulse-glow {
-  animation: runbi-pulse-glow 2s infinite ease-in-out;
+.runbi-trigger-capsule:hover {
+  border-color: rgba(13, 148, 136, 0.34);
+  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.24), 0 0 0 3px rgba(13, 148, 136, 0.10);
+  transform: translateY(-1px);
+}
+
+.runbi-trigger-capsule:active {
+  transform: scale(0.94);
+}
+
+.runbi-trigger-capsule:focus-visible {
+  outline: 2px solid rgba(13, 148, 136, 0.58);
+  outline-offset: 2px;
 }
 
 /* Capsule pop-in animation */
@@ -69,7 +79,15 @@
 }
 
 .animate-pop-in {
-  animation: runbi-pop-in 0.18s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: runbi-pop-in 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .runbi-trigger-capsule,
+  .animate-pop-in {
+    animation: none;
+    transition: none;
+  }
 }
 
 /* Panel fade/scale in */

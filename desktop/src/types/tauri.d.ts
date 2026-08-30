@@ -32,6 +32,7 @@ declare module '@tauri-apps/api/window' {
     setFocus(): Promise<void>;
     setAlwaysOnTop(alwaysOnTop: boolean): Promise<void>;
     setPosition(position: PhysicalPosition): Promise<void>;
+    setSize(size: { width: number; height: number }): Promise<void>;
     isVisible(): Promise<boolean>;
   }
   export function getCurrentWindow(): WebviewWindow;

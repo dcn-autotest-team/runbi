@@ -2,11 +2,11 @@
 //! Event-driven clipboard listener using Win32 AddClipboardFormatListener (WM_CLIPBOARDUPDATE).
 //! Features privacy safeguards: default opt-in, sensitive password heuristics, and process blacklist.
 
+use crate::commands::position::position_window_at_cursor;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
-use crate::commands::position::position_window_at_cursor;
 
 #[derive(Clone)]
 pub struct ClipboardMonitorState {
@@ -31,8 +31,16 @@ impl Default for ClipboardMonitorState {
 pub fn is_blacklisted_app(app_name: Option<&str>) -> bool {
     let app = app_name.unwrap_or_default().to_ascii_lowercase();
     let blacklist = [
-        "keepass", "keepassxc", "1password", "bitwarden", "lastpass",
-        "enpass", "dashlane", "authenticator", "authy", "roboform",
+        "keepass",
+        "keepassxc",
+        "1password",
+        "bitwarden",
+        "lastpass",
+        "enpass",
+        "dashlane",
+        "authenticator",
+        "authy",
+        "roboform",
     ];
     blacklist.iter().any(|b| app.contains(b))
 }
@@ -58,14 +66,22 @@ pub fn is_sensitive_or_password(text: &str) -> bool {
     }
 
     // 2. High entropy token / random password heuristic:
-    // Single-line string with no whitespace, length between 16 and 128, containing diverse character sets
-    if !s.contains(|c: char| c.is_whitespace()) && s.len() >= 16 && s.len() <= 128 {
+    // Single-line string with no whitespace, length between 16 and 128, containing diverse character sets.
+    // Paths/URLs share that shape (slashes + mixed charset) and are legitimate polish input,
+    // so anything path/URL-shaped is exempt — silently dropping them read as "capsule dead".
+    let looks_like_path_or_url = s.contains("://") || s.matches(['/', '\\']).count() >= 2;
+    if !looks_like_path_or_url
+        && !s.contains(|c: char| c.is_whitespace())
+        && s.len() >= 16
+        && s.len() <= 128
+    {
         let has_lower = s.chars().any(|c| c.is_ascii_lowercase());
         let has_upper = s.chars().any(|c| c.is_ascii_uppercase());
         let has_digit = s.chars().any(|c| c.is_ascii_digit());
         let has_symbol = s.chars().any(|c| !c.is_ascii_alphanumeric());
 
-        let variety = (has_lower as u8) + (has_upper as u8) + (has_digit as u8) + (has_symbol as u8);
+        let variety =
+            (has_lower as u8) + (has_upper as u8) + (has_digit as u8) + (has_symbol as u8);
         if variety >= 3 {
             return true;
         }
@@ -92,9 +108,13 @@ fn id_card_checksum_valid(id: &str) -> bool {
     if chars.len() != 18 || chars[17] != 'X' && !chars[17].is_ascii_digit() {
         return false;
     }
-    let Some(sum) = chars[..17].iter().enumerate().try_fold(0u32, |acc, (i, c)| {
-        c.to_digit(10).map(|d| acc + d * WEIGHTS[i])
-    }) else {
+    let Some(sum) = chars[..17]
+        .iter()
+        .enumerate()
+        .try_fold(0u32, |acc, (i, c)| {
+            c.to_digit(10).map(|d| acc + d * WEIGHTS[i])
+        })
+    else {
         return false;
     };
     CHECK[(sum % 11) as usize].eq_ignore_ascii_case(&chars[17])
@@ -136,10 +156,13 @@ pub fn is_chinese_pii(s: &str) -> Option<&'static str> {
 
     // CN resident ID card: 18 chars, first 17 digits, check digit 0-9/X,
     // verified with the official MOD 11-2 weights to avoid false positives.
-    if t.len() == 18 {
+    // ponytail: 判长必须用字符数——`t.len()` 是字节数,6 个汉字(18 字节)曾让
+    // chars[..17] 越界 panic,且 panic 发生在 extern "system" 回调里直接 abort。
+    if t.chars().count() == 18 {
         let upper = t.to_ascii_uppercase();
         let chars: Vec<char> = upper.chars().collect();
-        if chars[..17].iter().all(|c| c.is_ascii_digit())
+        if chars.len() == 18
+            && chars[..17].iter().all(|c| c.is_ascii_digit())
             && (chars[17].is_ascii_digit() || chars[17] == 'X')
             && id_card_checksum_valid(&upper)
         {
@@ -253,10 +276,14 @@ pub fn handle_clipboard_change(app: &AppHandle, state: &ClipboardMonitorState) {
             let win_clone = window.clone();
             let text_clone = text.clone();
             tauri::async_runtime::spawn(async move {
-                let _ = position_window_at_cursor(win_clone.clone(), None).await;
+                // Automatic clipboard capture follows the same entry rule as
+                // mouse selection: show the capsule, never the full panel.
+                if let Err(e) = position_window_at_cursor(win_clone.clone(), Some(true)).await {
+                    eprintln!("[Runbi] clipboard capsule positioning failed: {e}");
+                    return;
+                }
                 let _ = win_clone.show();
                 let _ = win_clone.unminimize();
-                let _ = win_clone.set_focus();
                 let _ = win_clone.emit(
                     "runbi://captured-selection",
                     serde_json::json!({
@@ -265,6 +292,7 @@ pub fn handle_clipboard_change(app: &AppHandle, state: &ClipboardMonitorState) {
                         "windowTitle": window_title,
                         "screenshot": screenshot,
                         "trigger": "clipboard",
+                        "capsule": true,
                     }),
                 );
             });
@@ -294,8 +322,8 @@ pub fn start_clipboard_monitor(app: &AppHandle, state: ClipboardMonitorState) {
         };
         use windows_sys::Win32::UI::WindowsAndMessaging::{
             CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
-            PostQuitMessage, RegisterClassW, TranslateMessage, MSG, WM_CLIPBOARDUPDATE,
-            WM_DESTROY, WNDCLASSW,
+            PostQuitMessage, RegisterClassW, TranslateMessage, MSG, WM_CLIPBOARDUPDATE, WM_DESTROY,
+            WNDCLASSW,
         };
 
         let state_clone = state.clone();
@@ -404,8 +432,22 @@ mod tests {
 
     #[test]
     fn test_uuid_filtered() {
-        assert!(is_sensitive_or_password("123e4567-e89b-12d3-a456-426614174000"));
-        assert!(is_sensitive_or_password("c9bf9e57-1685-4c89-bafb-ff5af830be8a"));
+        assert!(is_sensitive_or_password(
+            "123e4567-e89b-12d3-a456-426614174000"
+        ));
+        assert!(is_sensitive_or_password(
+            "c9bf9e57-1685-4c89-bafb-ff5af830be8a"
+        ));
+    }
+
+    #[test]
+    fn cjk_text_of_18_bytes_never_panics_pii_check() {
+        // 回归:6 个汉字 = 18 字节,旧代码按字节判长后 chars[..17] 越界,
+        // 在 extern "system" 回调线程里 panic 直接 abort 整个进程。
+        assert_eq!(is_chinese_pii("深度学习调研报告"), None);
+        assert_eq!(is_chinese_pii("本周重点进展与渠道画像梳理"), None);
+        // 真身份证(校验位合法)仍要拦
+        assert_eq!(is_chinese_pii("11010519491231002X"), Some("疑似身份证号"));
     }
 
     #[test]
@@ -416,9 +458,28 @@ mod tests {
     }
 
     #[test]
+    fn test_paths_and_urls_not_flagged_as_tokens() {
+        // Regression: path/URL shape tripped the variety heuristic and the
+        // capsule silently never appeared for file-path selections.
+        assert!(!is_sensitive_or_password(
+            "(file:///C:/Users/54191/lobsterai/project/research/architecture.md), 36KB)"
+        ));
+        assert!(!is_sensitive_or_password(
+            "https://example.com/some/long/path/segment/that/is/pretty/long123"
+        ));
+        assert!(!is_sensitive_or_password(
+            "C:\\Users\\someone\\Documents\\report_draft_v2.docx"
+        ));
+        // But a path-free random token is still caught.
+        assert!(is_sensitive_or_password("Zx91Kk4$Qw7!Pp2@"));
+    }
+
+    #[test]
     fn test_normal_text_allowed() {
         assert!(!is_sensitive_or_password("这是一段正常的中文测试句子。"));
-        assert!(!is_sensitive_or_password("Please polish this sentence for my research paper."));
+        assert!(!is_sensitive_or_password(
+            "Please polish this sentence for my research paper."
+        ));
         assert!(!is_sensitive_or_password("Hello World!"));
     }
 

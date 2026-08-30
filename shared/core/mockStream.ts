@@ -32,6 +32,7 @@ export const MOCK_POLISH_RULES: Record<PolishStyle, (text: string) => string> = 
     `Regarding "${t}", this refined proposal effectively enhances conceptual clarity and stylistic elegance.`,
   reply: (t: string) =>
     `关于您提及的“${t}”，我们已收到并仔细评估。非常感谢您的反馈与沟通，后续我们将按照既定方向跟进落实。`,
+  translate: (t: string) => `Translated: "${t}" (mock translation, configure an API key for real output)`,
 };
 
 /**

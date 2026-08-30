@@ -9,10 +9,75 @@ use tauri_plugin_global_shortcut::ShortcutState;
 
 const LEGACY_DEV_DSN_FRAGMENT: &str = "@localhost:3000/1";
 
+#[cfg(debug_assertions)]
+const DEV_SERVER_ADDR: &str = "127.0.0.1:1420";
+
+#[cfg(debug_assertions)]
+fn endpoint_ready(addr: &str) -> bool {
+    let Ok(addr) = addr.parse() else {
+        return false;
+    };
+    std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(150)).is_ok()
+}
+
+#[cfg(debug_assertions)]
+fn resolve_vite_entry(desktop_dir: &std::path::Path) -> std::path::PathBuf {
+    let local = desktop_dir.join("node_modules/vite/bin/vite.js");
+    if local.exists() {
+        local
+    } else {
+        desktop_dir.join("../node_modules/vite/bin/vite.js")
+    }
+}
+
+/// `tauri dev` starts Vite through `beforeDevCommand`, but developers also
+/// launch target/debug/runbi-desktop.exe directly. In that case no CLI exists
+/// to run the hook, so start Vite here and wait before WebView2 is created.
+#[cfg(debug_assertions)]
+fn ensure_debug_frontend() -> Option<std::process::Child> {
+    if endpoint_ready(DEV_SERVER_ADDR) {
+        return None;
+    }
+
+    let desktop_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("desktop directory missing");
+    let vite_entry = resolve_vite_entry(desktop_dir);
+    let mut command = std::process::Command::new("node");
+    command
+        .arg(vite_entry)
+        .args(["--host", "127.0.0.1", "--port", "1420", "--strictPort"])
+        .current_dir(desktop_dir)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::inherit());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let mut child = command
+        .spawn()
+        .expect("failed to start Vite; install Node.js and run npm install");
+    for _ in 0..50 {
+        if endpoint_ready(DEV_SERVER_ADDR) {
+            eprintln!("[Runbi] debug frontend ready: http://127.0.0.1:1420");
+            return Some(child);
+        }
+        if child.try_wait().ok().flatten().is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let _ = child.kill();
+    panic!("Vite did not become ready on http://127.0.0.1:1420");
+}
+
 fn usable_config_dsn(dsn: &str) -> Option<String> {
     let trimmed = dsn.trim();
-    (!trimmed.is_empty() && !trimmed.contains(LEGACY_DEV_DSN_FRAGMENT))
-        .then(|| trimmed.to_string())
+    (!trimmed.is_empty() && !trimmed.contains(LEGACY_DEV_DSN_FRAGMENT)).then(|| trimmed.to_string())
 }
 
 fn resolve_sentry_dsn() -> Option<String> {
@@ -43,6 +108,9 @@ fn resolve_sentry_dsn() -> Option<String> {
 }
 
 fn main() {
+    #[cfg(debug_assertions)]
+    let mut spawned_dev_server = ensure_debug_frontend();
+
     // 错误遥测(GlitchTip/Sentry 协议):仅在设置 DSN 时启用，可来自环境变量或 config.json
     let _sentry_guard = resolve_sentry_dsn().map(|dsn| {
         sentry::init((
@@ -55,7 +123,7 @@ fn main() {
         ))
     });
 
-    tauri::Builder::default()
+    let run_result = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
@@ -236,6 +304,7 @@ fn main() {
             commands::position_window_at_cursor,
             commands::test_llm_connection,
             commands::hide_window,
+            commands::hide_capsule_window,
             commands::app_ready,
             commands::get_global_shortcut,
             commands::set_global_shortcut,
@@ -247,6 +316,9 @@ fn main() {
             commands::is_autostart_enabled,
             commands::set_autostart,
             commands::capture_foreground_screenshot,
+            commands::capture_app_screenshot,
+            commands::set_window_opacity,
+            commands::animate_window_opacity,
             commands::append_log,
             commands::submit_feedback,
             commands::open_url,
@@ -254,13 +326,37 @@ fn main() {
             commands::save_app_config,
             commands::set_auto_popup_enabled,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Runbi Desktop application");
+        .run(tauri::generate_context!());
+
+    #[cfg(debug_assertions)]
+    if let Some(child) = spawned_dev_server.as_mut() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    run_result.expect("error while running Runbi Desktop application");
 }
 
 #[cfg(test)]
 mod tests {
     use super::usable_config_dsn;
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn debug_frontend_probe_detects_a_listening_endpoint() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        assert!(super::endpoint_ready(&addr));
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn debug_vite_entry_resolves_in_the_npm_workspace() {
+        let desktop_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap();
+        assert!(super::resolve_vite_entry(desktop_dir).is_file());
+    }
 
     #[test]
     fn config_telemetry_is_opt_in_and_ignores_legacy_dev_dsn() {
@@ -285,10 +381,7 @@ mod tests {
                 ..Default::default()
             },
         ));
-        let event_id = sentry::capture_message(
-            "Runbi Rust SDK smoke test",
-            sentry::Level::Info,
-        );
+        let event_id = sentry::capture_message("Runbi Rust SDK smoke test", sentry::Level::Info);
         assert!(!event_id.is_nil(), "sentry client should accept the event");
         drop(guard); // 触发 flush(shutdown_timeout 内完成)
     }

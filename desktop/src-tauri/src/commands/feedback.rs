@@ -42,12 +42,14 @@ pub fn submit_feedback(app: tauri::AppHandle, message: String) -> Result<String,
             app.path().app_config_dir().ok().and_then(|dir| {
                 let path = dir.join("config.json");
                 std::fs::read_to_string(path).ok().and_then(|c| {
-                    serde_json::from_str::<serde_json::Value>(&c).ok().and_then(|j| {
-                        j.get("glitchtipDsn")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.trim().to_string())
-                            .filter(|s| !s.is_empty())
-                    })
+                    serde_json::from_str::<serde_json::Value>(&c)
+                        .ok()
+                        .and_then(|j| {
+                            j.get("glitchtipDsn")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.trim().to_string())
+                                .filter(|s| !s.is_empty())
+                        })
                 })
             })
         })

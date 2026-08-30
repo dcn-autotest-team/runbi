@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { classifyContext } from '@runbi/shared/core';
+import { classifyContext, shouldSuppressCapsule } from '@runbi/shared/core';
 
 describe('Context Auto-Sense Classifier', () => {
   it('detects chat app + question text as reply', () => {
@@ -52,5 +52,23 @@ describe('Context Auto-Sense Classifier', () => {
       sourceApp: 'Weixin.exe',
     });
     expect(c.style).toBe('reply');
+  });
+});
+
+describe('Mini Capsule Suppression (微胶囊防误触)', () => {
+  it('suppresses empty and tiny selections', () => {
+    expect(shouldSuppressCapsule('')).toBe(true);
+    expect(shouldSuppressCapsule('   ')).toBe(true);
+    expect(shouldSuppressCapsule('好')).toBe(true);
+    expect(shouldSuppressCapsule('好的')).toBe(true);
+    expect(shouldSuppressCapsule('好的，')).toBe(true);
+    expect(shouldSuppressCapsule('ok')).toBe(true);
+    expect(shouldSuppressCapsule('test')).toBe(true);
+  });
+
+  it('lets meaningful selections through', () => {
+    expect(shouldSuppressCapsule('好的收到')).toBe(false);
+    expect(shouldSuppressCapsule('hello world')).toBe(false);
+    expect(shouldSuppressCapsule('测试了ok')).toBe(false);
   });
 });

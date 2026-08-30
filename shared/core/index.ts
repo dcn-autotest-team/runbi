@@ -5,9 +5,13 @@
 
 export * from './diff';
 export * from './prompts';
+export * from './bannedWords';
 export * from './mockStream';
 export * from './selection';
 export * from './position';
 export * from './context';
 export * from './endpoint';
 export * from './capturedSelection';
+export * from './scriptLibrary';
+export * from './expertAgents';
+export * from './localModels';

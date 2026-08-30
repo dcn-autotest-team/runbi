@@ -54,11 +54,27 @@ export async function ensureOriginPermission(endpoint: string): Promise<string |
  * client and this background worker MUST produce identical prompts for the
  * same style/instruction pair. Do NOT re-declare prompt text here.
  */
-export function buildSystemPrompt(style: PolishStyle, customPrompt?: string, userInstruction?: string): string {
+export function buildSystemPrompt(
+  style: PolishStyle,
+  customPrompt?: string,
+  userInstruction?: string,
+  personaPrompt?: string,
+  packPrompt?: string,
+  glossaryPrompt?: string,
+  styleSamplesPrompt?: string,
+  appStylePrompt?: string,
+  latexGuard?: boolean
+): string {
   return sharedBuildSystemPrompt({
     style,
     customPromptOverride: customPrompt,
     userInstruction,
+    personaPrompt,
+    packPrompt,
+    glossaryPrompt,
+    styleSamplesPrompt,
+    appStylePrompt,
+    latexGuard,
   });
 }
 
@@ -106,7 +122,7 @@ export async function streamRealCompletions(
       body: JSON.stringify({
         model: config.model || 'deepseek-chat',
         messages: [
-          { role: 'system', content: buildSystemPrompt(config.style, config.customPrompt, config.userInstruction) },
+          { role: 'system', content: buildSystemPrompt(config.style, config.customPrompt, config.userInstruction, config.personaPrompt, config.packPrompt, config.glossaryPrompt, config.styleSamplesPrompt, config.appStylePrompt, config.latexGuard) },
           { role: 'user', content: userPrompt },
         ],
         stream: true,

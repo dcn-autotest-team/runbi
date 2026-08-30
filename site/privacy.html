@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="润笔 Runbi 数据与隐私说明：文本直连用户配置的模型端点，遥测默认关闭。" />
+  <meta name="theme-color" content="#10201c" />
+  <title>数据与隐私说明 — 润笔 Runbi</title>
+  <link rel="icon" type="image/png" href="favicon-64.png" />
+  <link rel="stylesheet" href="information.css" />
+</head>
+<body>
+  <a class="skip-link" href="#main-content">跳到主要内容</a>
+  <header><nav class="container"><a class="brand" href="index.html"><img src="assets/runbi-logo.png" alt="" />润笔 Runbi</a><div class="nav-links"><a href="index.html#workflow">工作方式</a><a href="support.html">安装与支持</a><a href="privacy.html">隐私</a></div><a class="button" href="https://github.com/dcn-autotest-team/runbi-updates/releases/latest" target="_blank" rel="noopener">下载最新版</a></nav></header>
+  <main id="main-content" class="container">
+    <p class="eyebrow">Data & Privacy</p>
+    <h1>数据路径，应当清楚地写出来。</h1>
+    <p class="lead">本说明适用于桌面客户端 1.0.1+ 与 Chrome 扩展 1.0.0+。润笔不运营用于转发或存储用户文本的中间服务器；选中文本只会发往你在设置中配置的模型服务端点。</p>
+    <div class="notice">最后更新：2026-08-29。模型服务商自身的数据处理规则、留存政策与计费规则由该服务商决定，请在配置前自行确认。</div>
+    <nav class="toc" aria-label="本页目录"><a href="#text">文本</a><a href="#screenshot">截图</a><a href="#storage">本地存储</a><a href="#telemetry">遥测</a><a href="#update">更新</a></nav>
+    <section id="text"><h2>1. 选中文本与剪贴板内容</h2><p>选中的文本在本地内存中处理后，仅发送到你自行填写的模型服务端点，例如兼容的公共服务或私有网关。润笔厂商不提供、经过或存储该请求的中转服务。</p><div class="grid"><article class="card"><h3>本地敏感信息拦截</h3><p>桌面端会拦截疑似密码、密钥、UUID、手机号、身份证号与银行卡号等整段敏感文本，不弹出、不发送。</p></article><article class="card"><h3>密码输入框</h3><p>浏览器扩展不会读取 <code>type=password</code> 输入框中的内容。</p></article></div></section>
+    <section id="screenshot"><h2>2. 屏幕截图</h2><p>仅在你主动开启“智能回复视觉感知”并在聊天场景触发时，前台窗口截图会作为视觉输入发送到你配置的模型端点。该功能默认关闭，首次触发会明确询问；关闭后不发生截图。</p><p>截图仅存在于内存中用于当次请求，不落盘，也不会上传至润笔厂商。</p></section>
+    <section id="storage"><h2>3. 保存在本机的数据</h2><table><thead><tr><th>数据</th><th>位置</th><th>说明</th></tr></thead><tbody><tr><td>API Key</td><td>桌面端配置目录</td><td>使用 Windows DPAPI 加密，绑定当前用户。</td></tr><tr><td>润色历史</td><td>桌面端配置目录</td><td>默认近 100 条，可在设置中清除。</td></tr><tr><td>运行日志</td><td>桌面端配置目录</td><td>仅元数据，可在设置中清除。</td></tr><tr><td>扩展配置</td><td>chrome.storage.local</td><td>保存在浏览器配置目录中。</td></tr></tbody></table><p>如需在卸载后完整清除桌面端本地数据，可手动删除 <code>%APPDATA%\com.runbi.desktop</code>。</p></section>
+    <section id="telemetry"><h2>4. 遥测与错误上报</h2><p>默认状态下不进行网络上报。只有当你主动开启错误上报并配置 DSN 时，才会上报错误堆栈与崩溃信息；上报内容会剥离请求体，不包含你选中或润色的文本。</p></section>
+    <section id="update"><h2>5. 自动更新</h2><p>桌面端会向公开分发仓库检查并下载更新包。发布包的签名校验通过后才会安装；此过程不携带你的选中文本或模型 Key。</p></section>
+    <section><div class="contact"><h2>还有隐私问题？</h2><p>安全、数据或隐私问题请通过公开问题反馈渠道提交。重大政策变更会在 Release 说明中标注。</p><a class="button" href="https://github.com/dcn-autotest-team/runbi-updates/issues" target="_blank" rel="noopener">提交问题反馈</a></div></section>
+  </main>
+  <footer><div class="container footer-inner"><span>润笔 Runbi · 数据与隐私说明</span><span><a href="index.html">返回首页</a> · <a href="support.html">安装与支持</a></span></div></footer>
+</body>
+</html>

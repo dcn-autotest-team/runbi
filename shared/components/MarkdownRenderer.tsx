@@ -87,7 +87,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
           return (
             <div key={idx} className="h-1.5">
               {isLastLine && isGenerating && (
-                <span className="inline-block h-3.5 w-1.5 rounded-sm bg-[#00BFA5] align-middle animate-cursor-blink" />
+                <span className="inline-block h-3.5 w-1.5 rounded-sm bg-gray-300 align-middle animate-cursor-blink" />
               )}
             </div>
           );
@@ -104,7 +104,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
               <div className="min-w-0 flex-1 break-words">
                 {renderInlineMarkdown(numMatch[3])}
                 {isLastLine && isGenerating && (
-                  <span className="ml-1 inline-block h-3.5 w-1.5 rounded-sm bg-[#00BFA5] align-middle animate-cursor-blink" />
+                  <span className="ml-1 inline-block h-3.5 w-1.5 rounded-sm bg-gray-300 align-middle animate-cursor-blink" />
                 )}
               </div>
             </div>
@@ -120,7 +120,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
               <div className="min-w-0 flex-1 break-words">
                 {renderInlineMarkdown(bulletMatch[3])}
                 {isLastLine && isGenerating && (
-                  <span className="ml-1 inline-block h-3.5 w-1.5 rounded-sm bg-[#00BFA5] align-middle animate-cursor-blink" />
+                  <span className="ml-1 inline-block h-3.5 w-1.5 rounded-sm bg-gray-300 align-middle animate-cursor-blink" />
                 )}
               </div>
             </div>
@@ -141,7 +141,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
             <div key={idx} className={headingClass}>
               {renderInlineMarkdown(headingMatch[2])}
               {isLastLine && isGenerating && (
-                <span className="ml-1 inline-block h-3.5 w-1.5 rounded-sm bg-[#00BFA5] align-middle animate-cursor-blink" />
+                <span className="ml-1 inline-block h-3.5 w-1.5 rounded-sm bg-gray-300 align-middle animate-cursor-blink" />
               )}
             </div>
           );
@@ -156,7 +156,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
             >
               {renderInlineMarkdown(line.slice(1).trim())}
               {isLastLine && isGenerating && (
-                <span className="ml-1 inline-block h-3.5 w-1.5 rounded-sm bg-[#00BFA5] align-middle animate-cursor-blink" />
+                <span className="ml-1 inline-block h-3.5 w-1.5 rounded-sm bg-gray-300 align-middle animate-cursor-blink" />
               )}
             </div>
           );
@@ -167,7 +167,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
           <div key={idx} className="leading-relaxed">
             {renderInlineMarkdown(line)}
             {isLastLine && isGenerating && (
-              <span className="ml-1 inline-block h-3.5 w-1.5 rounded-sm bg-[#00BFA5] align-middle animate-cursor-blink" />
+              <span className="ml-1 inline-block h-3.5 w-1.5 rounded-sm bg-gray-300 align-middle animate-cursor-blink" />
             )}
           </div>
         );

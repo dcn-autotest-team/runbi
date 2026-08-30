@@ -37,7 +37,7 @@ export const ActionBar: React.FC<ActionBarProps> = ({
     <div
       className={`flex shrink-0 items-center justify-between gap-2 border-t border-slate-200/70 pt-2.5 select-none dark:border-white/[0.08] ${className}`}
     >
-      {/* 🔄 换个说法 (Regenerate) */}
+      {/* 换个说法 (Regenerate) */}
       <div className="flex items-center gap-1.5">
         {leftSlot}
         <button
@@ -66,7 +66,7 @@ export const ActionBar: React.FC<ActionBarProps> = ({
       </div>
 
       <div className="flex items-center gap-2">
-        {/* 📋 复制结果 (Copy) */}
+        {/* 复制结果 (Copy) */}
         <button
           id="runbi-action-copy"
           type="button"
@@ -94,7 +94,7 @@ export const ActionBar: React.FC<ActionBarProps> = ({
           <span>{copyLabel}</span>
         </button>
 
-        {/* ⚡ 替换原文 (Replace) */}
+        {/* 替换原文 (Replace) */}
         <button
           id="runbi-action-replace"
           type="button"

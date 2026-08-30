@@ -27,6 +27,8 @@ describe('Desktop Onboarding: OnboardingView Component', () => {
     onDismiss: () => void;
     shortcut?: string;
     autoCloseSeconds?: number;
+    hasApiKey?: boolean;
+    onOpenSettings?: () => void;
   }) => {
     const root = createRoot(container);
     await act(async () => {
@@ -111,7 +113,7 @@ describe('Desktop Onboarding: OnboardingView Component', () => {
     });
 
     const dismissBtn = Array.from(container.querySelectorAll('button')).find(
-      (b) => b.textContent?.includes('立即体验')
+      (b) => b.textContent?.includes('开始体验')
     );
     expect(dismissBtn).toBeDefined();
 
@@ -120,6 +122,36 @@ describe('Desktop Onboarding: OnboardingView Component', () => {
     });
 
     expect(handleDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows a no-key guidance card with a working 去配置 button for first-run users', async () => {
+    const handleDismiss = vi.fn();
+    const handleOpenSettings = vi.fn();
+    await renderComponent({
+      onDismiss: handleDismiss,
+      autoCloseSeconds: 5,
+      hasApiKey: false,
+      onOpenSettings: handleOpenSettings,
+    });
+
+    const text = container.textContent || '';
+    expect(text).toContain('不用注册任何账号');
+    expect(text).toContain('内置演示模式');
+
+    const gotoBtn = Array.from(container.querySelectorAll('button')).find(
+      (b) => b.textContent?.includes('去配置')
+    );
+    expect(gotoBtn).toBeTruthy();
+    await act(async () => {
+      gotoBtn?.click();
+    });
+    expect(handleOpenSettings).toHaveBeenCalledTimes(1);
+    expect(handleDismiss).not.toHaveBeenCalled();
+  });
+
+  it('hides the no-key guidance card when an API key exists', async () => {
+    await renderComponent({ onDismiss: vi.fn(), hasApiKey: true });
+    expect(container.textContent || '').not.toContain('不用注册任何账号');
   });
 
   it('auto-dismisses when countdown expires', async () => {

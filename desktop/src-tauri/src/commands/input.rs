@@ -53,11 +53,7 @@ pub unsafe fn simulate_ctrl_c() {
         dwExtraInfo: 0,
     };
 
-    SendInput(
-        4,
-        inputs.as_mut_ptr(),
-        std::mem::size_of::<INPUT>() as i32,
-    );
+    SendInput(4, inputs.as_mut_ptr(), std::mem::size_of::<INPUT>() as i32);
 }
 
 #[cfg(not(windows))]
@@ -111,11 +107,7 @@ pub unsafe fn simulate_ctrl_v() {
         dwExtraInfo: 0,
     };
 
-    SendInput(
-        4,
-        inputs.as_mut_ptr(),
-        std::mem::size_of::<INPUT>() as i32,
-    );
+    SendInput(4, inputs.as_mut_ptr(), std::mem::size_of::<INPUT>() as i32);
 }
 
 #[cfg(not(windows))]
@@ -133,8 +125,8 @@ fn supports_synchronous_paste(class_name: &str) -> bool {
 pub unsafe fn paste_via_focused_control() -> bool {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetClassNameW, GetForegroundWindow, GetGUIThreadInfo, GetWindowLongPtrW,
-        GetWindowThreadProcessId, SendMessageTimeoutW, GUITHREADINFO, GWL_STYLE,
-        SMTO_ABORTIFHUNG, SMTO_BLOCK, WM_PASTE,
+        GetWindowThreadProcessId, SendMessageTimeoutW, GUITHREADINFO, GWL_STYLE, SMTO_ABORTIFHUNG,
+        SMTO_BLOCK, WM_PASTE,
     };
 
     let foreground = GetForegroundWindow();
@@ -147,7 +139,11 @@ pub unsafe fn paste_via_focused_control() -> bool {
     if thread_id == 0 || GetGUIThreadInfo(thread_id, &mut info) == 0 {
         return false;
     }
-    let target = if info.hwndFocus.is_null() { foreground } else { info.hwndFocus };
+    let target = if info.hwndFocus.is_null() {
+        foreground
+    } else {
+        info.hwndFocus
+    };
     let mut class_buf = [0u16; 128];
     let class_len = GetClassNameW(target, class_buf.as_mut_ptr(), class_buf.len() as i32);
     if class_len <= 0
@@ -179,8 +175,12 @@ pub unsafe fn paste_via_focused_control() -> bool {
 
 /// Sets `is_internal_action` flag across all monitor states and optionally updates recorded texts.
 pub fn set_internal_action(app: &AppHandle, is_internal: bool, updated_text: Option<&str>) {
-    if let Some(state) = app.try_state::<crate::commands::clipboard_monitor::ClipboardMonitorState>() {
-        state.is_internal_action.store(is_internal, Ordering::SeqCst);
+    if let Some(state) =
+        app.try_state::<crate::commands::clipboard_monitor::ClipboardMonitorState>()
+    {
+        state
+            .is_internal_action
+            .store(is_internal, Ordering::SeqCst);
         if let Some(text) = updated_text {
             if let Ok(mut last) = state.last_content.lock() {
                 *last = text.to_string();
@@ -188,7 +188,9 @@ pub fn set_internal_action(app: &AppHandle, is_internal: bool, updated_text: Opt
         }
     }
     if let Some(state) = app.try_state::<crate::commands::mouse_hook::SelectionMonitorState>() {
-        state.is_internal_action.store(is_internal, Ordering::SeqCst);
+        state
+            .is_internal_action
+            .store(is_internal, Ordering::SeqCst);
         if let Some(text) = updated_text {
             if let Ok(mut last) = state.last_selected_text.lock() {
                 *last = text.to_string();

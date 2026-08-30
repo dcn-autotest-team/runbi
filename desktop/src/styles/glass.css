@@ -9,17 +9,17 @@
 
 :root {
   /* Brand Colors */
-  --runbi-jade-primary: #00BFA5;
-  --runbi-jade-hover: #00A892;
-  --runbi-jade-active: #008F7C;
-  --runbi-jade-glow: rgba(0, 191, 165, 0.35);
+  --runbi-jade-primary: #D1D5DB;
+  --runbi-jade-hover: #9CA3AF;
+  --runbi-jade-active: #6B7280;
+  --runbi-jade-glow: rgba(209, 213, 219, 0.30);
 
   /* Dark Acrylic Glass Tokens */
   --runbi-acrylic-bg: rgba(18, 26, 28, 0.84);
   --runbi-acrylic-card: rgba(28, 40, 44, 0.65);
   --runbi-acrylic-input: rgba(14, 20, 22, 0.75);
   --runbi-acrylic-border: rgba(255, 255, 255, 0.12);
-  --runbi-acrylic-border-glow: rgba(0, 191, 165, 0.45);
+  --runbi-acrylic-border-glow: rgba(209, 213, 219, 0.40);
   
   /* Text Tokens */
   --runbi-text-primary: #F8FAFC;
@@ -33,12 +33,12 @@
   --runbi-control-hover: rgba(255, 255, 255, 0.08);
   --runbi-border: rgba(255, 255, 255, 0.12);
   --runbi-border-strong: rgba(255, 255, 255, 0.18);
-  --runbi-focus: rgba(45, 212, 191, 0.52);
-  --runbi-button-primary: #5eead4;
-  --runbi-button-primary-hover: #99f6e4;
-  --runbi-button-primary-text: #071311;
+  --runbi-focus: rgba(209, 213, 219, 0.55);
+  --runbi-button-primary: #E5E7EB;
+  --runbi-button-primary-hover: #F3F4F6;
+  --runbi-button-primary-text: #111827;
   --runbi-button-secondary: rgba(255, 255, 255, 0.06);
-  --runbi-button-shadow: rgba(45, 212, 191, 0.9);
+  --runbi-button-shadow: rgba(209, 213, 219, 0.8);
   --runbi-transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
   --runbi-transition-base: 240ms cubic-bezier(0.16, 1, 0.3, 1);
   
@@ -68,7 +68,7 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.12);
   box-shadow: 0 24px 60px -15px rgba(0, 0, 0, 0.95),
               0 0 0 1px rgba(255, 255, 255, 0.05) inset,
-              0 16px 40px -20px rgba(0, 191, 165, 0.35);
+              0 16px 40px -20px rgba(0, 0, 0, 0.45);
 }
 
 .runbi-icon-button {
@@ -99,6 +99,82 @@ body {
   outline-offset: 2px;
 }
 
+/* Compact selection toolbar: legible over arbitrary desktop apps without
+   becoming a second panel. Motion uses transform/opacity only. */
+.runbi-selection-capsule {
+  color: rgba(248, 250, 252, 0.82);
+  background: rgba(30, 31, 34, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.34),
+              0 2px 8px rgba(0, 0, 0, 0.24),
+              inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(18px) saturate(135%);
+  transform-origin: 20px 50%;
+  transition: opacity 160ms ease-out, transform 160ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.runbi-selection-capsule.is-visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.runbi-selection-capsule.is-hidden {
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(3px) scale(0.97);
+}
+
+.runbi-selection-action {
+  color: rgba(226, 232, 240, 0.76);
+  background: transparent;
+  transition: color 120ms ease, background-color 120ms ease, transform 120ms ease;
+}
+
+.runbi-selection-action:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.10);
+}
+
+.runbi-selection-action:active {
+  transform: scale(0.92);
+}
+
+.runbi-selection-action.is-success {
+  color: #5eead4;
+  background: rgba(20, 184, 166, 0.14);
+}
+
+html[data-theme='light'] .runbi-selection-capsule {
+  color: #374151;
+  background: rgba(255, 255, 255, 0.96);
+  border-color: rgba(17, 24, 39, 0.12);
+  box-shadow: 0 12px 30px rgba(17, 24, 39, 0.16),
+              0 2px 8px rgba(17, 24, 39, 0.10),
+              inset 0 1px 0 rgba(255, 255, 255, 0.85);
+}
+
+html[data-theme='light'] .runbi-selection-action {
+  color: #6b7280;
+}
+
+html[data-theme='light'] .runbi-selection-action:hover {
+  color: #111827;
+  background: rgba(17, 24, 39, 0.07);
+}
+
+html[data-theme='light'] .runbi-selection-action.is-success {
+  color: #0f766e;
+  background: rgba(13, 148, 136, 0.10);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .runbi-selection-capsule,
+  .runbi-selection-action {
+    transition: none;
+  }
+}
+
 .runbi-form-control {
   width: 100%;
   min-height: 2.25rem;
@@ -120,7 +196,7 @@ body {
 .runbi-form-control:focus-visible {
   outline: none;
   border-color: var(--runbi-jade-primary);
-  box-shadow: 0 0 0 3px rgba(0, 191, 165, 0.16);
+  box-shadow: 0 0 0 3px rgba(209, 213, 219, 0.18);
 }
 
 .runbi-primary-button,
@@ -193,7 +269,7 @@ body {
 }
 
 .runbi-settings-scroll::-webkit-scrollbar-thumb:hover {
-  background: rgba(45, 212, 191, 0.55);
+  background: rgba(209, 213, 219, 0.55);
 }
 
 .runbi-enter {
@@ -279,7 +355,7 @@ body {
   border: 1px solid var(--runbi-acrylic-border);
   box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7),
               0 0 0 1px rgba(255, 255, 255, 0.08) inset,
-              0 10px 30px -5px rgba(0, 191, 165, 0.18);
+              0 10px 30px -5px rgba(0, 0, 0, 0.30);
   border-radius: 18px;
   overflow: hidden;
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
@@ -288,8 +364,8 @@ body {
 .raycast-window:focus-within {
   border-color: var(--runbi-acrylic-border-glow);
   box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.75),
-              0 0 0 1px rgba(0, 191, 165, 0.25) inset,
-              0 12px 36px -4px rgba(0, 191, 165, 0.25);
+              0 0 0 1px rgba(209, 213, 219, 0.25) inset,
+              0 12px 36px -4px rgba(209, 213, 219, 0.20);
 }
 
 /* Acrylic Cards */
@@ -311,7 +387,7 @@ body {
 .spotlight-input:focus {
   outline: none;
   border-color: var(--runbi-jade-primary);
-  box-shadow: 0 0 0 2px rgba(0, 191, 165, 0.25);
+  box-shadow: 0 0 0 2px rgba(209, 213, 219, 0.25);
 }
 
 /* Shortcut Badges */
@@ -363,4 +439,265 @@ body {
 @keyframes typewriterBlink {
   0%, 100% { opacity: 1; }
   50% { opacity: 0; }
+}
+
+/* ── 窗口透明度竖向滑杆(标题栏水滴按钮弹出) ── */
+.runbi-opacity-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  writing-mode: vertical-lr;
+  direction: rtl;
+  width: 4px;
+  height: 104px;
+  padding: 0;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.18);
+  outline: none;
+  cursor: pointer;
+}
+.runbi-opacity-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #E5E7EB;
+  border: none;
+  box-shadow: 0 0 8px rgba(229, 231, 235, 0.50);
+  cursor: grab;
+}
+.runbi-opacity-slider::-webkit-slider-thumb:active {
+  cursor: grabbing;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   主题:浅色 (light)
+   html[data-theme='light'] 作用域覆盖:
+   表面 → 白/浅灰,结构文字 → 深灰,品牌色 → 中国红(加深保证对比度)。
+   只重映射桌面端实际用到的 class;dark: 前缀变体未激活,不处理。
+   ═══════════════════════════════════════════════════════════════ */
+html[data-theme='light'] {
+  --runbi-jade-primary: #dc2626;
+  --runbi-jade-hover: #b91c1c;
+  --runbi-jade-active: #991b1b;
+  --runbi-jade-glow: rgba(220, 38, 38, 0.35);
+  --runbi-acrylic-bg: rgba(255, 255, 255, 0.92);
+  --runbi-acrylic-card: rgba(249, 250, 251, 0.85);
+  --runbi-acrylic-input: rgba(255, 255, 255, 0.95);
+  --runbi-acrylic-border: rgba(17, 24, 39, 0.10);
+  --runbi-acrylic-border-glow: rgba(220, 38, 38, 0.40);
+  --runbi-text-primary: #1f2937;
+  --runbi-text-secondary: #6b7280;
+  --runbi-text-muted: #9ca3af;
+  --runbi-window-bg: rgba(255, 255, 255, 0.94);
+  --runbi-panel-bg: #ffffff;
+  --runbi-control-bg: rgba(17, 24, 39, 0.04);
+  --runbi-control-hover: rgba(17, 24, 39, 0.07);
+  --runbi-border: rgba(17, 24, 39, 0.10);
+  --runbi-border-strong: rgba(17, 24, 39, 0.16);
+  --runbi-focus: rgba(220, 38, 38, 0.50);
+  --runbi-button-primary: #dc2626;
+  --runbi-button-primary-hover: #b91c1c;
+  --runbi-button-primary-text: #ffffff;
+  --runbi-button-secondary: rgba(17, 24, 39, 0.06);
+  --runbi-button-shadow: rgba(220, 38, 38, 0.85);
+}
+
+html[data-theme='light'] .runbi-window {
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(17, 24, 39, 0.10);
+  box-shadow: 0 24px 60px -15px rgba(17, 24, 39, 0.25),
+              0 0 0 1px rgba(17, 24, 39, 0.04) inset,
+              0 16px 40px -20px rgba(220, 38, 38, 0.25);
+}
+
+html[data-theme='light'] .runbi-form-control {
+  background: #ffffff;
+  border-color: rgba(17, 24, 39, 0.14);
+  color: #1f2937;
+}
+
+html[data-theme='light'] .runbi-logo-tile {
+  border-color: rgba(220, 38, 38, 0.30);
+  background: rgba(220, 38, 38, 0.10);
+  color: #dc2626;
+  box-shadow: 0 0 12px rgba(220, 38, 38, 0.16);
+}
+
+html[data-theme='light'] .runbi-accent-bg {
+  background: #dc2626;
+  color: #ffffff;
+}
+
+/* ── 标题栏/容器硬编码灰面 → 白灰 ── */
+html[data-theme='light'] .bg-black\/20 { background-color: rgba(17, 24, 39, 0.04); }
+html[data-theme='light'] .bg-white\/5 { background-color: rgba(17, 24, 39, 0.04); }
+html[data-theme='light'] .bg-white\/10 { background-color: rgba(17, 24, 39, 0.07); }
+html[data-theme='light'] .hover\:bg-white\/10:hover { background-color: rgba(17, 24, 39, 0.07); }
+html[data-theme='light'] .border-white\/10 { border-color: rgba(17, 24, 39, 0.10); }
+html[data-theme='light'] .border-white\/20 { border-color: rgba(17, 24, 39, 0.15); }
+html[data-theme='light'] .border-white\/5 { border-color: rgba(17, 24, 39, 0.07); }
+html[data-theme='light'] .bg-\[\#0b1512\]\/95 { background-color: rgba(255, 255, 255, 0.97); border-color: rgba(17, 24, 39, 0.10); }
+html[data-theme='light'] .text-slate-100 { color: #111827; }
+html[data-theme='light'] .text-slate-200 { color: #1f2937; }
+html[data-theme='light'] .text-slate-300 { color: #374151; }
+html[data-theme='light'] .text-slate-400 { color: #6b7280; }
+html[data-theme='light'] .text-slate-500 { color: #6b7280; }
+
+/* ── 品牌青 → 中国红(文字统一加深一档,白底/淡红底上 ≥4.5:1) ── */
+html[data-theme='light'] .text-teal-300,
+html[data-theme='light'] .text-teal-400,
+html[data-theme='light'] .text-teal-500,
+html[data-theme='light'] .text-teal-200,
+html[data-theme='light'] .text-teal-200\/90,
+html[data-theme='light'] .text-teal-400\/80 { color: #b91c1c; }
+html[data-theme='light'] .text-teal-600 { color: #b91c1c; }
+html[data-theme='light'] .text-teal-800 { color: #991b1b; }
+html[data-theme='light'] .hover\:text-teal-300:hover,
+html[data-theme='light'] .hover\:text-teal-400:hover,
+html[data-theme='light'] .hover\:text-teal-500:hover,
+html[data-theme='light'] .hover\:text-teal-200:hover,
+html[data-theme='light'] .hover\:text-teal-600:hover { color: #991b1b; }
+
+html[data-theme='light'] .bg-teal-500,
+html[data-theme='light'] .bg-teal-400 { background-color: #dc2626; }
+html[data-theme='light'] .hover\:bg-teal-300:hover,
+html[data-theme='light'] .hover\:bg-teal-500:hover,
+html[data-theme='light'] .active\:bg-teal-500:active { background-color: #b91c1c; }
+html[data-theme='light'] .bg-teal-500\/10 { background-color: rgba(220, 38, 38, 0.10); }
+html[data-theme='light'] .bg-teal-500\/15 { background-color: rgba(220, 38, 38, 0.15); }
+html[data-theme='light'] .bg-teal-500\/20 { background-color: rgba(220, 38, 38, 0.20); }
+html[data-theme='light'] .bg-teal-500\/25,
+html[data-theme='light'] .hover\:bg-teal-500\/25:hover,
+html[data-theme='light'] .hover\:bg-teal-500\/30:hover,
+html[data-theme='light'] .group-hover\:bg-teal-500\/30:hover { background-color: rgba(220, 38, 38, 0.30); }
+html[data-theme='light'] .bg-teal-400\/10 { background-color: rgba(248, 113, 113, 0.10); }
+html[data-theme='light'] .bg-teal-400\/20,
+html[data-theme='light'] .hover\:bg-teal-400\/20:hover { background-color: rgba(248, 113, 113, 0.20); }
+html[data-theme='light'] .bg-teal-50,
+html[data-theme='light'] .hover\:bg-teal-50:hover,
+html[data-theme='light'] .bg-teal-50\/30 { background-color: #fef2f2; }
+html[data-theme='light'] .bg-teal-100 { background-color: #fee2e2; }
+
+html[data-theme='light'] .border-teal-200,
+html[data-theme='light'] .border-teal-200\/80 { border-color: #fecaca; }
+html[data-theme='light'] .border-teal-300\/50 { border-color: rgba(252, 165, 165, 0.60); }
+html[data-theme='light'] .border-teal-400 { border-color: #fca5a5; }
+html[data-theme='light'] .border-teal-400\/20,
+html[data-theme='light'] .border-teal-400\/30 { border-color: rgba(252, 165, 165, 0.45); }
+html[data-theme='light'] .border-teal-500\/20 { border-color: rgba(220, 38, 38, 0.22); }
+html[data-theme='light'] .border-teal-500\/30,
+html[data-theme='light'] .border-teal-500\/40,
+html[data-theme='light'] .border-teal-500\/50 { border-color: rgba(220, 38, 38, 0.35); }
+html[data-theme='light'] .hover\:border-teal-500\/30:hover,
+html[data-theme='light'] .hover\:border-teal-500\/40:hover,
+html[data-theme='light'] .hover\:border-teal-500\/50:hover,
+html[data-theme='light'] .hover\:border-teal-500\/60:hover,
+html[data-theme='light'] .focus\:border-teal-500\/50:focus { border-color: rgba(220, 38, 38, 0.50); }
+
+/* 品牌磁贴/主按钮(深色默认,浅色主题在上方覆盖) */
+.runbi-logo-tile {
+  border-color: rgba(209, 213, 219, 0.30);
+  background: rgba(209, 213, 219, 0.12);
+  color: #E5E7EB;
+  box-shadow: 0 0 12px rgba(0, 0, 0, 0.35);
+}
+.runbi-accent-bg {
+  background: #E5E7EB;
+  color: #111827;
+}
+
+/* 浅色:硬编码品牌 hex 的图标/按钮一并转红(加深) */
+html[data-theme='light'] .text-\[\#00BFA5\] { color: #b91c1c; }
+html[data-theme='light'] .bg-\[\#00BFA5\] { background-color: #dc2626; }
+html[data-theme='light'] .hover\:bg-\[\#00A892\]:hover { background-color: #b91c1c; }
+html[data-theme='light'] .border-\[\#00BFA5\],
+html[data-theme='light'] .focus-within\:border-\[\#00BFA5\]:focus-within { border-color: #dc2626; }
+html[data-theme='light'] .ring-\[\#00BFA5\]\/20,
+html[data-theme='light'] .focus-within\:ring-\[\#00BFA5\]\/20:focus-within { --tw-ring-color: rgba(220, 38, 38, 0.20); }
+
+/* ── 浅色:漏网的硬编码暗色表面 → 白灰 ──
+   历史抽屉(#13191c)/引导页(#12181b)/风格下拉(#162023)/Toast(slate-900)
+   以及设置分组用的 bg-black/30~50。漏掉的会变成"暗底配红字",对比度灾难。 */
+html[data-theme='light'] .bg-\[\#13191c\] { background-color: #ffffff; }
+html[data-theme='light'] .bg-\[\#12181b\] { background-color: #f8fafc; }
+html[data-theme='light'] .bg-\[\#162023\]\/95 { background-color: rgba(255, 255, 255, 0.97); }
+html[data-theme='light'] .bg-slate-900\/90 { background-color: rgba(255, 255, 255, 0.96); }
+html[data-theme='light'] .bg-black\/10 { background-color: rgba(17, 24, 39, 0.03); }
+html[data-theme='light'] .bg-black\/30 { background-color: rgba(17, 24, 39, 0.05); }
+html[data-theme='light'] .bg-black\/40 { background-color: rgba(17, 24, 39, 0.06); }
+html[data-theme='light'] .bg-black\/50 { background-color: rgba(17, 24, 39, 0.08); }
+html[data-theme='light'] .hover\:bg-black\/30:hover { background-color: rgba(17, 24, 39, 0.08); }
+html[data-theme='light'] .bg-white\/\[0\.03\] { background-color: rgba(17, 24, 39, 0.03); }
+html[data-theme='light'] .bg-white\/\[0\.05\] { background-color: rgba(17, 24, 39, 0.04); }
+html[data-theme='light'] .hover\:bg-white\/5:hover { background-color: rgba(17, 24, 39, 0.05); }
+html[data-theme='light'] .border-white\/15 { border-color: rgba(17, 24, 39, 0.12); }
+
+/* ── 浅色:结构白字 → 深灰;品牌实底上的白字用复合选择器保白 ── */
+html[data-theme='light'] .text-white { color: #111827; }
+html[data-theme='light'] .hover\:text-white:hover { color: #111827; }
+html[data-theme='light'] .hover\:text-slate-100:hover { color: #111827; }
+html[data-theme='light'] .hover\:text-slate-200:hover { color: #374151; }
+html[data-theme='light'] .bg-\[\#00BFA5\].text-white { color: #ffffff; }
+html[data-theme='light'] .bg-teal-500.text-white { color: #ffffff; }
+
+/* ── 浅色:组件裸写的原生 gray 系(发送按钮/激活项/警示图标/拖拽边框) ──
+   深色下 gray-300 是亮灰文字;浅色下原值 #D1D5DB 坐白底 ≈1.4:1,必须翻转,
+   否则复发"灰底灰字"。 */
+html[data-theme='light'] .text-gray-300 { color: #6b7280; }
+html[data-theme='light'] .hover\:text-gray-300:hover { color: #4b5563; }
+html[data-theme='light'] .bg-gray-300 { background-color: #9ca3af; }
+html[data-theme='light'] .bg-gray-300\/20 { background-color: rgba(17, 24, 39, 0.08); }
+html[data-theme='light'] .hover\:bg-gray-400:hover { background-color: #6b7280; }
+html[data-theme='light'] .border-gray-300 { border-color: #9ca3af; }
+html[data-theme='light'] .focus-within\:border-gray-300:focus-within { border-color: #6b7280; }
+html[data-theme='light'] .border-gray-400\/50 { border-color: rgba(107, 114, 128, 0.50); }
+html[data-theme='light'] .ring-gray-300\/25,
+html[data-theme='light'] .focus-within\:ring-gray-300\/25:focus-within { --tw-ring-color: rgba(107, 114, 128, 0.25); }
+
+/* ── 浅色:rose 系提示文字加深(rose-300/400 白底不足 3:1) ── */
+html[data-theme='light'] .text-rose-300 { color: #e11d48; }
+html[data-theme='light'] .text-rose-400 { color: #e11d48; }
+html[data-theme='light'] .hover\:text-rose-300:hover,
+html[data-theme='light'] .hover\:text-rose-400:hover,
+html[data-theme='light'] .hover\:text-rose-500:hover { color: #be123c; }
+html[data-theme='light'] .border-rose-400\/30 { border-color: rgba(225, 29, 72, 0.45); }
+
+/* ── 浅色主题的透明度可见性修复 ──
+   深色的 .runbi-window 是不透明纯色 (#12181b),LWA_ALPHA 直接把整窗变淡;
+   浅色窗面是 rgba(255,255,255,0.94) 铺在白桌面上,再乘窗口 alpha,
+   视觉变化只有 6%,用户感知"没生效"。给浅色窗面降不透明度,
+   让窗口级 alpha 与内容透明度可感知叠加。 */
+html[data-theme='light'] .runbi-window {
+  background: rgba(255, 255, 255, 0.82);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Apple-style 深色主题微调
+   字体: SF Pro 栈(macOS 系统字体,Win 回退 Segoe UI Variable);
+   字距微收,数字用 tabular-nums;表面层次按 macOS 深色材质灰阶。
+   ═══════════════════════════════════════════════════════════════ */
+html {
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display',
+    'Segoe UI Variable Display', 'Segoe UI', 'Microsoft YaHei UI', 'PingFang SC',
+    'Helvetica Neue', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  letter-spacing: 0.01em;
+}
+
+html {
+  font-variant-numeric: tabular-nums;
+}
+
+/* macOS 深色材质: 窗面层次更接近 NSVisualEffectView 的 dark 材质 */
+html:not([data-theme='light']) .runbi-window {
+  background: rgba(28, 28, 30, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+}
+
+html:not([data-theme='light']) {
+  --runbi-window-bg: rgba(28, 28, 30, 0.94);
+  --runbi-panel-bg: #1C1C1E;
 }

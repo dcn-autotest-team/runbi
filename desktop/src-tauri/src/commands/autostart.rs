@@ -37,7 +37,9 @@ pub fn set_autostart(_app: AppHandle, enabled: bool) -> Result<bool, String> {
             let reg_val = format!("\"{}\" --autostart", exe_path);
 
             let status = Command::new("reg")
-                .args(["add", REG_KEY, "/v", APP_NAME, "/t", "REG_SZ", "/d", &reg_val, "/f"])
+                .args([
+                    "add", REG_KEY, "/v", APP_NAME, "/t", "REG_SZ", "/d", &reg_val, "/f",
+                ])
                 .status()
                 .map_err(|e| format!("Failed to add registry entry: {}", e))?;
 

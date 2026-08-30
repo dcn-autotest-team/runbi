@@ -8,6 +8,7 @@ import {
   DEFAULT_STYLE_PROMPTS,
   STYLE_PRESETS,
   SYSTEM_GUARDRAILS,
+  REPLY_GUARDRAILS,
   buildSystemPrompt,
   buildUserPrompt,
   interpolateTemplate,
@@ -16,8 +17,18 @@ import {
   buildScreenReplyRefinePrompt,
   buildTextReplySystemPrompt,
   buildTextReplyUserPrompt,
+  INTENT_CHIPS,
+  buildGlossaryPrompt,
+  buildStyleSamplesPrompt,
+  buildAppStylePrompt,
+  hasLatexMarkers,
+  extractLatexTokens,
+  findLatexViolations,
+  buildTranslateSystemPrompt,
+  TRANSLATE_TARGETS,
 } from '@runbi/shared/core/prompts';
 import type { PolishStyle } from '@runbi/shared/types/stream';
+import { INDUSTRY_PACKS } from '@runbi/shared/types/settings';
 
 describe('Shared Core: Prompt Engine & Dynamic Builder', () => {
   const styles: PolishStyle[] = [
@@ -28,10 +39,11 @@ describe('Shared Core: Prompt Engine & Dynamic Builder', () => {
     'concise',
     'native_en',
     'reply',
+    'translate',
   ];
 
   describe('Presets and Guardrails Configuration', () => {
-    it('should define distinct system prompts for all 7 styles', () => {
+    it('should define distinct system prompts for all 8 styles', () => {
       for (const style of styles) {
         expect(DEFAULT_STYLE_PROMPTS[style]).toBeDefined();
         expect(DEFAULT_STYLE_PROMPTS[style].length).toBeGreaterThan(10);
@@ -39,7 +51,7 @@ describe('Shared Core: Prompt Engine & Dynamic Builder', () => {
     });
 
     it('should contain metadata for each style preset in STYLE_PRESETS', () => {
-      expect(STYLE_PRESETS.length).toBe(7);
+      expect(STYLE_PRESETS.length).toBe(8);
       const presetIds = STYLE_PRESETS.map((p) => p.id);
       expect(presetIds).toEqual(styles);
 
@@ -132,6 +144,77 @@ describe('Shared Core: Prompt Engine & Dynamic Builder', () => {
     });
   });
 
+  describe('Reply Human-Feel Guardrails (anti AI-flavor)', () => {
+    it('should append REPLY_GUARDRAILS to every reply-path system prompt', () => {
+      const singleShot = buildSystemPrompt({ style: 'reply' });
+      const vision = buildSystemPrompt({ style: 'reply', hasVisionContext: true });
+      const textReply = buildSystemPrompt({
+        style: 'reply',
+        customPromptOverride: buildTextReplySystemPrompt(),
+      });
+      const screenReply = buildSystemPrompt({
+        style: 'reply',
+        customPromptOverride: buildScreenReplySystemPrompt(),
+      });
+
+      for (const prompt of [singleShot, vision, textReply, screenReply]) {
+        expect(prompt).toContain('真人感铁律');
+        expect(prompt).toContain('禁止脑补细节硬答');
+      }
+    });
+
+    it('should not append reply guardrails to polish styles', () => {
+      expect(buildSystemPrompt({ style: 'polished' })).not.toContain('真人感铁律');
+    });
+
+    it('should keep reply prompts free of AI-flavor wording', () => {
+      const replyPrompt = DEFAULT_STYLE_PROMPTS.reply;
+      expect(replyPrompt).not.toContain('高情商');
+      expect(replyPrompt).not.toContain('逻辑严密');
+      expect(buildSystemPrompt({ style: 'reply', hasVisionContext: true })).not.toContain('全面呼应');
+    });
+
+    it('should define the guardrail rules against customer-service tone', () => {
+      expect(REPLY_GUARDRAILS).toContain('不说客服腔');
+      expect(REPLY_GUARDRAILS).toContain('禁止分点列表');
+    });
+  });
+
+  describe('Industry Pack Injection', () => {
+    const csPack = INDUSTRY_PACKS.find((p) => p.id === 'we_commerce')!;
+    const generalPack = INDUSTRY_PACKS.find((p) => p.id === 'general')!;
+
+    it('should inject scene rules and pack-aligned clarify options into reply prompts', () => {
+      const screenPrompt = buildScreenReplySystemPrompt(undefined, csPack);
+      expect(screenPrompt).toContain('【行业场景规则】：');
+      expect(screenPrompt).toContain('微商');
+      expect(screenPrompt).toContain('"clarify_options": ["催付款","报物流"');
+
+      const textPrompt = buildTextReplySystemPrompt(undefined, csPack);
+      expect(textPrompt).toContain('【行业场景规则】：');
+      expect(textPrompt).toContain('"clarify_options": ["催付款","报物流"');
+    });
+
+    it('should keep prompts byte-identical when no pack or general pack is given', () => {
+      expect(buildScreenReplySystemPrompt()).toBe(buildScreenReplySystemPrompt(undefined, generalPack));
+      expect(buildTextReplySystemPrompt()).toBe(buildTextReplySystemPrompt(undefined, generalPack));
+      expect(buildScreenReplySystemPrompt()).not.toContain('行业场景规则');
+    });
+
+    it('should inject packPrompt into system and refine prompts', () => {
+      const sys = buildSystemPrompt({ style: 'reply', packPrompt: '测试行业规则XYZ' });
+      expect(sys).toContain('【行业场景规则】：\n测试行业规则XYZ');
+
+      const refine = buildScreenReplyRefinePrompt(
+        [{ sender: 'other', text: '你好' }],
+        '确认',
+        undefined,
+        '测试行业规则XYZ'
+      );
+      expect(refine).toContain('【行业场景规则】：\n测试行业规则XYZ');
+    });
+  });
+
   describe('Screen Reply (Zero-selection) Prompt Builder', () => {
     it('should build screen reply system prompt with JSON schema requirements', () => {
       const prompt = buildScreenReplySystemPrompt();
@@ -140,6 +223,15 @@ describe('Shared Core: Prompt Engine & Dynamic Builder', () => {
       expect(prompt).toContain('"last_message_from_other"');
       expect(prompt).toContain('"clarify_options"');
       expect(prompt).toContain('"draft_reply"');
+    });
+
+    it('should ground sender identity in bubble alignment, not guessing', () => {
+      const prompt = buildScreenReplySystemPrompt();
+      expect(prompt).toContain('身份判定铁律');
+      expect(prompt).toContain('头像在气泡右侧的是"我"');
+      expect(prompt).toContain('头像在气泡左侧的是"对方"');
+      expect(prompt).toContain('禁止计入 conversation');
+      expect(buildScreenReplyUserPrompt()).toContain('依据气泡对齐方向与头像位置判定身份');
     });
 
     it('should build screen reply user prompt for vision parsing', () => {
@@ -192,6 +284,109 @@ describe('Shared Core: Prompt Engine & Dynamic Builder', () => {
       );
       expect(refinePrompt).toContain('【我的人设风格偏好】：');
       expect(refinePrompt).toContain(persona);
+    });
+  });
+});
+
+describe('Personal Moat Prompt Builders (词库/文风样本/宿主适配/LaTeX 保护)', () => {
+  it('buildGlossaryPrompt compiles replace/keep/ban rules into a hard-constraint block', () => {
+    const block = buildGlossaryPrompt([
+      { id: '1', kind: 'replace', from: '用户', to: '客户' },
+      { id: '2', kind: 'keep', from: 'DCN' },
+      { id: '3', kind: 'ban', from: '综上所述' },
+    ]);
+    expect(block).toContain('【个人词库硬约束】');
+    expect(block).toContain('"用户"一律写作"客户"');
+    expect(block).toContain('DCN');
+    expect(block).toContain('综上所述');
+  });
+
+  it('buildGlossaryPrompt ignores incomplete rules and returns empty without rules', () => {
+    expect(buildGlossaryPrompt([])).toBe('');
+    expect(buildGlossaryPrompt(undefined)).toBe('');
+    expect(buildGlossaryPrompt([{ id: 'x', kind: 'replace', from: 'A' }])).toBe('');
+  });
+
+  it('buildStyleSamplesPrompt caps at 3 samples and truncates long ones', () => {
+    const long = '长'.repeat(400);
+    const block = buildStyleSamplesPrompt(['样本一', long, '样本三', '样本四']);
+    expect(block).toContain('【我的文风标杆】');
+    expect(block).toContain('【标杆样本 3】');
+    expect(block).not.toContain('【标杆样本 4】');
+    expect(block).not.toContain('长'.repeat(301));
+  });
+
+  it('buildAppStylePrompt maps foreground apps to style hints', () => {
+    expect(buildAppStylePrompt('WeChat.exe')).toContain('聊天软件');
+    expect(buildAppStylePrompt('WeChat')).toContain('聊天软件');
+    expect(buildAppStylePrompt('WINWORD.EXE')).toContain('办公文档');
+    expect(buildAppStylePrompt('Code.exe')).toContain('commit message');
+    expect(buildAppStylePrompt('Foxmail.exe')).toContain('祝颂语');
+    expect(buildAppStylePrompt('unknown.exe')).toBe('');
+    expect(buildAppStylePrompt('')).toBe('');
+    expect(buildAppStylePrompt(null)).toBe('');
+  });
+
+  it('extractLatexTokens finds math and commands; violations report lost tokens', () => {
+    const orig = '结果如 $E=mc^2$ 所示\\cite{nature2024}，见 \\ref{fig:1}。';
+    expect(hasLatexMarkers(orig)).toBe(true);
+    const tokens = extractLatexTokens(orig);
+    expect(tokens).toContain('$E=mc^2$');
+    expect(tokens).toContain('\\cite{nature2024}');
+    const violations = findLatexViolations(orig, '结果如 $E=mc^2$ 所示，见图。');
+    expect(violations).toContain('\\cite{nature2024}');
+    expect(violations).toContain('\\ref{fig:1}');
+    expect(findLatexViolations(orig, orig)).toEqual([]);
+    expect(hasLatexMarkers('普通中文，没有公式')).toBe(false);
+  });
+
+  it('buildSystemPrompt appends glossary/sample/appStyle/latex sections when provided', () => {
+    const sys = buildSystemPrompt({
+      style: 'polished',
+      glossaryPrompt: '\n【个人词库硬约束】：测试',
+      styleSamplesPrompt: '\n【我的文风标杆】：测试',
+      appStylePrompt: '\n【宿主应用适配】：测试',
+      latexGuard: true,
+    });
+    expect(sys).toContain('【个人词库硬约束】');
+    expect(sys).toContain('【我的文风标杆】');
+    expect(sys).toContain('【宿主应用适配】');
+    expect(sys).toContain('【LaTeX 源码保护】');
+
+    const bare = buildSystemPrompt({ style: 'polished' });
+    expect(bare).not.toContain('【个人词库硬约束】');
+    expect(bare).not.toContain('【LaTeX 源码保护】');
+  });
+
+  it('INTENT_CHIPS covers the roadmap scenarios with label+instruction', () => {
+    expect(INTENT_CHIPS.length).toBeGreaterThanOrEqual(5);
+    expect(INTENT_CHIPS.map((c) => c.label)).toEqual(
+      expect.arrayContaining(['委婉推脱', '礼貌催促', '去AI味'])
+    );
+    for (const c of INTENT_CHIPS) {
+      expect(c.instruction.length).toBeGreaterThan(5);
+    }
+  });
+
+  describe('Translate Mode (划词翻译)', () => {
+    it('TRANSLATE_TARGETS covers the 5 reference languages', () => {
+      expect(TRANSLATE_TARGETS.map((t) => t.id)).toEqual([
+        'en', 'zh-Hans', 'zh-Hant', 'ja', 'ko',
+      ]);
+      for (const t of TRANSLATE_TARGETS) {
+        expect(t.label.length).toBeGreaterThan(0);
+      }
+    });
+
+    it('buildTranslateSystemPrompt names the target language and forbids commentary', () => {
+      const en = buildTranslateSystemPrompt('en');
+      expect(en).toContain('英文');
+      expect(en).toContain('只输出译文本体');
+      expect(buildTranslateSystemPrompt('ja')).toContain('日文');
+      expect(buildTranslateSystemPrompt('zh-Hant')).toContain('繁体中文');
+      // guardrails appended via buildSystemPrompt keep output clean
+      const withGuardrails = buildSystemPrompt({ style: 'translate', customPromptOverride: buildTranslateSystemPrompt('en') });
+      expect(withGuardrails).toContain('严禁包含任何前缀或后缀客套话');
     });
   });
 });

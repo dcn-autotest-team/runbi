@@ -57,7 +57,7 @@ export const Toast: React.FC<ToastProps> = ({
     >
       {type === 'success' && (
         <svg
-          className="w-3.5 h-3.5 text-[#00BFA5] flex-shrink-0"
+          className="w-3.5 h-3.5 text-gray-300 flex-shrink-0"
           viewBox="0 0 24 24"
           fill="none"
           stroke="currentColor"

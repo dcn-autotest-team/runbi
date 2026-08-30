@@ -5,6 +5,37 @@
 use serde::{Deserialize, Serialize};
 use tauri::{LogicalSize, PhysicalPosition, WebviewWindow};
 
+/// 全局几何写锁:鼠标钩子、复制兜底、剪贴板监听三条路径都会对同一个
+/// WebView2 窗口并发做 set_min_size/set_resizable/set_size/set_position/
+/// set_always_on_top,交错执行曾触发 WebView2 堆破坏(0xc0000374,8/28 与
+/// 8/30 多份 WER 报告)。任何几何修改都必须先拿这把锁,一次做完。
+pub static WINDOW_GEOMETRY_LOCK: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+fn acquire_geometry_lock() -> bool {
+    WINDOW_GEOMETRY_LOCK
+        .compare_exchange(
+            false,
+            true,
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+        )
+        .is_ok()
+}
+
+fn release_geometry_lock() {
+    WINDOW_GEOMETRY_LOCK.store(false, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// 供其他命令模块(hide_capsule_window)纳入同一把几何锁。
+pub fn acquire_geometry_lock_pub() -> bool {
+    acquire_geometry_lock()
+}
+
+pub fn release_geometry_lock_pub() {
+    release_geometry_lock()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PositionResult {
     pub x: i32,
@@ -89,7 +120,10 @@ fn cursor_monitor_work_area(cursor_x: i32, cursor_y: i32) -> Option<(i32, i32, i
     };
 
     unsafe {
-        let pt = POINT { x: cursor_x, y: cursor_y };
+        let pt = POINT {
+            x: cursor_x,
+            y: cursor_y,
+        };
         let hmon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
         if hmon.is_null() {
             return None;
@@ -120,12 +154,44 @@ pub async fn position_window_at_cursor(
     is_capsule: Option<bool>,
 ) -> Result<PositionResult, String> {
     let is_capsule = is_capsule.unwrap_or(false);
+
+    // 几何写串行化:拿不到锁说明另一条路径正在弹层,直接放弃本次。
+    // 晚 20ms 重试一次,再失败就静默丢(旧胶囊还挂着比堆崩溃好得多)。
+    if !acquire_geometry_lock() {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        if !acquire_geometry_lock() {
+            return Err("window geometry busy".to_string());
+        }
+    }
+
+    let result = position_window_at_cursor_locked(&window, is_capsule).await;
+    release_geometry_lock();
+    result
+}
+
+async fn position_window_at_cursor_locked(
+    window: &WebviewWindow,
+    is_capsule: bool,
+) -> Result<PositionResult, String> {
     let (logical_w, logical_h) = if is_capsule {
-        // 36px button + 4px padding on every side in App.tsx.
-        (44.0, 44.0)
+        // 196px 五等宽动作条(搜索/润色/回复/翻译/复制)。
+        (196.0, 44.0)
     } else {
         (560.0, 520.0)
     };
+    // The panel minimum configured at startup used to force the compact capsule
+    // back to 480x420, making it look as if the capsule never appeared.
+    let min_size = if is_capsule {
+        LogicalSize::new(logical_w, logical_h)
+    } else {
+        LogicalSize::new(480.0, 420.0)
+    };
+    window
+        .set_min_size(Some(min_size))
+        .map_err(|e| e.to_string())?;
+    window
+        .set_resizable(!is_capsule)
+        .map_err(|e| e.to_string())?;
     window
         .set_size(LogicalSize::new(logical_w, logical_h))
         .map_err(|e| e.to_string())?;
@@ -172,15 +238,7 @@ pub async fn position_window_at_cursor(
         }
         (x.max(8), y.max(8))
     } else {
-        position_near_cursor(
-            rel_cursor_x,
-            rel_cursor_y,
-            win_w,
-            win_h,
-            work_w,
-            work_h,
-            16,
-        )
+        position_near_cursor(rel_cursor_x, rel_cursor_y, win_w, win_h, work_w, work_h, 16)
     };
 
     let target_x = rel_target_x + origin_x;
@@ -194,6 +252,10 @@ pub async fn position_window_at_cursor(
     }
 
     let _ = window.set_position(PhysicalPosition::new(target_x, target_y));
+
+    // 胶囊是划词瞬态浮条,必须盖过用户当前应用(PopClip 同款);展开回面板时解除,
+    // 让面板遵循普通焦点规则。置顶状态跟随后续 position 调用按模式翻转。
+    let _ = window.set_always_on_top(is_capsule);
 
     Ok(PositionResult {
         x: target_x,

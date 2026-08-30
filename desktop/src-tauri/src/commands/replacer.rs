@@ -27,7 +27,10 @@ async fn wait_for_uia_paste_ack(expected: &str) -> bool {
         let task = tokio::task::spawn_blocking(move || {
             crate::commands::uia::wait_for_pasted_text(&expected, Duration::from_millis(900))
         });
-        matches!(tokio::time::timeout(Duration::from_millis(1_100), task).await, Ok(Ok(true)))
+        matches!(
+            tokio::time::timeout(Duration::from_millis(1_100), task).await,
+            Ok(Ok(true))
+        )
     }
     #[cfg(not(windows))]
     {

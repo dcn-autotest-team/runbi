@@ -12,3 +12,6 @@ export * from './OriginalPreview';
 export * from './Toast';
 export * from './MarkdownRenderer';
 export * from './HistoryDrawer';
+export * from './ScriptLibraryModal';
+export * from './ExpertPickerModal';
+export * from './TranslateBar';

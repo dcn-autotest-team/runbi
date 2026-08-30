@@ -74,7 +74,7 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
 
             {/* Right: Polished with Insertions */}
             <div className="pl-3">
-              <div className="text-[11px] font-semibold text-[#00BFA5] mb-1">润色稿</div>
+              <div className="text-[11px] font-semibold text-gray-300 mb-1">润色稿</div>
               {diffChunks.map((chunk, index) => {
                 if (chunk.type === 'insert') {
                   return (

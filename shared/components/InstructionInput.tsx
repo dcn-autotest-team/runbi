@@ -173,7 +173,7 @@ export const InstructionInput: React.FC<InstructionInputProps> = ({
           {currentFiles.map((file, idx) => (
             <span
               key={idx}
-              className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-teal-50 dark:bg-teal-950/60 border border-teal-200/80 dark:border-teal-800/80 text-[#00BFA5] text-[11px]"
+              className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-teal-50 dark:bg-teal-950/60 border border-teal-200/80 dark:border-teal-800/80 text-gray-300 text-[11px]"
             >
               <svg className="w-3 h-3 text-teal-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/>
@@ -196,7 +196,7 @@ export const InstructionInput: React.FC<InstructionInputProps> = ({
               type="button"
               disabled={isGenerating}
               onClick={onAttachClipboard}
-              className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-[#00BFA5] text-[11px] border border-dashed border-slate-300 dark:border-slate-700 cursor-pointer active:scale-95 transition-all font-medium"
+              className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-gray-300 text-[11px] border border-dashed border-slate-300 dark:border-slate-700 cursor-pointer active:scale-95 transition-all font-medium"
               title="点击引用剪贴板中的资料"
             >
               <svg className="w-3 h-3 text-slate-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -213,8 +213,8 @@ export const InstructionInput: React.FC<InstructionInputProps> = ({
       <div
         className={`flex min-h-10 items-center gap-2 rounded-xl border px-2.5 py-1.5 transition-all ${
           isDragging
-            ? 'border-[#00BFA5] bg-teal-50/30 dark:bg-teal-950/30 ring-2 ring-[#00BFA5]/20'
-            : 'bg-slate-50/90 dark:bg-slate-800/70 border-slate-200/80 dark:border-slate-700/70 focus-within:border-[#00BFA5] focus-within:ring-2 focus-within:ring-[#00BFA5]/20'
+            ? 'border-gray-300 bg-teal-50/30 dark:bg-teal-950/30 ring-2 ring-gray-300/25'
+            : 'bg-slate-50/90 dark:bg-slate-800/70 border-slate-200/80 dark:border-slate-700/70 focus-within:border-gray-300 focus-within:ring-2 focus-within:ring-gray-300/25'
         }`}
         onMouseDown={(e) => e.stopPropagation()}
         onDragOver={handleDragOver}
@@ -223,7 +223,7 @@ export const InstructionInput: React.FC<InstructionInputProps> = ({
       >
         {/* Chat / Pen Icon */}
         <svg
-          className="w-3.5 h-3.5 text-[#00BFA5] flex-shrink-0"
+          className="w-3.5 h-3.5 text-gray-300 flex-shrink-0"
           viewBox="0 0 24 24"
           fill="none"
           stroke="currentColor"
@@ -264,7 +264,7 @@ export const InstructionInput: React.FC<InstructionInputProps> = ({
           }}
           className={`runbi-focus-ring flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-all ${
             (value.trim() || currentFiles.length > 0) && !isGenerating
-              ? 'bg-[#00BFA5] hover:bg-[#00A892] text-white shadow-sm active:scale-95 cursor-pointer'
+              ? 'bg-gray-300 hover:bg-gray-400 text-gray-900 shadow-sm active:scale-95 cursor-pointer'
               : 'bg-slate-200/70 dark:bg-slate-700/60 text-slate-400 dark:text-slate-500 cursor-not-allowed'
           }`}
         >

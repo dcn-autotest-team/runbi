@@ -48,9 +48,11 @@ export interface ITextReplacer {
    *
    * @param newText - The replacement string to insert.
    * @param context - Optional selection metadata context from ISelectionProvider.
+   * @param hideWindow - Desktop only: hide the panel window before pasting so the
+   *   target app regains focus. Extensions ignore it.
    * @returns Promise resolving to ReplacementResult.
    */
-  replaceText(newText: string, context?: SelectionInfo | null): Promise<ReplacementResult>;
+  replaceText(newText: string, context?: SelectionInfo | null, hideWindow?: boolean): Promise<ReplacementResult>;
 
   /**
    * Checks if in-place text replacement is currently possible in the target context.

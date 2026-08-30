@@ -50,7 +50,7 @@ describe('Desktop selection-to-polish flow', () => {
     vi.useRealTimers();
   });
 
-  it('starts polishing immediately when Rust emits captured selection text', async () => {
+  it('starts polishing immediately only for a shortcut-originated selection', async () => {
     await act(async () => {
       root.render(<App />);
       await Promise.resolve();
@@ -66,7 +66,7 @@ describe('Desktop selection-to-polish flow', () => {
           text: '这是一份需要优化表达的普通文本。',
           sourceApp: 'notepad.exe',
           windowTitle: '记事本',
-          trigger: 'selection',
+          trigger: 'shortcut',
         },
       });
       // Advance only through the finite mock stream. `runAllTimers` also chases
@@ -76,5 +76,62 @@ describe('Desktop selection-to-polish flow', () => {
 
     expect(host.textContent).toContain('经过润色与调整后');
     expect(host.textContent).toContain('这是一份需要优化表达的普通文本。');
+  });
+
+  it('shows the compact toolbar even for a short desktop selection', async () => {
+    await act(async () => {
+      root.render(<App />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const onSelection = eventMocks.listeners.get('runbi://captured-selection');
+    await act(async () => {
+      onSelection!({
+        payload: {
+          text: '好',
+          sourceApp: 'notepad.exe',
+          trigger: 'selection',
+        },
+      });
+      await Promise.resolve();
+    });
+
+    expect(host.querySelector('[role="toolbar"]')).not.toBeNull();
+    expect(host.textContent).not.toMatch(/[✨💬📋✅]/u);
+  });
+
+  it('capsule translate button expands the panel and starts translating', async () => {
+    await act(async () => {
+      root.render(<App />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const onSelection = eventMocks.listeners.get('runbi://captured-selection');
+    await act(async () => {
+      onSelection!({
+        payload: {
+          text: '这是一段需要翻译的中文',
+          sourceApp: 'notepad.exe',
+          trigger: 'selection',
+          capsule: true,
+        },
+      });
+      await Promise.resolve();
+    });
+
+    const translateBtn = host.querySelector('button[aria-label="翻译选中文本"]') as HTMLButtonElement;
+    expect(translateBtn).not.toBeNull();
+
+    await act(async () => {
+      translateBtn.click();
+      // 走完 mock 流式输出的打字节奏
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+
+    // 面板已展开：翻译语言条可见，mock 翻译结果已流出
+    expect(host.querySelector('[data-testid="translate-bar"]')).not.toBeNull();
+    expect(host.textContent).toContain('Translated');
   });
 });

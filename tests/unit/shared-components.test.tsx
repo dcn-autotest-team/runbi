@@ -16,6 +16,7 @@ import {
   Toast,
   PolishPanel,
   MarkdownRenderer,
+  TranslateBar,
 } from '@runbi/shared/components';
 
 describe('Shared UI Components (@runbi/shared/components)', () => {
@@ -87,7 +88,7 @@ describe('Shared UI Components (@runbi/shared/components)', () => {
       );
 
       const tabs = container.querySelectorAll('[role="menuitemradio"]');
-      expect(tabs.length).toBe(7);
+      expect(tabs.length).toBe(8);
 
       const academicBtn = container.querySelector('[data-style="academic"]') as HTMLButtonElement;
       await act(async () => {
@@ -95,6 +96,32 @@ describe('Shared UI Components (@runbi/shared/components)', () => {
       });
 
       expect(handleStyleChange).toHaveBeenCalledWith('academic');
+    });
+  });
+
+  describe('TranslateBar Component', () => {
+    it('renders all 5 targets and reports the picked one', async () => {
+      const handleTargetChange = vi.fn();
+      await renderElement(
+        <TranslateBar target="en" onTargetChange={handleTargetChange} />
+      );
+
+      const trigger = container.querySelector('[data-testid="translate-target-trigger"]') as HTMLButtonElement;
+      expect(trigger).not.toBeNull();
+      expect(trigger.textContent).toContain('英文');
+
+      await act(async () => {
+        trigger.click();
+      });
+
+      const options = container.querySelectorAll('[role="menuitemradio"]');
+      expect(options.length).toBe(5);
+
+      const ja = container.querySelector('[data-target="ja"]') as HTMLButtonElement;
+      await act(async () => {
+        ja.click();
+      });
+      expect(handleTargetChange).toHaveBeenCalledWith('ja');
     });
   });
 
@@ -321,6 +348,47 @@ describe('Shared UI Components (@runbi/shared/components)', () => {
         diffBtn.click();
       });
       expect(handleToggleDiff).toHaveBeenCalledTimes(1);
+    });
+
+    it('should show custom quick tags alongside clarify chips and hide recapture UI', async () => {
+      const analysis = {
+        conversation: [{ sender: 'other' as const, text: '能便宜点吗？' }],
+        last_message_from_other: '能便宜点吗？',
+        clarify_options: ['议价让步', '婉拒议价'],
+        draft_reply: '亲，给你抹个零～',
+      };
+
+      await renderElement(
+        <PolishPanel
+          originalText="能便宜点吗？"
+          polishedText="亲，给你抹个零～"
+          isGenerating={false}
+          activeStyle="reply"
+          isDiffMode={false}
+          isEditable={true}
+          screenReplyAnalysis={analysis}
+          replyQuickTags={[
+            { label: '催付款', text: '礼貌催促客户完成付款' },
+            { label: '要好评', text: '礼貌邀请客户给个好评' },
+          ]}
+          onClose={vi.fn()}
+          onStyleChange={vi.fn()}
+          onToggleDiff={vi.fn()}
+          onStop={vi.fn()}
+          onRegenerate={vi.fn()}
+          onCopy={vi.fn()}
+          onReplace={vi.fn()}
+          onSendInstruction={vi.fn()}
+        />
+      );
+
+      const text = container.textContent || '';
+      // clarify chips（数字快捷键）与自定义/行业标签并存（回归：自定义按钮曾不显示）
+      expect(text).toContain('议价让步');
+      expect(text).toContain('催付款');
+      expect(text).toContain('要好评');
+      // 回归：重新抓取按钮已按需求移除
+      expect(text).not.toContain('重新抓取');
     });
 
     it('should trigger clarify chip on number key 1 press when screenReplyAnalysis is present', async () => {

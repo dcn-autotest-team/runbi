@@ -36,6 +36,32 @@ static LAST_DOWN_X: AtomicI32 = AtomicI32::new(0);
 static LAST_DOWN_Y: AtomicI32 = AtomicI32::new(0);
 #[cfg(windows)]
 static LAST_UP_MS: AtomicU64 = AtomicU64::new(0);
+/// 同一选区 2s 内只允许一次 position+emit:钩子/复制/剪贴板三路监听会对同一条
+/// 文本各自开任务,并发 set_size/set_always_on_top 同一窗口曾触发堆破坏
+/// (0xc0000374,WER 8/28 三份 release 报告同码),这里是硬闸。
+#[cfg(windows)]
+static LAST_POP_TEXT: Mutex<Option<(u64, String)>> = Mutex::new(None);
+
+#[cfg(windows)]
+fn should_pop_once(text: &str) -> bool {
+    let now = current_time_ms();
+    if let Ok(mut slot) = LAST_POP_TEXT.lock() {
+        if let Some((ts, prev)) = slot.as_ref() {
+            if now.saturating_sub(*ts) < 2000 && prev == text {
+                return false;
+            }
+        }
+        *slot = Some((now, text.to_string()));
+        true
+    } else {
+        false
+    }
+}
+
+#[cfg(not(windows))]
+fn should_pop_once(_text: &str) -> bool {
+    true
+}
 
 #[cfg(windows)]
 fn current_time_ms() -> u64 {
@@ -104,7 +130,7 @@ unsafe extern "system" fn low_level_mouse_proc(
                             tauri::async_runtime::spawn(async move {
                                 // The low-level hook sees mouse-up before the target control does.
                                 // Let it commit the selection before sending Ctrl+C.
-                                tokio::time::sleep(Duration::from_millis(35)).await;
+                                tokio::time::sleep(Duration::from_millis(55)).await;
                                 if !should_handle_selection(&state_clone) {
                                     return;
                                 }
@@ -127,31 +153,49 @@ unsafe extern "system" fn low_level_mouse_proc(
                                 }
 
                                 // 2. Get foreground context (source_app, window_title)
-                                let (source_app, window_title) = crate::commands::selection::get_foreground_context();
-                                if crate::commands::clipboard_monitor::is_blacklisted_app(source_app.as_deref()) {
+                                let (source_app, window_title) =
+                                    crate::commands::selection::get_foreground_context();
+                                if crate::commands::clipboard_monitor::is_blacklisted_app(
+                                    source_app.as_deref(),
+                                ) {
                                     return;
                                 }
 
                                 // Screenshots are useful only for conversation windows. Capturing
                                 // every ordinary selection was the dominant hot-path cost.
-                                let is_chat = crate::commands::screenshot::is_likely_conversation_window(
-                                    source_app.as_deref(),
-                                    window_title.as_deref(),
-                                );
+                                let is_chat =
+                                    crate::commands::screenshot::is_likely_conversation_window(
+                                        source_app.as_deref(),
+                                        window_title.as_deref(),
+                                    );
                                 let has_screenshot = is_chat
-                                    && crate::commands::screenshot::capture_foreground_screenshot().is_ok();
+                                    && crate::commands::screenshot::capture_foreground_screenshot()
+                                        .is_ok();
 
                                 // 3. Grab selection text via UIA / clipboard fallback.
-                                let captured_text = match crate::commands::selection::grab_selected_text_with_retry(&app).await {
-                                    Some(t) => t,
-                                    None => return,
-                                };
+                                let captured_text =
+                                    match crate::commands::selection::grab_selected_text_with_retry(
+                                        &app,
+                                    )
+                                    .await
+                                    {
+                                        Some(t) => t,
+                                        None => {
+                                            eprintln!(
+                                                "[Runbi] selection dropped: grab returned none"
+                                            );
+                                            return;
+                                        }
+                                    };
 
                                 let trimmed = captured_text.trim();
                                 if trimmed.is_empty()
                                     || trimmed.len() > 30000
-                                    || crate::commands::clipboard_monitor::is_sensitive_or_password(trimmed)
+                                    || crate::commands::clipboard_monitor::is_sensitive_or_password(
+                                        trimmed,
+                                    )
                                 {
+                                    eprintln!("[Runbi] selection dropped: empty/sensitive/oversize len={}", trimmed.len());
                                     return;
                                 }
 
@@ -166,12 +210,28 @@ unsafe extern "system" fn low_level_mouse_proc(
                                     }
                                 }
 
-                                if should_popup {
+                                if should_popup && should_pop_once(&captured_text) {
                                     if let Some(window) = app.get_webview_window("main") {
-                                        let _ = position_window_at_cursor(window.clone(), Some(false)).await;
+                                        // 防止剪贴板监听把同一份文本当"新复制"再弹完整面板顶掉胶囊
+                                        crate::commands::selection::sync_clipboard_monitor_baseline(
+                                            &app,
+                                            &captured_text,
+                                        );
+                                        // 划词路径固定弹微胶囊,点击后由前端展开为完整面板;
+                                        // 快捷键/剪贴板路径(position None/false)保持完整面板。
+                                        if let Err(e) =
+                                            position_window_at_cursor(window.clone(), Some(true))
+                                                .await
+                                        {
+                                            eprintln!(
+                                                "[Runbi] selection capsule positioning failed: {e}"
+                                            );
+                                            return;
+                                        }
                                         let _ = window.show();
                                         let _ = window.unminimize();
-                                        let _ = window.set_focus();
+                                        // Keep focus and the selection in the source app. The
+                                        // toolbar becomes active only when an action is clicked.
                                         let _ = window.emit(
                                             "runbi://captured-selection",
                                             serde_json::json!({
@@ -180,6 +240,7 @@ unsafe extern "system" fn low_level_mouse_proc(
                                                 "windowTitle": window_title,
                                                 "hasScreenshot": has_screenshot,
                                                 "trigger": "selection",
+                                                "capsule": true,
                                             }),
                                         );
                                     }
@@ -256,7 +317,7 @@ pub fn set_auto_popup_enabled(
 
 #[cfg(test)]
 mod tests {
-    use super::{should_handle_selection, SelectionMonitorState};
+    use super::{should_handle_selection, should_pop_once, SelectionMonitorState};
     use std::sync::atomic::Ordering;
 
     #[test]
@@ -269,5 +330,16 @@ mod tests {
 
         state.is_internal_action.store(true, Ordering::Relaxed);
         assert!(!should_handle_selection(&state));
+    }
+
+    #[test]
+    fn same_text_cannot_pop_twice_within_dedup_window() {
+        // 崩溃防御回归:三路监听对同一条选区各自开任务时,只有第一路能弹。
+        let a = should_pop_once("weekly report text");
+        let b = should_pop_once("weekly report text");
+        // 换了新文本立即可弹;回到旧文本在窗口期内仍被挡(记录被新文本覆盖,
+        // 这正是预期——挡的是同一时刻的重复任务,不是正常的新划词)。
+        let c = should_pop_once("different text");
+        assert!(a && !b && c);
     }
 }

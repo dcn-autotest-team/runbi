@@ -6,7 +6,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 use tauri::ipc::Channel;
-use tauri::WebviewWindow;
+use tauri::{LogicalSize, WebviewWindow};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TestConnectionRequest {
@@ -25,9 +25,16 @@ pub struct TestConnectionResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
 pub enum StreamEvent {
-    Chunk { delta: String },
-    Done { duration_ms: u64, total_tokens: usize },
-    Error { message: String },
+    Chunk {
+        delta: String,
+    },
+    Done {
+        duration_ms: u64,
+        total_tokens: usize,
+    },
+    Error {
+        message: String,
+    },
 }
 
 #[tauri::command]
@@ -48,9 +55,7 @@ pub async fn stream_llm_chat(
     // captured screenshot from Rust-side state (it never crosses IPC whole).
     let img_url = match image_data_url {
         Some(ref u) if !u.is_empty() => Some(u.clone()),
-        _ if use_last_screenshot.unwrap_or(false) => {
-            crate::commands::screenshot::last_screenshot()
-        }
+        _ if use_last_screenshot.unwrap_or(false) => crate::commands::screenshot::last_screenshot(),
         _ => None,
     };
     // Streaming-friendly timeouts: connect_timeout covers dial + TLS handshake,
@@ -130,17 +135,16 @@ pub async fn stream_llm_chat(
     let status = response.status();
     crate::commands::file_log(
         &app,
-        &format!(
-            "llm status: {} ({}ms)",
-            status,
-            start.elapsed().as_millis()
-        ),
+        &format!("llm status: {} ({}ms)", status, start.elapsed().as_millis()),
     );
     if !status.is_success() {
         let err_text = response.text().await.unwrap_or_default();
         crate::commands::file_log(
             &app,
-            &format!("llm http error body: {}", &err_text[..err_text.len().min(500)]),
+            &format!(
+                "llm http error body: {}",
+                &err_text[..err_text.len().min(500)]
+            ),
         );
         let human_err = match status.as_u16() {
             401 => "API Key 错误或未授权 (401)。请在设置中检查填写的 Key 是否正确。".to_string(),
@@ -177,7 +181,14 @@ pub async fn stream_llm_chat(
 
                     if line == "data: [DONE]" {
                         let head: String = snippet.chars().take(160).collect();
-                        crate::commands::file_log(&app, &format!("llm done: {} chars, head: {}", snippet.chars().count(), head));
+                        crate::commands::file_log(
+                            &app,
+                            &format!(
+                                "llm done: {} chars, head: {}",
+                                snippet.chars().count(),
+                                head
+                            ),
+                        );
                         let _ = channel.send(StreamEvent::Done {
                             duration_ms: start.elapsed().as_millis() as u64,
                             total_tokens,
@@ -210,7 +221,14 @@ pub async fn stream_llm_chat(
     }
 
     let head: String = snippet.chars().take(160).collect();
-    crate::commands::file_log(&app, &format!("llm done (stream end): {} chars, head: {}", snippet.chars().count(), head));
+    crate::commands::file_log(
+        &app,
+        &format!(
+            "llm done (stream end): {} chars, head: {}",
+            snippet.chars().count(),
+            head
+        ),
+    );
     let _ = channel.send(StreamEvent::Done {
         duration_ms: start.elapsed().as_millis() as u64,
         total_tokens,
@@ -220,7 +238,9 @@ pub async fn stream_llm_chat(
 }
 
 #[tauri::command]
-pub async fn test_llm_connection(req: TestConnectionRequest) -> Result<TestConnectionResponse, String> {
+pub async fn test_llm_connection(
+    req: TestConnectionRequest,
+) -> Result<TestConnectionResponse, String> {
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(8))
         .timeout(std::time::Duration::from_secs(15))
@@ -277,6 +297,25 @@ pub async fn test_llm_connection(req: TestConnectionRequest) -> Result<TestConne
 #[tauri::command]
 pub fn hide_window(window: WebviewWindow) -> Result<(), String> {
     window.hide().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn hide_capsule_window(window: WebviewWindow) -> Result<(), String> {
+    window.hide().map_err(|e| e.to_string())?;
+    // 与弹层共用几何锁:hide 后的恢复序列也是一组几何写,交错会堆破坏
+    if crate::commands::position::acquire_geometry_lock_pub() {
+        let _ = window.set_always_on_top(false);
+        let _ = window.set_min_size(Some(LogicalSize::new(480.0, 420.0)));
+        let _ = window.set_resizable(true);
+        let r = window
+            .set_size(LogicalSize::new(560.0, 520.0))
+            .map_err(|e| e.to_string());
+        crate::commands::position::release_geometry_lock_pub();
+        r
+    } else {
+        // 窗口已隐藏,几何稍后由下次 position 收敛,这里不阻塞
+        Ok(())
+    }
 }
 
 #[tauri::command]

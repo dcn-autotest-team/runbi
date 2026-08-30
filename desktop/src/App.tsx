@@ -4,12 +4,14 @@
  * Powered by Tauri 2.x + React 18 + Tailwind CSS + @runbi/shared
  */
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import type { PolishStyle, StreamConfig, PersonaType, HistoryRecord, DraftSnapshot, LastReplacementSnapshot } from '@runbi/shared/types';
-import { PERSONA_PRESETS } from '@runbi/shared/types';
-import { PolishPanel, HistoryDrawer, Toast, type AttachedFileContext } from '@runbi/shared/components';
+import { createPortal } from 'react-dom';
+import type { PolishStyle, StreamConfig, PersonaType, HistoryRecord, DraftSnapshot, LastReplacementSnapshot, CustomAction, ScriptTemplate, ExpertAgent, GlossaryRule } from '@runbi/shared/types';
+import { PERSONA_PRESETS, INDUSTRY_PACKS, detectIndustryPack, estimateTokens, trialRemainingTokens, TRIAL_PROXY_BASE_URL } from '@runbi/shared/types';
+import { PolishPanel, HistoryDrawer, Toast, ScriptLibraryModal, ExpertPickerModal, type AttachedFileContext } from '@runbi/shared/components';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { LogicalSize } from '@tauri-apps/api/dpi';
 import { readText as readClipboard } from '@tauri-apps/plugin-clipboard-manager';
 import { createDesktopAdapters } from './adapters';
 
@@ -31,10 +33,23 @@ import {
   buildScreenReplyRefinePrompt,
   buildTextReplySystemPrompt,
   buildTextReplyUserPrompt,
+  buildExpertSystemPrompt,
+  buildTranslateSystemPrompt,
+  findBannedWords,
+  buildGlossaryPrompt,
+  buildStyleSamplesPrompt,
+  buildAppStylePrompt,
+  hasLatexMarkers,
+  findLatexViolations,
+  TRANSLATE_TARGETS,
   type ScreenReplyAnalysis,
+  type TranslateTargetId,
 } from '@runbi/shared/core';
-import { RunbiLogo, Settings, X, Pin, PinOff, RefreshCw, History } from './components/Icons';
+import { RunbiLogo, Settings, X, Pin, PinOff, RefreshCw, History, Droplet } from './components/Icons';
 import { OnboardingView } from './components/OnboardingView';
+import { ParallelResultsView, type ParallelSession } from './components/ParallelResultsView';
+import { buildBrowserSearchUrl, SelectionCapsule, shouldShowCapsule } from './components/SelectionCapsule';
+import { AdvancedSettings } from './components/AdvancedSettings';
 
 const UpdateCheckRow = React.lazy(() =>
   import('./components/UpdateCheckRow').then((module) => ({ default: module.UpdateCheckRow }))
@@ -48,9 +63,24 @@ const STYLE_NAMES: Record<PolishStyle, string> = {
   concise: '精简提炼',
   native_en: '地道英文',
   reply: '智能回复',
+  translate: '翻译',
 };
 
 const DEFAULT_SHORTCUT = 'Ctrl+Shift+Space';
+
+// —— 缺陷2：划词微胶囊（Mini Capsule）常量 ——
+// 窗口尺寸(196×44)与定位由 Rust 侧 position_window_at_cursor(is_capsule) 负责
+const CAPSULE_IDLE_MS = 6000; // 6s 内鼠标未移到胶囊上 → 静默淡出(悬停即取消,1.2s 实测来不及注意到)
+const CAPSULE_FADE_MS = 220; // 淡出等待，与 SelectionCapsule 的 CSS opacity 过渡保持一致
+
+// 胶囊暂存的划词上下文：展开面板时按它重放现有润色/回复流程
+interface CapsuleInfo {
+  ts: number; // 每次划词刷新，作 key 让进场动画重放
+  text: string;
+  sourceApp?: string;
+  windowTitle?: string;
+  screenshot: string | null;
+}
 
 const PROVIDER_PRESETS: Record<string, { label: string; endpoint: string; model: string }> = {
   deepseek: {
@@ -147,9 +177,69 @@ export const App: React.FC = () => {
   const [showEpoch, setShowEpoch] = useState<number>(0);
   const [persona, setPersona] = useState<PersonaType>('standard');
   const [customPersonaPrompt, setCustomPersonaPrompt] = useState<string>('');
+  const [industryPack, setIndustryPack] = useState<string>('auto');
+  const [customActions, setCustomActions] = useState<CustomAction[]>([]);
+  // 缺陷5 个人词库与文风标杆;缺陷1 试用额度记账(仅官方代理通道上线后生效)
+  const [glossary, setGlossary] = useState<GlossaryRule[]>([]);
+  const [styleSamples, setStyleSamples] = useState<string[]>([]);
+  const [trialTokensUsed, setTrialTokensUsed] = useState(0);
+  const trialTokensUsedRef = useRef(0);
+  // 缺陷3:贴回失败常驻浮条(带重试),替代一闪而过的 Toast
+  const [pasteFallbackBar, setPasteFallbackBar] = useState(false);
+  // 智能模式：AI 自动判断风格（划词时 classifyContext），下拉里点具体风格才退出
+  const [autoMode, setAutoMode] = useState<boolean>(true);
+  // 划词翻译目标语言：记忆上次选择，切换时立即重译
+  const [translateTarget, setTranslateTarget] = useState<TranslateTargetId>('en');
+  const [windowOpacity, setWindowOpacity] = useState<number>(1);
+  const windowOpacityRef = useRef<number>(1);
+  windowOpacityRef.current = windowOpacity;
+  const [skin, setSkin] = useState<'dark' | 'light'>('dark');
+
+  // 内置库（话术模板/专家提示词）与多专家并行
+  const [showScriptLibrary, setShowScriptLibrary] = useState<boolean>(false);
+  const [showExpertPicker, setShowExpertPicker] = useState<boolean>(false);
+  const [contextHint, setContextHint] = useState<string>('');
+  const [activeExpert, setActiveExpert] = useState<ExpertAgent | null>(null);
+  const [showParallel, setShowParallel] = useState<boolean>(false);
+  const [parallelSessions, setParallelSessions] = useState<ParallelSession[]>([]);
+  const parallelControllersRef = useRef<Map<string, AbortController>>(new Map());
+  // 润色侧最近一次使用的风格：回复→润色一键切回时恢复
+  const lastPolishStyleRef = useRef<PolishStyle>('polished');
+  const parallelRunning = parallelSessions.some((s) => s.status === 'streaming');
+  const isTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
+
+  // 主题切换：html[data-theme='light'] 驱动 glass.css 浅色覆盖层，即时生效。
+  // 浅色需移除 index.html 预置的 dark class，让共享组件回落到浅色变体。
+  // 切肤同时复位窗口透明度：浅色一律不透明(浅色窗面下 alpha 叠加几乎无视觉变化,
+  // 还会让浅色整体发灰)；切回深色恢复用户上次设的透明度。
+  useEffect(() => {
+    if (skin === 'light') {
+      document.documentElement.dataset.theme = 'light';
+      document.documentElement.classList.remove('dark');
+    } else {
+      delete document.documentElement.dataset.theme;
+      document.documentElement.classList.add('dark');
+    }
+    if (isTauri) {
+      const opacity = skin === 'light'
+        ? 1
+        : Number.isFinite(windowOpacityRef.current) ? Math.min(1, Math.max(0.2, windowOpacityRef.current)) : 1;
+      setWindowOpacity(opacity);
+      invoke('set_window_opacity', { opacity }).catch(() => {});
+    }
+  }, [skin, isTauri]);
   const [glitchtipDsn, setGlitchtipDsn] = useState<string>('');
   const [attachedFiles, setAttachedFiles] = useState<AttachedFileContext[]>([]);
   const [clipboardRef, setClipboardRef] = useState<string | null>(null);
+
+  // 缺陷2 微胶囊：uiMode='capsule' 时窗口缩为胶囊条并渲染 SelectionCapsule，
+  // 'panel' 为现有完整面板；窗口隐藏复用 hide_window，不引入第三个状态。
+  const [uiMode, setUiMode] = useState<'panel' | 'capsule'>('panel');
+  const [capsule, setCapsule] = useState<CapsuleInfo | null>(null);
+  const [capsuleVisible, setCapsuleVisible] = useState<boolean>(true);
+  const [capsuleCopied, setCapsuleCopied] = useState<boolean>(false);
+  const capsuleArmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const capsuleFadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Data Safety & Fault Tolerance State
   const [history, setHistory] = useState<HistoryRecord[]>([]);
@@ -171,6 +261,47 @@ export const App: React.FC = () => {
     const preset = PERSONA_PRESETS.find((p) => p.id === persona);
     return preset && preset.id !== 'standard' ? preset.prompt : '';
   }, [persona, customPersonaPrompt]);
+
+  // 行业包：auto = AI 按窗口标题/选中文本自动识别（每次生成实时判定），显式选择则固定
+  const activePack = useMemo(
+    () => {
+      const general = INDUSTRY_PACKS.find((p) => p.id === 'general')!;
+      if (industryPack === 'auto') {
+        return detectIndustryPack(`${contextHint}\n${originalText}`) || general;
+      }
+      return INDUSTRY_PACKS.find((p) => p.id === industryPack) || general;
+    },
+    [industryPack, contextHint, originalText]
+  );
+  const activePackPrompt = activePack.sceneHint;
+  // 缺陷5:个人词库硬约束段(润色与回复 refine 共用);空词库时为 ''
+  const glossaryPromptText = useMemo(() => buildGlossaryPrompt(glossary), [glossary]);
+  const packReplyQuickTags = useMemo(
+    () => activePack.intents.map((i) => ({ label: i.label, text: i.instruction })),
+    [activePack]
+  );
+  // Pack-aware fallback chips for mock / unparseable analysis responses.
+  const packChips = (fallback: string[]): string[] =>
+    activePack.intents.length ? activePack.intents.map((i) => i.label) : fallback;
+
+  // User-defined actions merge after pack intents as one-tap chips.
+  const customActionTags = useMemo(
+    () =>
+      customActions
+        .filter((a) => a.name.trim() && a.prompt.trim())
+        .map((a) => ({ label: a.name, text: a.prompt.trim() })),
+    [customActions]
+  );
+  const replyQuickTags = useMemo(
+    () => (packReplyQuickTags.length > 0 || customActionTags.length > 0
+      ? [...packReplyQuickTags, ...customActionTags]
+      : []),
+    [packReplyQuickTags, customActionTags]
+  );
+  const bannedHits = useMemo(() => findBannedWords(polishedText), [polishedText]);
+
+  const upsertCustomAction = (idx: number, patch: Partial<CustomAction>) =>
+    setCustomActions((prev) => prev.map((a, i) => (i === idx ? { ...a, ...patch } : a)));
 
   const getProviderPreset = (ep: string, md: string) => {
     if (ep === PROVIDER_PRESETS.deepseek.endpoint && md === PROVIDER_PRESETS.deepseek.model) return 'deepseek';
@@ -205,6 +336,20 @@ export const App: React.FC = () => {
     readChatScreenshot,
     autoCopyPopup,
     screenReplyAnalysis,
+    activePersonaPrompt: '',
+    activePack: INDUSTRY_PACKS[0],
+    activePackPrompt: '',
+    activeExpert: null as ExpertAgent | null,
+    showParallel: false,
+    parallelRunning: false,
+    showScriptLibrary: false,
+    showExpertPicker: false,
+    autoMode: true,
+    translateTarget: 'en' as TranslateTargetId,
+    lastChatApp: '',
+    uiMode: 'panel' as 'panel' | 'capsule',
+    armCapsule: (_info: CapsuleInfo) => {},
+    hideCapsule: () => {},
     handleStartPolish: (_t: string, _s: PolishStyle, _c?: string, _img?: string | null) => {},
     handleStartScreenReplyAnalysis: (_hint?: string) => {},
     handleStartTextReplyAnalysis: (_msg: string) => {},
@@ -222,8 +367,17 @@ export const App: React.FC = () => {
   stateRef.current.readChatScreenshot = readChatScreenshot;
   stateRef.current.autoCopyPopup = autoCopyPopup;
   stateRef.current.screenReplyAnalysis = screenReplyAnalysis;
-
-  const isTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
+  stateRef.current.activePersonaPrompt = activePersonaPrompt;
+  stateRef.current.activePack = activePack;
+  stateRef.current.activePackPrompt = activePackPrompt;
+  stateRef.current.activeExpert = activeExpert;
+  stateRef.current.showParallel = showParallel;
+  stateRef.current.parallelRunning = parallelRunning;
+  stateRef.current.showScriptLibrary = showScriptLibrary;
+  stateRef.current.showExpertPicker = showExpertPicker;
+  stateRef.current.autoMode = autoMode;
+  stateRef.current.translateTarget = translateTarget;
+  stateRef.current.uiMode = uiMode;
 
   // Show Toast
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -241,6 +395,217 @@ export const App: React.FC = () => {
   useEffect(() => () => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
   }, []);
+
+  // —— 缺陷2:微胶囊状态机。窗口隐藏复用 hide_window;capsule→panel 由 expandCapsule 完成 ——
+  const capsuleInfoRef = useRef<CapsuleInfo | null>(null);
+
+  const clearCapsuleTimers = () => {
+    if (capsuleArmTimerRef.current) {
+      clearTimeout(capsuleArmTimerRef.current);
+      capsuleArmTimerRef.current = null;
+    }
+    if (capsuleFadeTimerRef.current) {
+      clearTimeout(capsuleFadeTimerRef.current);
+      capsuleFadeTimerRef.current = null;
+    }
+  };
+
+  // 淡出动画播完再藏窗口,并把状态机复位回 panel,等下一次划词重新武装
+  const hideCapsule = useCallback(() => {
+    clearCapsuleTimers();
+    capsuleInfoRef.current = null;
+    setCapsuleVisible(false);
+    capsuleFadeTimerRef.current = setTimeout(() => {
+      capsuleFadeTimerRef.current = null;
+      void (async () => {
+        if (isTauri) {
+          try {
+            // Hide and restore the native panel geometry in one command so the
+            // next tray/settings open cannot inherit a 196x44 always-on-top window.
+            await invoke('hide_capsule_window');
+          } catch (e) {
+            console.warn('reset capsule window failed:', e);
+          }
+        }
+        setUiMode('panel');
+        setCapsule(null);
+        setCapsuleVisible(true);
+      })();
+    }, CAPSULE_FADE_MS);
+  }, [isTauri]);
+
+  // 划词到达:挂胶囊并启动 1.2s 无人问津淡出计时
+  const armCapsule = useCallback((info: CapsuleInfo) => {
+    clearCapsuleTimers();
+    capsuleInfoRef.current = info;
+    setCapsule(info);
+    setCapsuleVisible(true);
+    setCapsuleCopied(false);
+    setUiMode('capsule');
+    capsuleArmTimerRef.current = setTimeout(() => {
+      capsuleArmTimerRef.current = null;
+      hideCapsule();
+    }, CAPSULE_IDLE_MS);
+  }, [hideCapsule]);
+
+  // 点击胶囊 → 窗口复原为完整面板并重放现有润色/回复流程(不自动生成以外的额外请求)
+  const expandCapsule = useCallback(
+    async (mode: 'polish' | 'reply' | 'translate') => {
+      const info = capsuleInfoRef.current;
+      if (!info) return;
+      clearCapsuleTimers();
+      capsuleInfoRef.current = null;
+      if (isTauri) {
+        try {
+          await invoke('position_window_at_cursor', { isCapsule: false });
+        } catch (e) {
+          console.warn('expand capsule reposition failed:', e);
+        }
+      }
+      // Render the full panel only after its native window has expanded. This
+      // avoids a clipped 196x44 panel flash on slower machines.
+      setUiMode('panel');
+      setCapsule(null);
+      setShowEpoch((n) => n + 1); // 重放面板进场动画
+      setCurrentScreenshot(null);
+      stateRef.current.currentScreenshot = null;
+      setScreenReplyAnalysis(null);
+      setOriginalText(info.text);
+      stateRef.current.originalText = info.text;
+      if (mode === 'reply') {
+        setActiveStyle('reply');
+        stateRef.current.activeStyle = 'reply';
+        stateRef.current.handleStartTextReplyAnalysis(info.text);
+      } else if (mode === 'translate') {
+        // 翻译：固定走 translate 风格，目标语言用当前（持久化的）选择
+        if (stateRef.current.activeExpert) {
+          stateRef.current.activeExpert = null;
+          setActiveExpert(null);
+        }
+        setActiveStyle('translate');
+        stateRef.current.activeStyle = 'translate';
+        stateRef.current.handleStartPolish(info.text, 'translate', undefined, null);
+      } else if (stateRef.current.autoMode) {
+        const cls = classifyContext({
+          text: info.text,
+          sourceApp: info.sourceApp,
+          windowTitle: info.windowTitle,
+        });
+        stateRef.current.activeStyle = cls.style;
+        setActiveStyle(cls.style);
+        if (cls.confidence >= 0.7 && cls.style !== 'polished') {
+          showToast(`已智能识别【${STYLE_NAMES[cls.style]}】(${cls.reason})`);
+        }
+        stateRef.current.handleStartPolish(info.text, cls.style, undefined, null);
+      } else {
+        stateRef.current.handleStartPolish(info.text, stateRef.current.activeStyle, undefined, null);
+      }
+    },
+    [isTauri, showToast]
+  );
+
+  const handleCapsuleCopy = useCallback(() => {
+    const info = capsuleInfoRef.current;
+    if (!info) return;
+    clearCapsuleTimers();
+    adapters.textReplacer.copyToClipboard(info.text).then((ok) => {
+      if (!ok) {
+        hideCapsule();
+        return;
+      }
+      setCapsuleCopied(true);
+      // Copy is not the end of the flow: keep the other actions available and
+      // show a persistent success state until the regular idle timeout.
+      capsuleArmTimerRef.current = setTimeout(() => {
+        capsuleArmTimerRef.current = null;
+        hideCapsule();
+      }, CAPSULE_IDLE_MS);
+    });
+  }, [adapters.textReplacer, hideCapsule]);
+
+  const handleCapsuleSearch = useCallback(() => {
+    const text = capsuleInfoRef.current?.text;
+    if (!text?.trim()) return;
+    clearCapsuleTimers();
+    const url = buildBrowserSearchUrl(text);
+    const open = isTauri
+      ? invoke('open_url', { url })
+      : Promise.resolve(window.open(url, '_blank', 'noopener,noreferrer'));
+    void open
+      .then(() => hideCapsule())
+      .catch((error) => {
+        console.warn('open browser search failed:', error);
+        showToast('无法打开浏览器，请稍后重试', 3000);
+      });
+  }, [hideCapsule, isTauri, showToast]);
+
+  const handleCapsuleHover = useCallback(
+    (hovered: boolean) => {
+      if (hovered) {
+        // 悬停即取消一切自动淡出
+        clearCapsuleTimers();
+        return;
+      }
+      // 移开后停留半秒再淡出,给误移出的用户一点回旋
+      clearCapsuleTimers();
+      capsuleFadeTimerRef.current = setTimeout(() => {
+        capsuleFadeTimerRef.current = null;
+        hideCapsule();
+      }, 500);
+    },
+    [hideCapsule]
+  );
+
+  stateRef.current.armCapsule = armCapsule;
+  stateRef.current.hideCapsule = hideCapsule;
+
+  // 窗口透明度：滑杆连续调节，拖动实时生效，松手/关闭时持久化
+  const [opacityMenuOpen, setOpacityMenuOpen] = useState(false);
+  const [opacityPos, setOpacityPos] = useState<{ top: number; right: number } | null>(null);
+  const opacityBtnRef = useRef<HTMLButtonElement | null>(null);
+  const opacityMenuRef = useRef<HTMLDivElement | null>(null);
+  // 拖动节流: 目标值直接交给 Rust 侧缓动动画(WebView2 失焦/隐藏时 rAF 会被节流,
+  // JS 驱动的插值在拖动中静默卡死,动画挪到 Rust 后不再受 webview 可见性影响)。
+  const animateOpacityTo = useCallback((target: number) => {
+    if (!isTauri) {
+      setWindowOpacity(target);
+      return;
+    }
+    invoke('animate_window_opacity', { target }).catch((e) => console.warn('animate opacity failed:', e));
+  }, [isTauri]);
+  const handleOpacityChange = useCallback((v: number) => {
+    setWindowOpacity(v);
+    // UI 文本即时反馈;窗口 alpha 走缓动插值
+    animateOpacityTo(v);
+  }, [animateOpacityTo]);
+  const persistOpacity = useCallback(() => {
+    adapters.storageProvider.set('windowOpacity', windowOpacity).catch(() => {});
+  }, [windowOpacity, adapters.storageProvider]);
+
+  const toggleOpacityMenu = useCallback(() => {
+    setOpacityMenuOpen((open) => {
+      if (!open && opacityBtnRef.current) {
+        const rect = opacityBtnRef.current.getBoundingClientRect();
+        setOpacityPos({ top: rect.bottom + 8, right: window.innerWidth - rect.right });
+      }
+      return !open;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!opacityMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (
+        opacityMenuRef.current && !opacityMenuRef.current.contains(e.target as Node) &&
+        opacityBtnRef.current && !opacityBtnRef.current.contains(e.target as Node)
+      ) {
+        setOpacityMenuOpen(false);
+        persistOpacity();
+      }
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [opacityMenuOpen, persistOpacity]);
 
   // History & Draft Operations
   const addHistoryRecord = useCallback(
@@ -324,7 +689,7 @@ export const App: React.FC = () => {
         };
         setAttachedFiles((prev) => [...prev, newFile]);
         setClipboardRef(null);
-        showToast('📋 已将剪贴板内容作为参考资料附带');
+        showToast('已将剪贴板内容作为参考资料附带');
       }
     } catch (e) {
       console.warn('read clipboard failed:', e);
@@ -336,9 +701,12 @@ export const App: React.FC = () => {
     text: string,
     style: PolishStyle,
     customInstruction?: string,
-    screenshotUrl?: string | null
+    screenshotUrl?: string | null,
+    historyOriginalText?: string
   ) => {
     if (!text || text.trim().length === 0) return;
+
+    if (style !== 'reply' && style !== 'translate') lastPolishStyleRef.current = style;
 
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -362,7 +730,7 @@ export const App: React.FC = () => {
     if (useScreenshot) {
       adapters.storageProvider.get<boolean>('hasShownVisionNotice', false).then((shown) => {
         if (!shown) {
-          showToast('💡 智能回复已启用视觉上下文感知，将基于真实聊天历史生成回复');
+          showToast('已开启视觉上下文：回复会参考聊天历史');
           adapters.storageProvider.set('hasShownVisionNotice', true).catch((e) => {
             console.warn('save vision notice state failed:', e);
           });
@@ -370,12 +738,28 @@ export const App: React.FC = () => {
       }).catch((e) => console.warn('load vision notice state failed:', e));
     }
 
+    // 缺陷1:未配置 Key 且官方试用代理已开通时,先走试用额度;额度用尽/通道失败再落 Mock
+    const trialLeft = trialRemainingTokens(trialTokensUsedRef.current);
+    const usedTrial = !currentApiKey && trialLeft > 0 && Boolean(TRIAL_PROXY_BASE_URL);
+
     const streamConfig: StreamConfig = {
       style,
       userInstruction: customInstruction,
-      personaPrompt: activePersonaPrompt || undefined,
-      apiKey: currentApiKey || undefined,
-      baseUrl: currentEndpoint || undefined,
+      personaPrompt: stateRef.current.activePersonaPrompt || undefined,
+      packPrompt: stateRef.current.activePackPrompt || undefined,
+      // 缺陷5/6/8:个人词库硬约束 + 文风标杆 few-shot + 宿主应用细粒度适配 + LaTeX 保护
+      glossaryPrompt: glossaryPromptText,
+      styleSamplesPrompt: buildStyleSamplesPrompt(styleSamples),
+      appStylePrompt: buildAppStylePrompt(stateRef.current.lastChatApp),
+      latexGuard: hasLatexMarkers(text),
+      // 翻译模式：目标语言逐次注入系统提示词（专家提示词与翻译互斥，翻译优先）
+      customPrompt: style === 'translate'
+        ? buildTranslateSystemPrompt(stateRef.current.translateTarget)
+        : stateRef.current.activeExpert
+          ? buildExpertSystemPrompt(stateRef.current.activeExpert)
+          : undefined,
+      apiKey: usedTrial ? 'trial' : currentApiKey || undefined,
+      baseUrl: usedTrial ? `${TRIAL_PROXY_BASE_URL.replace(/\/+$/, '')}/chat/completions` : currentEndpoint || undefined,
       model: currentModel || undefined,
       temperature: 0.7,
       imageDataUrl: useScreenshot ? (screenshotUrl as string) : undefined,
@@ -401,7 +785,8 @@ export const App: React.FC = () => {
             setPolishedText((finalText) => {
               if (finalText && finalText.trim()) {
                 addHistoryRecord({
-                  originalText: text,
+                  // refine 路径传入的 text 是整段 prompt,历史"原文"要显示真实对话原文
+                  originalText: historyOriginalText?.trim() || text,
                   polishedText: finalText.trim(),
                   style,
                   instruction: customInstruction,
@@ -409,12 +794,36 @@ export const App: React.FC = () => {
                   tokens,
                   durationMs: duration,
                 });
+                // 缺陷8 LaTeX 保护后校验:公式/命令被改动时明确提醒,不静默吞掉
+                const latexLost = findLatexViolations(text, finalText);
+                if (latexLost.length) {
+                  showToast(`⚠ ${latexLost.length} 处 LaTeX 标记疑似被改动：${latexLost.slice(0, 2).join(' ')}`, 4000);
+                }
               }
               return finalText;
             });
+            // 缺陷1:试用通道按次记账(优先服务端 tokens,缺失则本地保守估算)
+            if (usedTrial) {
+              const used = tokens > 0 ? tokens : estimateTokens(`${text}`);
+              trialTokensUsedRef.current += used;
+              const total = trialTokensUsedRef.current;
+              setTrialTokensUsed(total);
+              adapters.storageProvider.set('trialTokensUsed', total).catch(() => {});
+              if (trialRemainingTokens(total) <= 0) {
+                showToast('本期试用额度已用完：配置个人 API Key 可继续无限制使用', 4000);
+              }
+            }
           },
           onError: async (err) => {
             if (currentSignal.aborted) return;
+            // 缺陷1:官方试用通道不可用时,静默回落 Mock 演示,不把错误甩给新用户
+            if (usedTrial) {
+              console.warn('[Trial] proxy failed, falling back to demo mode:', err);
+              showToast('官方试用通道暂不可用，已切换演示模式；配置个人 API Key 可解锁完整能力', 4000);
+              setPolishedText('');
+              await runStream({ ...config, apiKey: undefined, baseUrl: undefined });
+              return;
+            }
             // Silent fallback to text-only mode if vision failed or rejected by endpoint
             if (config.imageDataUrl) {
               console.warn('[Vision Fallback] Vision failed, retrying in text-only mode:', err);
@@ -455,7 +864,7 @@ export const App: React.FC = () => {
         }
       }
     }
-  }, [adapters, apiKey, endpoint, model]);
+  }, [adapters, apiKey, endpoint, model, glossaryPromptText, styleSamples]);
 
   // Global shortcut and mouse-selection listeners are registered once. Keep the
   // callback they invoke fresh instead of leaving the initial no-op placeholder.
@@ -492,8 +901,8 @@ export const App: React.FC = () => {
             { sender: 'me', text: '正在全力推进中，细节还在核对' },
           ],
           last_message_from_other: hint,
-          draft_reply: '周五下班前准时交付，目前核心流程已跑通，请放心！',
-          clarify_options: ['积极承诺（周五准时交付）', '委婉缓冲（周五给初稿）', '追问细节（对齐确认清单）'],
+          draft_reply: '周五前给你，主体已经跑通了',
+          clarify_options: packChips(['积极承诺（周五准时交付）', '委婉缓冲（周五给初稿）', '追问细节（对齐确认清单）']),
         };
         setScreenReplyAnalysis(mockAnalysis);
         setPolishedText(mockAnalysis.draft_reply);
@@ -524,7 +933,7 @@ export const App: React.FC = () => {
 
     const streamConfig: StreamConfig = {
       style: 'reply',
-      customPrompt: buildScreenReplySystemPrompt(activePersonaPrompt),
+      customPrompt: buildScreenReplySystemPrompt(stateRef.current.activePersonaPrompt, stateRef.current.activePack),
       apiKey: currentApiKey || undefined,
       baseUrl: currentEndpoint || undefined,
       model: currentModel || undefined,
@@ -565,7 +974,7 @@ export const App: React.FC = () => {
                 conversation: [],
                 last_message_from_other: fallbackMsg,
                 draft_reply: noThink.trim(),
-                clarify_options: ['更正式一点', '热情答应', '婉言谢绝'],
+                clarify_options: packChips(['更正式一点', '热情答应', '婉言谢绝']),
               };
             }
 
@@ -595,7 +1004,7 @@ export const App: React.FC = () => {
             // seamlessly fallback to structured text reply analysis!
             if (streamConfig.useLastScreenshot || streamConfig.imageDataUrl) {
               const fallbackMsg = existingHint?.trim() || '对方发来的消息';
-              showToast('💡 当前模型不支持直接读图，已切换为文本智能回复', 3000);
+              showToast('当前模型不支持读图，已切换为文本智能回复', 3000);
               stateRef.current.handleStartTextReplyAnalysis(fallbackMsg);
               return;
             }
@@ -635,7 +1044,7 @@ export const App: React.FC = () => {
 
     setIsGenerating(true);
     setError(null);
-    setPolishedText('正在针对消息构思高情商回复建议...');
+    setPolishedText('正在构思回复...');
     setDurationMs(0);
     setTotalTokens(0);
 
@@ -652,8 +1061,8 @@ export const App: React.FC = () => {
         const mockAnalysis: ScreenReplyAnalysis = {
           conversation: [{ sender: 'other', text: targetMsg }],
           last_message_from_other: targetMsg,
-          draft_reply: `收到，关于“${targetMsg.slice(0, 15)}...”，我这边会全力推进落实，稍后同步最新进展！`,
-          clarify_options: ['积极推进（全力落实）', '严谨对齐（确认排期）', '委婉缓冲（稍后答复）'],
+          draft_reply: '好，这个我来推进，有进展同步你',
+          clarify_options: packChips(['积极推进（全力落实）', '严谨对齐（确认排期）', '委婉缓冲（稍后答复）']),
         };
         setScreenReplyAnalysis(mockAnalysis);
         setPolishedText(mockAnalysis.draft_reply);
@@ -669,7 +1078,7 @@ export const App: React.FC = () => {
     let rawOutput = '';
     const streamConfig: StreamConfig = {
       style: 'reply',
-      customPrompt: buildTextReplySystemPrompt(activePersonaPrompt),
+      customPrompt: buildTextReplySystemPrompt(stateRef.current.activePersonaPrompt, stateRef.current.activePack),
       apiKey: currentApiKey || undefined,
       baseUrl: currentEndpoint || undefined,
       model: currentModel || undefined,
@@ -706,7 +1115,7 @@ export const App: React.FC = () => {
                 conversation: [{ sender: 'other', text: messageText }],
                 last_message_from_other: messageText,
                 draft_reply: rawOutput.trim(),
-                clarify_options: ['积极推进/正面答复', '严谨对齐/确认细节', '委婉缓冲/礼貌借过'],
+                clarify_options: packChips(['积极推进/正面答复', '严谨对齐/确认细节', '委婉缓冲/礼貌借过']),
               };
             }
 
@@ -767,9 +1176,12 @@ export const App: React.FC = () => {
         .join('\n\n');
       instruction = `${chipText}\n\n${fileSummaries}`;
     }
-    const refinePrompt = buildScreenReplyRefinePrompt(conversation, instruction, activePersonaPrompt);
-    handleStartPolish(refinePrompt, 'reply', chipText, undefined);
-  }, [handleStartPolish, attachedFiles, activePersonaPrompt]);
+    const refinePrompt = buildScreenReplyRefinePrompt(conversation, instruction, activePersonaPrompt, activePackPrompt, glossaryPromptText);
+    const historyOriginal = analysis?.last_message_from_other
+      || conversation.filter((c) => c.sender === 'other').slice(-1)[0]?.text
+      || undefined;
+    handleStartPolish(refinePrompt, 'reply', chipText, undefined, historyOriginal);
+  }, [handleStartPolish, attachedFiles, activePersonaPrompt, activePackPrompt, glossaryPromptText]);
 
   // Load Saved Settings on Mount
   useEffect(() => {
@@ -785,6 +1197,15 @@ export const App: React.FC = () => {
       const savedAutostart = Boolean(config.autostart ?? false);
       const savedPersona = (config.persona || 'standard') as PersonaType;
       const savedCustomPersona = String(config.customPersonaPrompt || '');
+      // 旧默认 'general' 迁移到智能识别；显式选过行业包的用户保持原选择
+      const rawPack = String(config.industryPack || 'auto');
+      const savedPack = rawPack === 'general' ? 'auto' : rawPack;
+      const savedCustomActions = Array.isArray(config.customActions) ? (config.customActions as CustomAction[]) : [];
+      const savedGlossary = Array.isArray(config.glossary) ? (config.glossary as GlossaryRule[]) : [];
+      const savedStyleSamples = Array.isArray(config.styleSamples) ? (config.styleSamples as string[]) : [];
+      const savedOpacity = Number(config.windowOpacity ?? 1);
+      // 兼容旧皮肤值：jade→dark, redwhite→light
+      const savedSkin = config.skin === 'redwhite' || config.skin === 'light' ? 'light' : 'dark';
       const rawDsn = String(config.glitchtipDsn || '');
       const savedDsn = rawDsn.includes('@localhost:3000/1') ? '' : rawDsn;
 
@@ -794,6 +1215,22 @@ export const App: React.FC = () => {
       if (savedStyle) setActiveStyle(savedStyle);
       if (savedPersona) setPersona(savedPersona);
       if (savedCustomPersona) setCustomPersonaPrompt(savedCustomPersona);
+      if (savedPack) setIndustryPack(savedPack);
+      if (savedCustomActions.length > 0) setCustomActions(savedCustomActions);
+      if (savedGlossary.length > 0) setGlossary(savedGlossary);
+      if (savedStyleSamples.length > 0) setStyleSamples(savedStyleSamples);
+      const savedTrialUsed = Number(config.trialTokensUsed ?? 0);
+      trialTokensUsedRef.current = Number.isFinite(savedTrialUsed) && savedTrialUsed > 0 ? savedTrialUsed : 0;
+      setTrialTokensUsed(trialTokensUsedRef.current);
+      setSkin(savedSkin);
+      // 智能模式默认开启；用户手动选过风格后关闭并记住
+      const savedAutoMode = config.autoMode === undefined ? true : Boolean(config.autoMode);
+      setAutoMode(savedAutoMode);
+      stateRef.current.autoMode = savedAutoMode;
+      const savedTranslateTarget = String(config.translateTarget || 'en');
+      if (TRANSLATE_TARGETS.some((t) => t.id === savedTranslateTarget)) {
+        setTranslateTarget(savedTranslateTarget as TranslateTargetId);
+      }
       if (savedDsn) setGlitchtipDsn(savedDsn);
 
       const savedHistory = (config.generationHistory || []) as HistoryRecord[];
@@ -808,6 +1245,16 @@ export const App: React.FC = () => {
 
       setAutoCopyPopup(savedAutoPopup);
       stateRef.current.autoCopyPopup = savedAutoPopup;
+      // 应用持久化的窗口透明度（仅深色主题支持；浅色一律 100% 不透明）。
+      // 注意用 savedSkin 而非 skin：setSkin 是异步 state,这里读闭包会拿到过期值,
+      // 浅色用户启动时 savedOpacity 曾被照样应用(浅色半透明灰屏)。
+      const opacity = savedSkin === 'light'
+        ? 1
+        : Number.isFinite(savedOpacity) ? Math.min(1, Math.max(0.2, savedOpacity)) : 1;
+      setWindowOpacity(opacity);
+      if (isTauri) {
+        invoke('set_window_opacity', { opacity }).catch((e) => console.warn('apply opacity failed:', e));
+      }
       setReadChatScreenshot(savedReadScreenshot);
       stateRef.current.readChatScreenshot = savedReadScreenshot;
       if (savedWakeShortcut) setWakeShortcut(savedWakeShortcut);
@@ -887,9 +1334,28 @@ export const App: React.FC = () => {
         adapters.storageProvider.set('onboardingDone', true).catch(() => {});
         setShowEpoch((n) => n + 1); // remount panel container → replay enter animation
         invoke('append_log', { msg: 'frontend: epoch bumped' }).catch(() => {});
+        // 新抓取覆盖内置库浮层与并行对比视图
+        setShowScriptLibrary(false);
+        setShowExpertPicker(false);
+        if (stateRef.current.showParallel || parallelControllersRef.current.size > 0) {
+          stopAllParallel();
+          setShowParallel(false);
+          setParallelSessions([]);
+          applyParallelWindowSize(false);
+        }
+        // 记录窗口标题/来源应用/选中文本，供话术库做行业匹配
+        setContextHint(
+          [event?.payload?.windowTitle, event?.payload?.sourceApp, event?.payload?.text]
+            .filter(Boolean)
+            .join('\n')
+        );
         const isSensitiveBlocked = event?.payload?.trigger === 'sensitive-blocked';
         const isScreenReply = isScreenReplyPayload(event?.payload);
         stateRef.current.hasScreenshot = isScreenReply;
+        // 记住最近的聊天应用，供面板内“重新抓取”后台截图使用
+        if (event?.payload?.sourceApp && event.payload.sourceApp !== 'runbi-desktop.exe') {
+          stateRef.current.lastChatApp = String(event.payload.sourceApp);
+        }
         invoke('append_log', { msg: `frontend: flags computed sr=${isScreenReply} sens=${isSensitiveBlocked} rcs=${stateRef.current.readChatScreenshot}` }).catch(() => {});
 
         if (isSensitiveBlocked) {
@@ -924,7 +1390,7 @@ export const App: React.FC = () => {
             invoke('append_log', { msg: 'frontend: screen-reply gated OFF (readChatScreenshot=false)' }).catch(() => {});
             showToast('视觉读取已在设置中关闭，打开后可分析聊天窗口', 4000);
           } else {
-            showToast('💡 已捕获聊天界面，正在识别对话并构思回复...');
+            showToast('已捕获聊天界面，正在识别对话并构思回复...');
             invoke('append_log', { msg: 'frontend: screen-reply → vision analysis start' }).catch(() => {});
             stateRef.current.handleStartScreenReplyAnalysis(hint);
           }
@@ -936,25 +1402,44 @@ export const App: React.FC = () => {
           stateRef.current.originalText = captured;
           stateRef.current.currentScreenshot = screenshot;
 
-          // Context auto-sense: multi-dimensional intent detection across all 7 styles
-          const cls = classifyContext({
-            text: captured,
-            sourceApp: event.payload.sourceApp,
-            windowTitle: event.payload.windowTitle,
-          });
-          const targetStyle = cls.style;
-          stateRef.current.activeStyle = targetStyle;
-          setActiveStyle(targetStyle);
-
-          if (cls.confidence >= 0.7 && targetStyle !== 'polished') {
-            showToast(`💡 智能识别【${STYLE_NAMES[targetStyle]}】(${cls.reason})`);
+          // Automatic text capture (mouse selection or clipboard) may only
+          // arm the capsule. Shortcut-originated events continue below and may
+          // open the full panel directly.
+          if (shouldShowCapsule(event?.payload)) {
+            stateRef.current.armCapsule({
+              ts: Date.now(),
+              text: captured,
+              sourceApp: event.payload.sourceApp,
+              windowTitle: event.payload.windowTitle,
+              screenshot,
+            });
+            return;
           }
 
-          if (targetStyle === 'reply') {
-            stateRef.current.handleStartTextReplyAnalysis(captured);
+          // 智能模式：AI 依据文字/窗口自动判断风格与行业；手动模式：沿用用户固定的风格
+          if (stateRef.current.autoMode) {
+            const cls = classifyContext({
+              text: captured,
+              sourceApp: event.payload.sourceApp,
+              windowTitle: event.payload.windowTitle,
+            });
+            const targetStyle = cls.style;
+            stateRef.current.activeStyle = targetStyle;
+            setActiveStyle(targetStyle);
+
+            if (cls.confidence >= 0.7 && targetStyle !== 'polished') {
+              showToast(`已智能识别【${STYLE_NAMES[targetStyle]}】(${cls.reason})`);
+            }
+
+            if (targetStyle === 'reply') {
+              stateRef.current.handleStartTextReplyAnalysis(captured);
+            } else {
+              setScreenReplyAnalysis(null);
+              stateRef.current.handleStartPolish(captured, targetStyle, undefined, screenshot);
+            }
           } else {
             setScreenReplyAnalysis(null);
-            stateRef.current.handleStartPolish(captured, targetStyle, undefined, screenshot);
+            stateRef.current.handleStartPolish(captured, stateRef.current.activeStyle, undefined, screenshot);
           }
         } else if (event?.payload?.trigger === 'shortcut') {
           showToast('未检测到选中文本');
@@ -1035,6 +1520,14 @@ export const App: React.FC = () => {
         wakeShortcut: sc,
         persona,
         customPersonaPrompt: customPersonaPrompt.trim(),
+        industryPack,
+        autoMode,
+        // 只保存名称和指令都填好的项：半填的残项会占按钮位却不显示，曾让用户以为按钮丢了
+        customActions: customActions.filter((a) => a.name.trim() && a.prompt.trim()),
+        // 词库只保存 from 非空的规则(replace 还要求 to 非空);文风样本 trim 后滤空段
+        glossary: glossary.filter((g) => g.from.trim() && (g.kind !== 'replace' || (g.to ?? '').trim())),
+        styleSamples: styleSamples.map((s) => s.trim()).filter(Boolean),
+        skin,
         glitchtipDsn: glitchtipDsn.trim(),
       });
 
@@ -1087,7 +1580,7 @@ export const App: React.FC = () => {
     try {
       if (isTauri) {
         await invoke<string>('submit_feedback', { message: msg });
-        showToast('✓ 反馈已收到，非常感谢您的支持！', 3000);
+        showToast('反馈已收到，非常感谢您的支持！', 3000);
         setFeedbackText('');
         setFeedbackSent(true);
         setTimeout(() => setFeedbackSent(false), 5000);
@@ -1144,11 +1637,246 @@ export const App: React.FC = () => {
     handleStartPolish(originalText, activeStyle, undefined, currentScreenshot);
   };
 
-  // Style Change
+  // Style Change（点任意风格即退出专家模式与智能模式：风格与专家是同一"方式"槽位，互斥）
   const handleStyleChange = (newStyle: PolishStyle) => {
+    if (stateRef.current.activeExpert) {
+      stateRef.current.activeExpert = null;
+      setActiveExpert(null);
+    }
+    setAutoMode(false);
+    stateRef.current.autoMode = false;
+    if (newStyle !== 'reply' && newStyle !== 'translate') lastPolishStyleRef.current = newStyle;
     setActiveStyle(newStyle);
     handleStartPolish(originalText, newStyle, undefined, currentScreenshot);
   };
+
+  // ---- 工作模式：显式可切换的第一层（润色 = 改写我的文字；回复 = 帮我想回复）----
+  const handleSwitchToPolish = useCallback(() => {
+    if (stateRef.current.activeStyle !== 'reply' && stateRef.current.activeStyle !== 'translate' && !stateRef.current.screenReplyAnalysis) return;
+    stateRef.current.activeExpert = null;
+    setActiveExpert(null);
+    setScreenReplyAnalysis(null);
+    const target = lastPolishStyleRef.current;
+    stateRef.current.activeStyle = target;
+    setActiveStyle(target);
+    const text = stateRef.current.originalText;
+    if (text.trim()) handleStartPolish(text, target, undefined);
+  }, [handleStartPolish]);
+
+  // 翻译模式语言条：切换目标语言 → 持久化并对当前原文立即重译
+  const handleTranslateTargetChange = useCallback((id: TranslateTargetId) => {
+    setTranslateTarget(id);
+    stateRef.current.translateTarget = id;
+    adapters.storageProvider.set('translateTarget', id).catch(() => {});
+    if (stateRef.current.activeStyle === 'translate' && stateRef.current.originalText.trim()) {
+      stateRef.current.handleStartPolish(stateRef.current.originalText, 'translate', undefined, currentScreenshot);
+    }
+  }, [adapters.storageProvider, currentScreenshot]);
+
+  const handleSwitchToReply = useCallback(() => {
+    if (stateRef.current.activeStyle === 'reply') return;
+    setScreenReplyAnalysis(null);
+    stateRef.current.activeStyle = 'reply';
+    setActiveStyle('reply');
+    const text = stateRef.current.originalText;
+    if (text.trim()) stateRef.current.handleStartTextReplyAnalysis(text);
+  }, []);
+
+  // ---- 多专家并行：同一输入并发发给 2-4 位专家，各自独立流式 ----
+  const applyParallelWindowSize = useCallback((wide: boolean) => {
+    if (!isTauri) return;
+    getCurrentWindow()
+      .setSize(new LogicalSize(wide ? 1000 : 560, wide ? 660 : 520))
+      .catch((e) => console.warn('set window size failed:', e));
+  }, [isTauri]);
+
+  const stopAllParallel = useCallback(() => {
+    for (const c of parallelControllersRef.current.values()) c.abort();
+    parallelControllersRef.current.clear();
+  }, []);
+
+  const stopParallelOne = useCallback((id: string) => {
+    const c = parallelControllersRef.current.get(id);
+    if (!c) return;
+    c.abort();
+    parallelControllersRef.current.delete(id);
+    setParallelSessions((prev) =>
+      prev.map((s) => (s.id === id ? { ...s, status: 'done' as const } : s))
+    );
+  }, []);
+
+  const closeParallel = useCallback(() => {
+    stopAllParallel();
+    setShowParallel(false);
+    setParallelSessions([]);
+    applyParallelWindowSize(false);
+  }, [stopAllParallel, applyParallelWindowSize]);
+
+  const handleStartParallel = useCallback(
+    (experts: ExpertAgent[]) => {
+      const picked = experts.slice(0, 4);
+      if (picked.length === 0) return;
+      const text = stateRef.current.originalText;
+      if (!text.trim()) {
+        showToast('没有可生成的文本，请先划词或输入内容');
+        return;
+      }
+      // 结束可能存在的单流生成，清掉上一轮并行会话
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+        abortControllerRef.current = null;
+      }
+      stopAllParallel();
+      setIsGenerating(false);
+      setShowExpertPicker(false);
+      setShowScriptLibrary(false);
+
+      const stamp = Date.now();
+      const sessions: ParallelSession[] = picked.map((e, i) => ({
+        id: `${stamp}-${i}`,
+        expertId: e.id,
+        expertName: `${e.emoji} ${e.name}`.trim(),
+        text: '',
+        status: 'streaming',
+      }));
+      setParallelSessions(sessions);
+      setShowParallel(true);
+      setScreenReplyAnalysis(null);
+      applyParallelWindowSize(true);
+
+      const style = stateRef.current.activeStyle;
+      const baseConfig = {
+        style,
+        apiKey: stateRef.current.apiKey || apiKey || undefined,
+        baseUrl: stateRef.current.endpoint || endpoint || undefined,
+        model: stateRef.current.model || model || undefined,
+        temperature: 0.7,
+        personaPrompt: stateRef.current.activePersonaPrompt || undefined,
+        packPrompt: stateRef.current.activePackPrompt || undefined,
+      };
+
+      picked.forEach((expert, i) => {
+        const session = sessions[i];
+        const controller = new AbortController();
+        parallelControllersRef.current.set(session.id, controller);
+        const signal = controller.signal;
+        let acc = '';
+        const patch = (p: Partial<ParallelSession>) =>
+          setParallelSessions((prev) => prev.map((s) => (s.id === session.id ? { ...s, ...p } : s)));
+
+        adapters.llmTransport
+          .streamChat(
+            { text, config: { ...baseConfig, customPrompt: buildExpertSystemPrompt(expert) } },
+            {
+              onChunk: (delta) => {
+                if (signal.aborted) return;
+                acc += delta;
+                patch({ text: acc });
+              },
+              onDone: (duration, tokens) => {
+                if (signal.aborted) return;
+                parallelControllersRef.current.delete(session.id);
+                patch({ status: 'done', durationMs: duration, totalTokens: tokens });
+                if (acc.trim()) {
+                  addHistoryRecord({
+                    originalText: text,
+                    polishedText: acc.trim(),
+                    style,
+                    instruction: `专家:${expert.name}`,
+                    model: baseConfig.model,
+                    tokens,
+                    durationMs: duration,
+                  });
+                }
+              },
+              onError: (err) => {
+                if (signal.aborted) return;
+                parallelControllersRef.current.delete(session.id);
+                patch({ status: 'error', error: err });
+              },
+              onAbort: () => {
+                parallelControllersRef.current.delete(session.id);
+                patch({ status: 'done' });
+              },
+            },
+            signal
+          )
+          .catch((e: unknown) => {
+            if (signal.aborted) return;
+            parallelControllersRef.current.delete(session.id);
+            patch({ status: 'error', error: String((e as Error)?.message || e) });
+          });
+      });
+    },
+    [adapters, apiKey, endpoint, model, showToast, stopAllParallel, applyParallelWindowSize, addHistoryRecord]
+  );
+
+  const handleUseTemplate = useCallback(
+    async (t: ScriptTemplate, mode: 'copy' | 'reference') => {
+      if (mode === 'copy') {
+        const ok = await adapters.textReplacer.copyToClipboard(t.template);
+        showToast(ok ? `已复制「${t.sectionTitle}」模板，粘贴即可使用` : '复制失败');
+        return;
+      }
+      setShowScriptLibrary(false);
+      const instruction = `参考下面的行业话术模板（把[变量]替换成贴合原文的合理内容）：\n【${t.sectionTitle}】适用场景：${t.scenario}\n${t.template}`;
+      const analysis = stateRef.current.screenReplyAnalysis;
+      showToast(`已按「${t.sectionTitle}」模板参考生成`);
+      if (analysis) {
+        const refinePrompt = buildScreenReplyRefinePrompt(
+          analysis.conversation || [],
+          instruction,
+          activePersonaPrompt,
+          activePackPrompt,
+          glossaryPromptText
+        );
+        const historyOriginal = analysis?.last_message_from_other
+          || (analysis?.conversation || []).filter((c) => c.sender === 'other').slice(-1)[0]?.text
+          || undefined;
+        handleStartPolish(refinePrompt, 'reply', t.sectionTitle, undefined, historyOriginal);
+      } else {
+        handleStartPolish(stateRef.current.originalText, stateRef.current.activeStyle, instruction);
+      }
+    },
+    [adapters, showToast, handleStartPolish, activePersonaPrompt, activePackPrompt, glossaryPromptText]
+  );
+
+  const handleApplyExpert = useCallback(
+    (expert: ExpertAgent) => {
+      stateRef.current.activeExpert = expert;
+      setActiveExpert(expert);
+      setShowExpertPicker(false);
+      setShowScriptLibrary(false);
+      showToast(`已切换为专家「${expert.name}」`);
+      // 已有文本时立即用新专家重新生成，所见即所得
+      if (stateRef.current.originalText.trim() && !stateRef.current.screenReplyAnalysis) {
+        handleStartPolish(stateRef.current.originalText, stateRef.current.activeStyle, undefined);
+      }
+    },
+    [showToast, handleStartPolish]
+  );
+
+  const handleClearExpert = useCallback(() => {
+    stateRef.current.activeExpert = null;
+    setActiveExpert(null);
+    showToast('已恢复默认润色风格');
+  }, [showToast]);
+
+  // 回到智能模式：AI 自动判断风格并立即按当前文本重新生成，所见即所得
+  const handleAutoMode = useCallback(() => {
+    stateRef.current.activeExpert = null;
+    setActiveExpert(null);
+    setAutoMode(true);
+    stateRef.current.autoMode = true;
+    showToast('智能模式：AI 自动判断风格与行业场景');
+    const text = stateRef.current.originalText;
+    if (text.trim() && !stateRef.current.screenReplyAnalysis) {
+      const cls = classifyContext({ text, sourceApp: stateRef.current.lastChatApp });
+      stateRef.current.activeStyle = cls.style;
+      setActiveStyle(cls.style);
+      handleStartPolish(text, cls.style, undefined);
+    }
+  }, [showToast, handleStartPolish]);
 
   // Copy to Clipboard
   const handleCopy = async () => {
@@ -1176,9 +1904,9 @@ export const App: React.FC = () => {
         res.restoredClipboard === false ? 5000 : 2000
       );
     } else if (res.fallbackCopied) {
-      // Pasting failed but the text IS on the clipboard — keep the panel open
-      // and tell the truth about what happened.
-      showToast('贴回失败，已复制到剪贴板，Ctrl+V 粘贴即可', 3500);
+      // 缺陷3:贴回失败但文本已在剪贴板——弹常驻浮条(手动关闭);3.5s Toast 容易错过
+      setPasteFallbackBar(true);
+      showToast('贴回失败，已复制到剪贴板', 2000);
     } else {
       showToast(res.error || '替换失败', 3500);
     }
@@ -1195,6 +1923,12 @@ export const App: React.FC = () => {
     setShowOnboarding(false);
     setAttachedFiles([]);
     setClipboardRef(null);
+    if (stateRef.current.showParallel || parallelControllersRef.current.size > 0) {
+      stopAllParallel();
+      setShowParallel(false);
+      setParallelSessions([]);
+      applyParallelWindowSize(false);
+    }
     if (isTauri) {
       // Play the exit animation first, then hide (fallback hides immediately).
       const el = document.querySelector('.runbi-window');
@@ -1247,12 +1981,28 @@ export const App: React.FC = () => {
 
       if (e.key === 'Escape') {
         e.preventDefault();
+        // 胶囊态 Esc = 直接收走胶囊
+        if (s.uiMode === 'capsule') {
+          s.hideCapsule();
+          return;
+        }
+        // 内置库浮层在最上层，优先关闭（浮层自己的 Esc 监听与这里同在 window，
+        // stopPropagation 拦不住同 target 的其他监听，必须在这里先截住）
+        if (s.showScriptLibrary || s.showExpertPicker) {
+          setShowScriptLibrary(false);
+          setShowExpertPicker(false);
+          return;
+        }
         if (s.showHistory) {
           setShowHistory(false);
           return;
         }
         if (s.showSettings) {
           setShowSettings(false);
+          return;
+        }
+        if (s.showParallel) {
+          closeParallel();
           return;
         }
         if (s.isGenerating) {
@@ -1284,7 +2034,7 @@ export const App: React.FC = () => {
       }
 
       // Don't hijack keys while the user is editing a field or in settings or in history.
-      if (typing || s.showSettings || s.showHistory) return;
+      if (typing || s.showSettings || s.showHistory || s.showParallel) return;
 
       if (e.key === 'Enter') {
         e.preventDefault();
@@ -1300,9 +2050,12 @@ export const App: React.FC = () => {
 
     const onBlur = () => {
       const s = stateRef.current;
+      // 胶囊模式不随失焦隐藏:划词后焦点通常仍留在源应用,胶囊的退场
+      // 由悬停离开/空闲淡出/Esc 负责(Raycast 式失焦即隐藏只适用面板)。
+      if (s.uiMode === 'capsule') return;
       // Raycast behavior: hide whenever focus leaves, unless pinned / generating /
-      // in settings / in history / showing screen-reply analysis.
-      if (!s.isPinned && !s.isGenerating && !s.showSettings && !s.showHistory && !s.screenReplyAnalysis) {
+      // in settings / in history / showing screen-reply analysis / parallel running.
+      if (!s.isPinned && !s.isGenerating && !s.showSettings && !s.showHistory && !s.screenReplyAnalysis && !s.showParallel && !s.parallelRunning) {
         if (isTauri) {
           invoke('hide_window').catch(() => {});
         }
@@ -1315,12 +2068,33 @@ export const App: React.FC = () => {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('blur', onBlur);
     };
-  }, [handleReplace, handleStyleChange, isTauri]);
+  }, [handleReplace, handleStyleChange, closeParallel, isTauri]);
+
+  // 缺陷2 微胶囊:独占整棵渲染树。窗口只有 196×44,若把胶囊塞进面板容器树,
+  // 标题栏(shrink-0)先占满高度,胶囊被 overflow-hidden 裁出可视区——
+  // 实测表现为"窗口存在且置顶,但胶囊永远看不见"。
+  if (uiMode === 'capsule' && capsule) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center overflow-hidden bg-transparent font-sans select-none">
+        <SelectionCapsule
+          key={capsule.ts}
+          visible={capsuleVisible}
+          copied={capsuleCopied}
+          onSearch={handleCapsuleSearch}
+          onPolish={() => { void expandCapsule('polish'); }}
+          onReply={() => { void expandCapsule('reply'); }}
+          onTranslate={() => { void expandCapsule('translate'); }}
+          onCopy={handleCapsuleCopy}
+          onHoverChange={handleCapsuleHover}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen w-screen flex-col items-center justify-start overflow-hidden bg-transparent p-3 font-sans select-none">
       {/* Raycast Container (keyed by showEpoch so enter animation replays on each summon) */}
-      <div key={showEpoch} className="runbi-window runbi-enter flex h-full min-h-0 w-full max-w-[540px] flex-col overflow-hidden rounded-2xl backdrop-blur-xl">
+      <div key={showEpoch} className={`runbi-window runbi-enter relative flex h-full min-h-0 w-full flex-col overflow-hidden rounded-2xl backdrop-blur-xl ${showParallel ? 'max-w-[1000px]' : 'max-w-[540px]'}`}>
         
         {/* Title & Drag Region */}
         <div
@@ -1328,8 +2102,42 @@ export const App: React.FC = () => {
           className="flex shrink-0 items-center justify-between border-b border-white/10 bg-black/20 px-3 py-2 cursor-grab active:cursor-grabbing"
         >
           <div className="flex items-center gap-2.5">
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg border border-teal-500/30 bg-teal-500/15 text-teal-300 shadow-[0_0_12px_rgba(45,212,191,0.16)]">
+            <div className="runbi-logo-tile flex h-7 w-7 items-center justify-center rounded-lg border">
               <RunbiLogo className="h-4 w-4" />
+            </div>
+            {/* 工作模式开关：当前所处模式显式可见、可一键切换（划词时 AI 也会自动选） */}
+            <div
+              className="flex items-center rounded-full border border-white/10 bg-black/20 p-0.5"
+              role="tablist"
+              aria-label="工作模式切换"
+            >
+              <button
+                type="button"
+                role="tab"
+                aria-selected={!(activeStyle === 'reply' || screenReplyAnalysis)}
+                title="润色：改写我自己的文字"                onClick={handleSwitchToPolish}
+                className={`rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors cursor-pointer ${
+                  !(activeStyle === 'reply' || screenReplyAnalysis)
+                    ? 'bg-white/10 text-slate-200'
+                    : 'text-slate-500 hover:text-slate-300'
+                }`}
+              >
+                润色
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={Boolean(activeStyle === 'reply' || screenReplyAnalysis)}
+                title="回复：把上方文字当作对方消息，帮我想一条回复"
+                onClick={handleSwitchToReply}
+                className={`rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors cursor-pointer ${
+                  activeStyle === 'reply' || screenReplyAnalysis
+                    ? 'bg-teal-500/20 text-teal-300 border border-teal-500/30'
+                    : 'text-slate-500 hover:text-slate-300'
+                }`}
+              >
+                回复
+              </button>
             </div>
           </div>
 
@@ -1360,6 +2168,47 @@ export const App: React.FC = () => {
             >
               <History className="h-4 w-4" />
             </button>
+            {skin !== 'light' && (
+            <button
+              ref={opacityBtnRef}
+              type="button"
+              onClick={toggleOpacityMenu}
+              aria-label="调整窗口透明度"
+              aria-expanded={opacityMenuOpen}
+              title={`窗口透明度（当前 ${Math.round(windowOpacity * 100)}%）`}
+              className={`runbi-icon-button ${
+                windowOpacity !== 1 || opacityMenuOpen ? 'bg-teal-500/10 !text-teal-300' : ''
+              }`}
+            >
+              <Droplet className="h-4 w-4" />
+            </button>
+            )}
+            {opacityMenuOpen &&
+              opacityPos &&
+              createPortal(
+                <div
+                  ref={opacityMenuRef}
+                  style={{ position: 'fixed', top: opacityPos.top, right: opacityPos.right }}
+                  className="z-[2147483647] flex flex-col items-center gap-2 rounded-xl border border-white/10 bg-[#0b1512]/95 px-2.5 py-3 shadow-xl backdrop-blur-md"
+                >
+                  <span className="text-[10px] font-medium text-slate-300">
+                    {Math.round(windowOpacity * 100)}%
+                  </span>
+                  <input
+                    type="range"
+                    min={0.2}
+                    max={1}
+                    step={0.01}
+                    value={windowOpacity}
+                    onChange={(e) => handleOpacityChange(Number(e.target.value))}
+                    onPointerUp={persistOpacity}
+                    onKeyUp={persistOpacity}
+                    aria-label="窗口透明度滑杆"
+                    className="runbi-opacity-slider"
+                  />
+                </div>,
+                document.body
+              )}
             <button
               type="button"
               onClick={handleTogglePin}
@@ -1587,12 +2436,42 @@ export const App: React.FC = () => {
                     {connectionTest.status === 'testing' ? '测试中' : '测试连接'}
                   </button>
                 </div>
+
+                {/* 缺陷5/7:个人词库 + 文风标杆 + 本地模型零配置探测 */}
+                <AdvancedSettings
+                  settings={{ apiKey, baseUrl: endpoint, model, glossary, styleSamples }}
+                  onPatch={(patch) => {
+                    if (patch.glossary) setGlossary(patch.glossary);
+                    if (patch.styleSamples) setStyleSamples(patch.styleSamples);
+                    if (patch.baseUrl && patch.model) {
+                      // 本地模型一键直连:探测给出 /v1 根地址,App 端点存完整 /chat/completions
+                      const base = patch.baseUrl.replace(/\/+$/, '');
+                      setEndpoint(/\/chat\/completions$/.test(base) ? base : `${base}/chat/completions`);
+                      setModel(patch.model);
+                      setConnectionTest({ status: 'idle', message: '' });
+                    }
+                  }}
+                />
               </div>
             )}
 
             {/* Tab 2: Desktop Settings */}
             {settingsTab === 'desktop' && (
               <div className="runbi-settings-scroll min-h-0 flex-1 space-y-2.5 overflow-y-auto p-4 animate-in fade-in duration-150">
+                <div className="space-y-1.5">
+                  <label htmlFor="skin-select" className="block font-medium text-slate-300">皮肤</label>
+                  <select
+                    id="skin-select"
+                    value={skin}
+                    onChange={(e) => setSkin(e.target.value as 'dark' | 'light')}
+                    className="runbi-form-control cursor-pointer"
+                  >
+                    <option value="dark">深色 (默认)</option>
+                    <option value="light">浅色</option>
+                  </select>
+                  <p className="text-[10px] text-slate-500">切换即时生效，保存后记住选择。</p>
+                </div>
+
                 <div className="space-y-1">
                   <label className="block font-medium text-slate-300">全局唤醒快捷键</label>
                   <button
@@ -1633,6 +2512,26 @@ export const App: React.FC = () => {
             {settingsTab === 'persona' && (
               <div className="runbi-settings-scroll min-h-0 flex-1 space-y-3 overflow-y-auto p-4 animate-in fade-in duration-150">
                 <div className="space-y-1.5">
+                  <label htmlFor="industry-pack" className="block font-medium text-slate-300">行业模板包</label>
+                  <select
+                    id="industry-pack"
+                    value={industryPack}
+                    onChange={(e) => setIndustryPack(e.target.value)}
+                    className="runbi-form-control cursor-pointer"
+                  >
+                    {INDUSTRY_PACKS.map((p) => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                  <p className="text-[10px] text-slate-500">
+                    {INDUSTRY_PACKS.find((p) => p.id === industryPack)?.description}
+                  </p>
+                  <p className="text-[10px] text-slate-500">
+                    无需在面板里再选——划词和智能回复时自动生效；命中行业的回复面板会出现专属快捷按钮。
+                  </p>
+                </div>
+
+                <div className="space-y-1.5">
                   <label htmlFor="persona-preset" className="block font-medium text-slate-300">我的人设偏好</label>
                   <select
                     id="persona-preset"
@@ -1647,6 +2546,7 @@ export const App: React.FC = () => {
                   <p className="text-[10px] text-slate-500">
                     {PERSONA_PRESETS.find((p) => p.id === persona)?.description}
                   </p>
+                  <p className="text-[10px] text-slate-500">生成时自动带上这个人设语气，无需每次选择。</p>
                 </div>
 
                 {persona === 'custom' && (
@@ -1662,6 +2562,64 @@ export const App: React.FC = () => {
                     />
                   </div>
                 )}
+
+                <details className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
+                  <summary className="cursor-pointer select-none text-xs font-medium text-slate-300">
+                    自定义回复指令（高级）
+                    <span className="ml-1.5 text-[10px] font-normal text-slate-500">
+                      {customActions.filter((a) => a.name.trim()).length > 0
+                        ? `已定义 ${customActions.filter((a) => a.name.trim()).length} 个`
+                        : '未设置，AI 默认已覆盖常见场景'}
+                    </span>
+                  </summary>
+                  <div className="mt-2 space-y-1.5">
+                    {customActions.map((a, i) => {
+                      const incomplete = !a.name.trim() || !a.prompt.trim();
+                      return (
+                        <div key={a.id} className="flex items-center gap-1.5">
+                          <input
+                            value={a.name}
+                            onChange={(e) => upsertCustomAction(i, { name: e.target.value })}
+                            placeholder="按钮名"
+                            title={incomplete ? '名称和指令都填写后保存才会生效' : undefined}
+                            className={`runbi-form-control w-20 shrink-0 font-sans text-xs ${
+                              !a.name.trim() ? 'border-amber-500/60' : ''
+                            }`}
+                          />
+                          <input
+                            value={a.prompt}
+                            onChange={(e) => upsertCustomAction(i, { prompt: e.target.value })}
+                            placeholder={a.name.trim() && !a.prompt.trim() ? '填写指令内容后按钮才会出现' : '指令内容，如：礼貌询问对方还有没有其他需求'}
+                            title={incomplete ? '名称和指令都填写后保存才会生效' : undefined}
+                            className={`runbi-form-control min-w-0 flex-1 font-sans text-xs ${
+                              a.name.trim() && !a.prompt.trim() ? 'border-amber-500/60' : ''
+                            }`}
+                          />
+                          <button
+                            type="button"
+                            aria-label={`删除指令 ${a.name || i + 1}`}
+                            onClick={() => setCustomActions((prev) => prev.filter((_, j) => j !== i))}
+                            className="h-6 w-6 shrink-0 rounded text-slate-500 hover:bg-rose-500/20 hover:text-rose-400 transition-colors cursor-pointer"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      );
+                    })}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setCustomActions((prev) => [...prev, { id: Date.now().toString(36), name: '', prompt: '' }])
+                      }
+                      className="rounded-lg border border-dashed border-white/20 px-2.5 py-1 text-[11px] text-slate-400 hover:border-teal-500/60 hover:text-teal-400 transition-colors cursor-pointer"
+                    >
+                      + 添加指令
+                    </button>
+                    <p className="text-[10px] text-slate-500">
+                      保存后作为快捷按钮出现在回复面板，一键把指令套在当前对话上；名称和指令都填写才会生效（黄色边框 = 未完成）
+                    </p>
+                  </div>
+                </details>
 
                 <React.Suspense fallback={<div className="h-[58px] animate-pulse rounded-lg border border-white/10 bg-white/5" />}>
                   <UpdateCheckRow />
@@ -1717,7 +2675,7 @@ export const App: React.FC = () => {
                   />
                   <div className="mt-2 flex items-center justify-between">
                     <span className="text-[10px] text-slate-500">
-                      {feedbackSent ? '✓ 反馈已记录，感谢您的支持！' : '文字保存在本地日志，随时查看'}
+                      {feedbackSent ? '反馈已记录，感谢您的支持！' : '文字保存在本地日志，随时查看'}
                     </span>
                     <button
                       type="button"
@@ -1725,7 +2683,7 @@ export const App: React.FC = () => {
                       onClick={handleSubmitFeedback}
                       className="runbi-focus-ring rounded-lg bg-teal-500/20 px-3 py-1 text-xs font-medium text-teal-200 transition-colors hover:bg-teal-500/30 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                     >
-                      {feedbackSending ? '提交中…' : feedbackSent ? '已提交 ✓' : '提交反馈'}
+                      {feedbackSending ? '提交中…' : feedbackSent ? '已提交' : '提交反馈'}
                     </button>
                   </div>
                 </div>
@@ -1743,7 +2701,7 @@ export const App: React.FC = () => {
                   }}
                   className="text-[11px] font-medium text-teal-400 hover:text-teal-300 hover:underline cursor-pointer"
                 >
-                  新手引导
+                  重看新手引导
                 </button>
               </div>
               <div className="flex items-center gap-2">
@@ -1771,6 +2729,11 @@ export const App: React.FC = () => {
             onDismiss={handleDismissOnboarding}
             shortcut={wakeShortcut || DEFAULT_SHORTCUT}
             autoCloseSeconds={5}
+            hasApiKey={Boolean(apiKey)}
+            onOpenSettings={() => {
+              setShowOnboarding(false);
+              setShowSettings(true);
+            }}
           />
         ) : showHistory ? (
           /* Dedicated History View Component (No double-exposure) */
@@ -1790,6 +2753,26 @@ export const App: React.FC = () => {
             onCopyText={async (text) => {
               await adapters.textReplacer.copyToClipboard(text);
               showToast('已复制到剪贴板');
+            }}
+          />
+        ) : showParallel ? (
+          /* 多专家并行结果视图 */
+          <ParallelResultsView
+            inputText={originalText}
+            sessions={parallelSessions}
+            onClose={closeParallel}
+            onStopAll={stopAllParallel}
+            onStopOne={stopParallelOne}
+            onCopyText={async (text) => {
+              const ok = await adapters.textReplacer.copyToClipboard(text);
+              if (ok) showToast('已复制到剪贴板');
+            }}
+            onReplaceText={async (text) => {
+              const res = await adapters.textReplacer.replaceText(text, null, !stateRef.current.isPinned);
+              showToast(
+                res.success ? '已贴回该专家的版本' : (res.error || '贴回失败'),
+                res.success ? 2000 : 3500
+              );
             }}
           />
         ) : (
@@ -1812,6 +2795,18 @@ export const App: React.FC = () => {
             showOriginalPreview={!screenReplyAnalysis}
             screenReplyAnalysis={screenReplyAnalysis}
             onSelectClarifyChip={handleSelectClarifyChip}
+            onOpenScriptLibrary={() => setShowScriptLibrary(true)}
+            autoMode={autoMode}
+            onAutoMode={handleAutoMode}
+            translateTarget={translateTarget}
+            onTranslateTargetChange={handleTranslateTargetChange}
+            expert={activeExpert ? { name: activeExpert.name, emoji: activeExpert.emoji } : null}
+            onClearExpert={handleClearExpert}
+            onOpenExperts={() => setShowExpertPicker(true)}
+            packName={activePack.id !== 'general' ? activePack.name : undefined}
+            replyQuickTags={replyQuickTags.length > 0 ? replyQuickTags : undefined}
+            extraIntentChips={customActionTags.length > 0 ? customActionTags : undefined}
+            bannedWords={bannedHits.length > 0 ? bannedHits : undefined}
             onClose={handleClose}
             onStyleChange={handleStyleChange}
             onToggleDiff={() => setIsDiffMode(!isDiffMode)}
@@ -1835,8 +2830,11 @@ export const App: React.FC = () => {
               }
               if (screenReplyAnalysis) {
                 const conversation = screenReplyAnalysis.conversation || [];
-                const refinePrompt = buildScreenReplyRefinePrompt(conversation, customPrompt);
-                handleStartPolish(refinePrompt, 'reply', inst, undefined);
+                const refinePrompt = buildScreenReplyRefinePrompt(conversation, customPrompt, activePersonaPrompt, activePackPrompt, glossaryPromptText);
+                const historyOriginal = screenReplyAnalysis.last_message_from_other
+                  || conversation.filter((c) => c.sender === 'other').slice(-1)[0]?.text
+                  || undefined;
+                handleStartPolish(refinePrompt, 'reply', inst, undefined, historyOriginal);
               } else {
                 handleStartPolish(originalText, activeStyle, customPrompt);
               }
@@ -1844,6 +2842,60 @@ export const App: React.FC = () => {
             onToastDismiss={() => setToastVisible(false)}
             replaceLabel="贴回"
           />
+        )}
+
+        {/* 内置库浮层：话术模板库 / 专家提示词库 */}
+        {showScriptLibrary && (
+          <ScriptLibraryModal
+            open
+            onClose={() => setShowScriptLibrary(false)}
+            contextHint={contextHint}
+            onUseTemplate={handleUseTemplate}
+          />
+        )}
+        {showExpertPicker && (
+          <ExpertPickerModal
+            open
+            onClose={() => setShowExpertPicker(false)}
+            activeExpertId={activeExpert?.id ?? null}
+            onApplyExpert={handleApplyExpert}
+            onStartParallel={(experts) => {
+              setShowExpertPicker(false);
+              handleStartParallel(experts);
+            }}
+          />
+        )}
+
+        {/* 缺陷3:贴回失败常驻浮条——给明确的重试/关闭动作,不靠用户眼疾手快 */}
+        {pasteFallbackBar && (
+          <div
+            role="alert"
+            className="pointer-events-auto mx-3 mb-3 flex shrink-0 items-center justify-between gap-2 rounded-xl border border-amber-300/40 bg-amber-950/80 px-3 py-2 shadow-lg backdrop-blur-md"
+          >
+            <span className="text-[11px] leading-snug text-amber-200">
+              未能自动写入当前应用，文字已复制到剪贴板——到目标应用按 Ctrl+V 粘贴即可
+            </span>
+            <span className="flex shrink-0 items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => {
+                  setPasteFallbackBar(false);
+                  handleReplace();
+                }}
+                className="runbi-focus-ring rounded-lg bg-amber-400/20 px-2.5 py-1 text-[11px] font-medium text-amber-100 transition-colors hover:bg-amber-400/30 cursor-pointer"
+              >
+                重试贴回
+              </button>
+              <button
+                type="button"
+                onClick={() => setPasteFallbackBar(false)}
+                aria-label="关闭提示"
+                className="runbi-focus-ring rounded-lg px-2 py-1 text-[11px] text-amber-200/70 transition-colors hover:bg-white/10 hover:text-amber-100 cursor-pointer"
+              >
+                知道了
+              </button>
+            </span>
+          </div>
         )}
 
         {/* Global Toast Pill: Always visible across all views (Settings, History, Onboarding, Panel) */}

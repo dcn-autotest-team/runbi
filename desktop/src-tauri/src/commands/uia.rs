@@ -23,7 +23,8 @@ impl Drop for ComGuard {
 unsafe fn focused_text_pattern() -> Option<(ComGuard, IUIAutomationTextPattern)> {
     CoInitializeEx(None, COINIT_MULTITHREADED).ok().ok()?;
     let guard = ComGuard;
-    let automation: IUIAutomation = CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok()?;
+    let automation: IUIAutomation =
+        CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok()?;
     let focused = automation.GetFocusedElement().ok()?;
     let pattern = focused.GetCurrentPatternAs(UIA_TextPatternId).ok()?;
     Some((guard, pattern))
@@ -40,7 +41,14 @@ pub fn selected_text() -> Option<String> {
         let ranges = pattern.GetSelection().ok()?;
         let mut parts = Vec::new();
         for index in 0..ranges.Length().ok()? {
-            if let Some(text) = clean_text(ranges.GetElement(index).ok()?.GetText(30_001).ok()?.to_string()) {
+            if let Some(text) = clean_text(
+                ranges
+                    .GetElement(index)
+                    .ok()?
+                    .GetText(30_001)
+                    .ok()?
+                    .to_string(),
+            ) {
                 parts.push(text);
             }
         }
@@ -49,7 +57,9 @@ pub fn selected_text() -> Option<String> {
 }
 
 fn suffix_matches(actual: &str, expected: &str) -> bool {
-    actual.replace('\r', "").ends_with(&expected.replace('\r', ""))
+    actual
+        .replace('\r', "")
+        .ends_with(&expected.replace('\r', ""))
 }
 
 /// Polls the focused UIA text range until the text immediately before the
@@ -88,7 +98,10 @@ mod tests {
 
     #[test]
     fn normalizes_uia_text_without_accepting_empty_or_oversized_values() {
-        assert_eq!(clean_text("\r\nselected\r\n".into()).as_deref(), Some("selected"));
+        assert_eq!(
+            clean_text("\r\nselected\r\n".into()).as_deref(),
+            Some("selected")
+        );
         assert_eq!(clean_text(" \r\n".into()), None);
         assert!(clean_text("x".repeat(30_001)).is_none());
         assert!(suffix_matches("before\r\n润色完成", "润色完成"));

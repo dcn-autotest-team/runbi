@@ -78,7 +78,7 @@ export function UpdateCheckRow() {
           <button
             type="button"
             onClick={onInstall}
-            className="runbi-focus-ring shrink-0 rounded-lg bg-[#00BFA5] px-3 py-1.5 text-[11px] font-medium text-black transition-opacity hover:opacity-90"
+            className="runbi-focus-ring shrink-0 rounded-lg runbi-accent-bg px-3 py-1.5 text-[11px] font-medium transition-opacity hover:opacity-90"
           >
             安装 {update.version}
           </button>

@@ -53,7 +53,7 @@ describe('Milestone 3: UI Components & Shadow DOM Integration', () => {
   // 1. TriggerCapsule Tests
   // =========================================================================
   describe('TriggerCapsule Component', () => {
-    it('should render 28px capsule at specified coordinates with jade styling', async () => {
+    it('should render the compact SVG trigger at the specified coordinates', async () => {
       const handleClick = vi.fn();
       await renderElement(
         <TriggerCapsule top={120} left={250} onClick={handleClick} />
@@ -63,9 +63,9 @@ describe('Milestone 3: UI Components & Shadow DOM Integration', () => {
       expect(capsule).not.toBeNull();
       expect(capsule.style.top).toBe('120px');
       expect(capsule.style.left).toBe('250px');
-      expect(capsule.className).toContain('w-7');
-      expect(capsule.className).toContain('h-7');
-      expect(capsule.className).toContain('bg-[#00BFA5]');
+      expect(capsule.className).toContain('w-8');
+      expect(capsule.className).toContain('h-8');
+      expect(capsule.className).toContain('runbi-trigger-capsule');
       expect(capsule.querySelector('svg')).not.toBeNull();
     });
 

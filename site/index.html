@@ -1,0 +1,717 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>润笔 Runbi — 选中即改写，表达更准确</title>
+  <meta name="description" content="润笔 Runbi 是面向中文专业沟通的原地改写助手。选中文字，审阅差异，复制或替换，不必反复切换窗口。" />
+  <meta name="theme-color" content="#10201c" />
+  <meta property="og:type" content="website" />
+  <meta property="og:locale" content="zh_CN" />
+  <meta property="og:title" content="润笔 Runbi — 选中即改写，表达更准确" />
+  <meta property="og:description" content="在原来的工作流里完成中文改写：选中、审阅、复制或替换。" />
+  <meta property="og:image" content="assets/og-runbi.jpg" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="润笔 Runbi — 选中即改写，表达更准确" />
+  <meta name="twitter:description" content="在原来的工作流里完成中文改写：选中、审阅、复制或替换。" />
+  <meta name="twitter:image" content="assets/og-runbi.jpg" />
+  <link rel="icon" type="image/png" href="favicon-64.png" />
+  <style>
+    :root {
+      --ink: #10201c;
+      --ink-soft: #465852;
+      --paper: #f7f4ed;
+      --paper-2: #eee9de;
+      --surface: rgba(255, 255, 255, .72);
+      --line: rgba(16, 32, 28, .13);
+      --brand: #00a98f;
+      --brand-strong: #007e6f;
+      --brand-soft: #c8f5e8;
+      --night: #071713;
+      --white: #fff;
+      --warning: #ffdb8a;
+      --space-1: .25rem;
+      --space-2: .5rem;
+      --space-3: .75rem;
+      --space-4: 1rem;
+      --space-5: 1.25rem;
+      --space-6: 1.5rem;
+      --space-8: 2rem;
+      --space-10: 2.5rem;
+      --space-12: 3rem;
+      --space-16: 4rem;
+      --space-20: 5rem;
+      --radius-sm: .6rem;
+      --radius-md: 1rem;
+      --radius-lg: 1.5rem;
+      --radius-xl: 2rem;
+      --shadow-sm: 0 1px 2px rgba(7, 23, 19, .06);
+      --shadow-md: 0 18px 50px rgba(7, 23, 19, .12);
+      --shadow-lg: 0 32px 90px rgba(7, 23, 19, .18);
+      --ease: cubic-bezier(.16, 1, .3, 1);
+      --font: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; background: var(--paper); }
+    body {
+      margin: 0;
+      overflow-x: hidden;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 8% 2%, rgba(0, 169, 143, .12), transparent 28rem),
+        var(--paper);
+      font-family: var(--font);
+      -webkit-font-smoothing: antialiased;
+    }
+    img { display: block; max-width: 100%; }
+    a { color: inherit; text-decoration: none; }
+    button, summary { font: inherit; }
+    button { color: inherit; }
+    ::selection { color: var(--ink); background: var(--brand-soft); }
+    .skip-link { position: fixed; z-index: 120; top: .75rem; left: .75rem; padding: .75rem 1rem; border-radius: 999px; color: var(--white); background: var(--ink); transform: translateY(-180%); transition: transform .18s ease; }
+    .skip-link:focus { transform: translateY(0); }
+
+    .container { width: min(1180px, calc(100% - 2rem)); margin-inline: auto; }
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-2);
+      margin: 0 0 var(--space-5);
+      color: var(--brand-strong);
+      font-size: .78rem;
+      font-weight: 750;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+    .eyebrow::before { width: 1.5rem; height: 1px; content: ""; background: currentColor; }
+    .section-title {
+      max-width: 780px;
+      margin: 0;
+      font-size: clamp(2.25rem, 5.5vw, 4.9rem);
+      line-height: 1.04;
+      letter-spacing: -.055em;
+    }
+    .section-copy {
+      max-width: 620px;
+      margin: var(--space-6) 0 0;
+      color: var(--ink-soft);
+      font-size: clamp(1rem, 1.5vw, 1.16rem);
+      line-height: 1.8;
+    }
+
+    .scroll-progress {
+      position: fixed;
+      inset: 0 auto auto 0;
+      z-index: 100;
+      width: var(--scroll, 0%);
+      height: 3px;
+      background: linear-gradient(90deg, var(--brand), #4fe0bf);
+    }
+    .nav-wrap {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      padding-top: var(--space-3);
+    }
+    .nav {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 64px;
+      padding: var(--space-2) var(--space-3) var(--space-2) var(--space-4);
+      border: 1px solid transparent;
+      border-radius: 999px;
+      transition: background .25s ease, border-color .25s ease, box-shadow .25s ease;
+    }
+    .nav.is-scrolled {
+      border-color: rgba(16, 32, 28, .1);
+      background: rgba(247, 244, 237, .82);
+      box-shadow: var(--shadow-sm);
+      backdrop-filter: blur(16px);
+    }
+    .brand { display: inline-flex; align-items: center; gap: .7rem; font-weight: 800; letter-spacing: -.02em; }
+    .brand img { width: 34px; height: 34px; border-radius: 10px; box-shadow: 0 6px 18px rgba(0, 169, 143, .24); }
+    .nav-links { display: flex; align-items: center; gap: var(--space-6); color: var(--ink-soft); font-size: .9rem; }
+    .nav-links a { transition: color .18s ease; }
+    .nav-links a:hover { color: var(--ink); }
+    .button {
+      display: inline-flex;
+      min-height: 46px;
+      align-items: center;
+      justify-content: center;
+      gap: .55rem;
+      padding: 0 1.15rem;
+      border: 1px solid transparent;
+      border-radius: 999px;
+      font-size: .9rem;
+      font-weight: 720;
+      cursor: pointer;
+      transition: transform .18s ease, background .18s ease, border-color .18s ease, box-shadow .18s ease;
+    }
+    .button:hover { transform: translateY(-2px); }
+    .button:active { transform: scale(.98); }
+    .button:focus-visible, .tone:focus-visible, summary:focus-visible { outline: 3px solid rgba(0, 169, 143, .28); outline-offset: 3px; }
+    .button-primary { color: var(--white); background: var(--ink); box-shadow: 0 10px 24px rgba(7, 23, 19, .16); }
+    .button-primary:hover { background: var(--brand-strong); box-shadow: 0 14px 30px rgba(0, 126, 111, .24); }
+    .button-secondary { border-color: var(--line); background: rgba(255, 255, 255, .58); }
+    .button-secondary:hover { border-color: rgba(16, 32, 28, .3); background: var(--white); }
+    .menu-toggle { display: none; width: 40px; height: 40px; place-items: center; border: 1px solid var(--line); border-radius: 50%; background: rgba(255,255,255,.62); cursor: pointer; }
+    .menu-toggle span, .menu-toggle::before, .menu-toggle::after { display: block; width: 16px; height: 1.5px; content: ""; background: var(--ink); transition: transform .2s ease, opacity .2s ease; }
+    .menu-toggle::before { transform: translateY(-5px); }
+    .menu-toggle::after { transform: translateY(5px); }
+    .menu-toggle[aria-expanded="true"] span { opacity: 0; }
+    .menu-toggle[aria-expanded="true"]::before { transform: translateY(1.5px) rotate(45deg); }
+    .menu-toggle[aria-expanded="true"]::after { transform: translateY(0) rotate(-45deg); }
+
+    .hero {
+      display: grid;
+      min-height: calc(100svh - 80px);
+      grid-template-columns: 1fr;
+      align-items: center;
+      gap: var(--space-12);
+      padding: var(--space-16) 0 var(--space-20);
+    }
+    .hero-copy { position: relative; z-index: 2; }
+    .hero h1 {
+      max-width: 760px;
+      margin: 0;
+      font-size: clamp(3.35rem, 12vw, 7.9rem);
+      font-weight: 820;
+      line-height: .94;
+      letter-spacing: -.075em;
+    }
+    .hero h1 span { color: var(--brand-strong); }
+    .hero-lead {
+      max-width: 600px;
+      margin: var(--space-6) 0 0;
+      color: var(--ink-soft);
+      font-size: clamp(1.05rem, 2vw, 1.3rem);
+      line-height: 1.75;
+    }
+    .hero-actions { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-top: var(--space-8); }
+    .hero-proof { display: flex; flex-wrap: wrap; gap: var(--space-5); margin-top: var(--space-8); color: var(--ink-soft); font-size: .82rem; }
+    .hero-proof span { display: inline-flex; align-items: center; gap: .45rem; }
+    .hero-proof span::before { width: 7px; height: 7px; content: ""; border-radius: 50%; background: var(--brand); box-shadow: 0 0 0 5px rgba(0, 169, 143, .1); }
+
+    .hero-visual {
+      position: relative;
+      min-height: 600px;
+      overflow: hidden;
+      border-radius: var(--radius-xl);
+      background: var(--night);
+      box-shadow: var(--shadow-lg);
+      isolation: isolate;
+    }
+    .hero-photo { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: .74; }
+    .hero-shade { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(7, 23, 19, .02), rgba(7, 23, 19, .18) 45%, rgba(7, 23, 19, .84)); }
+    .visual-label {
+      position: absolute;
+      top: var(--space-5);
+      left: var(--space-5);
+      display: inline-flex;
+      align-items: center;
+      gap: .55rem;
+      padding: .58rem .8rem;
+      border: 1px solid rgba(255, 255, 255, .2);
+      border-radius: 999px;
+      color: rgba(255, 255, 255, .9);
+      background: rgba(7, 23, 19, .46);
+      font-size: .76rem;
+      backdrop-filter: blur(14px);
+    }
+    .visual-label i { width: 7px; height: 7px; border-radius: 50%; background: #4fe0bf; box-shadow: 0 0 0 5px rgba(79, 224, 191, .13); }
+
+    .product-demo {
+      position: absolute;
+      right: clamp(1rem, 4vw, 2.5rem);
+      bottom: clamp(1rem, 4vw, 2.5rem);
+      left: clamp(1rem, 4vw, 2.5rem);
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, .18);
+      border-radius: 22px;
+      background: rgba(9, 29, 24, .9);
+      box-shadow: 0 24px 70px rgba(0, 0, 0, .38);
+      backdrop-filter: blur(22px);
+    }
+    .demo-head { display: flex; align-items: center; gap: .65rem; padding: .9rem 1rem; border-bottom: 1px solid rgba(255, 255, 255, .1); color: rgba(255, 255, 255, .9); font-size: .82rem; }
+    .demo-head img { width: 28px; height: 28px; border-radius: 8px; }
+    .demo-head small { margin-left: auto; color: rgba(255, 255, 255, .46); }
+    .demo-body { display: grid; grid-template-columns: 1fr; }
+    .demo-pane { min-height: 132px; padding: 1rem; }
+    .demo-pane + .demo-pane { border-top: 1px solid rgba(255, 255, 255, .1); }
+    .demo-caption { display: block; margin-bottom: .65rem; color: rgba(255, 255, 255, .45); font-size: .7rem; letter-spacing: .08em; }
+    .demo-text { margin: 0; color: rgba(255, 255, 255, .77); font-size: .92rem; line-height: 1.75; }
+    .demo-output { color: #d9fff4; }
+    .selected { padding: .08rem .18rem; border-radius: .2rem; color: var(--white); background: rgba(0, 169, 143, .62); }
+    .demo-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; padding: .85rem 1rem 1rem; border-top: 1px solid rgba(255, 255, 255, .1); }
+    .tone { padding: .46rem .72rem; border: 1px solid rgba(255, 255, 255, .16); border-radius: 999px; color: rgba(255, 255, 255, .6); background: transparent; font-size: .72rem; cursor: pointer; transition: .18s ease; }
+    .tone:hover, .tone.active { color: var(--night); border-color: #79efd1; background: #79efd1; }
+    .demo-copy { margin-left: auto; color: #b9f8e6; font-size: .74rem; }
+
+    .trust-strip { border-block: 1px solid var(--line); background: rgba(255, 255, 255, .38); }
+    .trust-inner { display: grid; grid-template-columns: repeat(3, 1fr); }
+    .trust-item { padding: var(--space-6) var(--space-3); text-align: center; }
+    .trust-item + .trust-item { border-left: 1px solid var(--line); }
+    .trust-item strong { display: block; font-size: 1rem; }
+    .trust-item span { display: block; margin-top: .3rem; color: var(--ink-soft); font-size: .78rem; }
+
+    .demo-section { padding-block: clamp(5rem, 10vw, 8rem); background: var(--paper-2); }
+    .demo-grid { display: grid; grid-template-columns: 1fr; gap: var(--space-10); align-items: center; }
+    .demo-video-shell { overflow: hidden; border: 1px solid rgba(16, 32, 28, .12); border-radius: var(--radius-lg); background: var(--night); box-shadow: var(--shadow-lg); }
+    .demo-video-shell video { width: 100%; aspect-ratio: 16 / 9; background: var(--night); }
+    .demo-note { margin-top: var(--space-4); color: var(--ink-soft); font-size: .78rem; line-height: 1.65; }
+    .evidence-list { display: grid; gap: var(--space-4); margin-top: var(--space-8); }
+    .evidence-item { display: grid; grid-template-columns: 32px 1fr; gap: var(--space-3); align-items: start; }
+    .evidence-item i { display: grid; width: 32px; height: 32px; place-items: center; border-radius: 10px; color: var(--brand-strong); background: var(--brand-soft); font-style: normal; font-weight: 850; }
+    .evidence-item strong { display: block; font-size: .98rem; }
+    .evidence-item span { display: block; margin-top: .25rem; color: var(--ink-soft); font-size: .88rem; line-height: 1.6; }
+
+    section { padding-block: clamp(5rem, 10vw, 9rem); }
+    .steps { margin-top: var(--space-16); counter-reset: step; }
+    .step {
+      display: grid;
+      grid-template-columns: 64px 1fr;
+      gap: var(--space-5);
+      padding: var(--space-8) 0;
+      border-top: 1px solid var(--line);
+      counter-increment: step;
+    }
+    .step:last-child { border-bottom: 1px solid var(--line); }
+    .step::before {
+      display: grid;
+      width: 48px;
+      height: 48px;
+      place-items: center;
+      border-radius: 50%;
+      color: var(--brand-strong);
+      background: var(--brand-soft);
+      content: "0" counter(step);
+      font-size: .78rem;
+      font-weight: 800;
+    }
+    .step h3 { margin: 0; font-size: clamp(1.35rem, 2.5vw, 2rem); letter-spacing: -.03em; }
+    .step p { max-width: 650px; margin: .6rem 0 0; color: var(--ink-soft); line-height: 1.75; }
+
+    .scenes { color: var(--white); background: var(--night); }
+    .scenes .eyebrow { color: #79efd1; }
+    .scenes .section-copy { color: rgba(255, 255, 255, .62); }
+    .scene-grid { display: grid; grid-template-columns: 1fr; gap: var(--space-4); margin-top: var(--space-12); }
+    .scene-card { position: relative; min-height: 440px; overflow: hidden; border: 1px solid rgba(255, 255, 255, .12); border-radius: var(--radius-lg); background: #142720; }
+    .scene-card img { width: 100%; height: 100%; object-fit: cover; transition: transform .7s var(--ease); }
+    .scene-card::after { position: absolute; inset: 0; content: ""; background: linear-gradient(180deg, transparent 30%, rgba(7, 23, 19, .92)); }
+    .scene-card:hover img { transform: scale(1.035); }
+    .scene-copy { position: absolute; inset: auto var(--space-6) var(--space-6); z-index: 1; }
+    .scene-copy span { color: #79efd1; font-size: .72rem; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
+    .scene-copy h3 { margin: .55rem 0 0; font-size: 1.65rem; letter-spacing: -.035em; }
+    .scene-copy p { margin: .7rem 0 0; color: rgba(255, 255, 255, .7); line-height: 1.65; }
+
+    .feature-grid { display: grid; grid-template-columns: 1fr; gap: var(--space-4); margin-top: var(--space-12); }
+    .feature-card {
+      min-height: 230px;
+      padding: var(--space-8);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      background: rgba(255, 255, 255, .55);
+      box-shadow: var(--shadow-sm);
+      transition: transform .25s var(--ease), box-shadow .25s var(--ease), background .25s ease;
+    }
+    .feature-card:hover { transform: translateY(-5px); background: var(--white); box-shadow: var(--shadow-md); }
+    .feature-icon { display: grid; width: 44px; height: 44px; place-items: center; border-radius: 14px; color: var(--brand-strong); background: var(--brand-soft); font-weight: 850; }
+    .feature-card h3 { margin: var(--space-8) 0 0; font-size: 1.32rem; letter-spacing: -.025em; }
+    .feature-card p { margin: .65rem 0 0; color: var(--ink-soft); line-height: 1.7; }
+
+    .compatibility { padding-top: 0; }
+    .compatibility-panel { padding: clamp(1.4rem, 4vw, 3rem); border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--white); box-shadow: var(--shadow-sm); }
+    .compatibility-grid { display: grid; grid-template-columns: 1fr; gap: var(--space-3); margin-top: var(--space-8); }
+    .compatibility-card { padding: var(--space-5); border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--paper); }
+    .compatibility-card small { display: block; color: var(--brand-strong); font-size: .7rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+    .compatibility-card h3 { margin: .45rem 0 0; font-size: 1.1rem; }
+    .compatibility-card p { margin: .55rem 0 0; color: var(--ink-soft); font-size: .86rem; line-height: 1.65; }
+    .compatibility-card.warn { background: #fff9ea; border-color: rgba(155, 111, 0, .22); }
+    .compatibility-card.warn small { color: #8a6200; }
+
+    .privacy-card {
+      position: relative;
+      display: grid;
+      overflow: hidden;
+      grid-template-columns: 1fr;
+      gap: var(--space-10);
+      padding: clamp(2rem, 6vw, 5rem);
+      border-radius: var(--radius-xl);
+      color: var(--white);
+      background:
+        radial-gradient(circle at 100% 0%, rgba(79, 224, 191, .22), transparent 30rem),
+        var(--night);
+    }
+    .privacy-card h2 { margin: 0; font-size: clamp(2.4rem, 6vw, 5.3rem); line-height: 1.03; letter-spacing: -.055em; }
+    .privacy-card p { max-width: 610px; color: rgba(255, 255, 255, .66); line-height: 1.8; }
+    .privacy-list { display: grid; gap: var(--space-3); align-content: center; }
+    .privacy-item { display: flex; gap: var(--space-3); padding: var(--space-4); border: 1px solid rgba(255, 255, 255, .12); border-radius: var(--radius-md); background: rgba(255, 255, 255, .05); }
+    .privacy-item b { display: block; font-size: .95rem; }
+    .privacy-item span { display: block; margin-top: .25rem; color: rgba(255, 255, 255, .55); font-size: .8rem; line-height: 1.5; }
+    .check { display: grid; width: 24px; height: 24px; flex: 0 0 24px; place-items: center; border-radius: 50%; color: var(--night); background: #79efd1; font-size: .72rem; font-weight: 900; }
+
+    .download { padding-top: var(--space-20); text-align: center; }
+    .download-box { padding: clamp(2rem, 7vw, 6rem); border: 1px solid var(--line); border-radius: var(--radius-xl); background: linear-gradient(145deg, #fff, #e7f8f1); box-shadow: var(--shadow-md); }
+    .download-box h2 { max-width: 820px; margin: 0 auto; font-size: clamp(2.5rem, 7vw, 6rem); line-height: .98; letter-spacing: -.065em; }
+    .download-box p { max-width: 620px; margin: var(--space-6) auto 0; color: var(--ink-soft); line-height: 1.75; }
+    .download-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--space-3); margin-top: var(--space-8); }
+    .download-note { margin-top: var(--space-5); color: var(--ink-soft); font-size: .76rem; }
+    .download-facts { display: grid; grid-template-columns: 1fr; gap: var(--space-3); max-width: 800px; margin: var(--space-8) auto 0; text-align: left; }
+    .download-fact { padding: var(--space-5); border: 1px solid var(--line); border-radius: var(--radius-md); background: rgba(255,255,255,.72); }
+    .download-fact strong { display: block; font-size: .94rem; }
+    .download-fact span { display: block; margin-top: .4rem; color: var(--ink-soft); font-size: .82rem; line-height: 1.65; }
+
+    .faq { padding-bottom: var(--space-20); }
+    .faq-grid { display: grid; grid-template-columns: 1fr; gap: var(--space-3); margin-top: var(--space-10); }
+    details { border: 1px solid var(--line); border-radius: var(--radius-md); background: rgba(255, 255, 255, .5); transition: background .2s ease; }
+    details[open] { background: var(--white); }
+    summary { position: relative; padding: 1.2rem 3.4rem 1.2rem 1.25rem; list-style: none; font-weight: 720; cursor: pointer; }
+    summary::-webkit-details-marker { display: none; }
+    summary::after { position: absolute; top: 50%; right: 1.25rem; content: "+"; color: var(--brand-strong); font-size: 1.35rem; transform: translateY(-50%); }
+    details[open] summary::after { content: "−"; }
+    details p { margin: 0; padding: 0 1.25rem 1.25rem; color: var(--ink-soft); line-height: 1.75; }
+
+    footer { padding: var(--space-8) 0 var(--space-12); border-top: 1px solid var(--line); }
+    .footer-inner { display: flex; flex-direction: column; gap: var(--space-5); color: var(--ink-soft); font-size: .82rem; }
+    .footer-links { display: flex; flex-wrap: wrap; gap: var(--space-5); }
+    .footer-links a:hover { color: var(--brand-strong); }
+
+    .reveal { opacity: 0; transform: translateY(24px); transition: opacity .7s var(--ease), transform .7s var(--ease); }
+    .reveal.is-visible { opacity: 1; transform: translateY(0); }
+
+    @media (min-width: 720px) {
+      .demo-grid { grid-template-columns: 1.05fr .95fr; }
+      .demo-body { grid-template-columns: 1fr 1fr; }
+      .demo-pane + .demo-pane { border-top: 0; border-left: 1px solid rgba(255, 255, 255, .1); }
+      .feature-grid { grid-template-columns: repeat(2, 1fr); }
+      .scene-grid { grid-template-columns: repeat(3, 1fr); }
+      .scene-card:nth-child(2) { transform: translateY(2.5rem); }
+      .faq-grid { grid-template-columns: repeat(2, 1fr); }
+      .compatibility-grid { grid-template-columns: repeat(2, 1fr); }
+      .download-facts { grid-template-columns: repeat(3, 1fr); }
+      .footer-inner { flex-direction: row; align-items: center; justify-content: space-between; }
+    }
+    @media (min-width: 980px) {
+      .hero { grid-template-columns: .92fr 1.08fr; gap: clamp(2rem, 5vw, 5rem); }
+      .hero h1 { font-size: clamp(4.6rem, 7.1vw, 7.3rem); }
+      .hero-visual { min-height: 680px; }
+      .feature-grid { grid-template-columns: repeat(4, 1fr); }
+      .privacy-card { grid-template-columns: 1.15fr .85fr; }
+    }
+    @media (max-width: 719px) {
+      .menu-toggle { display: grid; margin-left: auto; }
+      .nav-links { position: absolute; top: calc(100% + .65rem); right: 0; display: none; width: min(260px, calc(100vw - 2rem)); flex-direction: column; align-items: stretch; gap: 0; padding: var(--space-2); border: 1px solid var(--line); border-radius: var(--radius-md); background: rgba(255,255,255,.94); box-shadow: var(--shadow-md); backdrop-filter: blur(16px); }
+      .nav-links.open { display: flex; }
+      .nav-links a { padding: .8rem .9rem; border-radius: .7rem; }
+      .nav-links a:hover { background: var(--paper); }
+      .nav { padding-left: var(--space-3); }
+      .brand span { display: none; }
+      .nav > .button-primary { display: none; }
+      .hero { padding-top: var(--space-10); }
+      .hero-visual { min-height: 560px; }
+      .trust-inner { grid-template-columns: 1fr; }
+      .trust-item + .trust-item { border-top: 1px solid var(--line); border-left: 0; }
+      .scene-card { min-height: 390px; }
+      .scene-card:nth-child(2) { transform: none; }
+    }
+    @media (prefers-reduced-motion: no-preference) {
+      .hero-copy { animation: rise .8s var(--ease) both; }
+      .hero-visual { animation: rise .9s .12s var(--ease) both; }
+      .product-demo { animation: float 5s 1.2s ease-in-out infinite; }
+      .selected { animation: select-pulse 2.4s ease-in-out infinite; }
+      @keyframes rise { from { opacity: 0; transform: translateY(24px); } }
+      @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-7px); } }
+      @keyframes select-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(79, 224, 191, 0); } 50% { box-shadow: 0 0 0 5px rgba(79, 224, 191, .12); } }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+      .reveal { opacity: 1; transform: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="scroll-progress" aria-hidden="true"></div>
+  <a class="skip-link" href="#main-content">跳到主要内容</a>
+
+  <header class="nav-wrap">
+    <nav class="nav container" aria-label="主导航">
+      <a class="brand" href="#top" aria-label="润笔首页">
+        <img src="assets/runbi-logo.png" alt="" width="34" height="34" />
+        <span>润笔 Runbi</span>
+      </a>
+      <button class="menu-toggle" type="button" aria-label="打开导航" aria-controls="site-nav-links" aria-expanded="false"><span></span></button>
+      <div class="nav-links" id="site-nav-links">
+        <a href="#workflow">工作方式</a>
+        <a href="#scenes">应用场景</a>
+        <a href="#support">支持范围</a>
+        <a href="#privacy">隐私</a>
+        <a href="#faq">常见问题</a>
+      </div>
+      <a class="button button-primary" href="#download">免费下载 <span aria-hidden="true">↗</span></a>
+    </nav>
+  </header>
+
+  <main id="main-content">
+    <div class="container hero">
+      <div class="hero-copy">
+        <p class="eyebrow">AI 中文写作助手</p>
+        <h1>文字不离场，<span>表达更准确。</span></h1>
+        <p class="hero-lead">在正在使用的编辑器、网页或文档里选中文字，立即润色；先看差异，再复制或替换。少一次切窗，多一次从容确认。</p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="#download">下载 Windows 版 <span aria-hidden="true">↓</span></a>
+          <a class="button button-secondary" href="#workflow">看看怎么用 <span aria-hidden="true">→</span></a>
+        </div>
+        <div class="hero-proof" aria-label="产品形态">
+          <span>Windows 桌面端</span>
+          <span>浏览器扩展</span>
+          <span>自带 Key</span>
+        </div>
+      </div>
+
+      <div class="hero-visual" aria-label="润笔使用场景与产品演示">
+        <img class="hero-photo" src="assets/photo-client.webp" alt="专业人士在电脑前撰写客户回复" width="1536" height="1024" />
+        <div class="hero-shade" aria-hidden="true"></div>
+        <div class="visual-label"><i aria-hidden="true"></i> 正在润色客户回复</div>
+        <div class="product-demo">
+          <div class="demo-head">
+            <img src="assets/runbi-logo.png" alt="" width="28" height="28" />
+            <strong>润笔</strong>
+            <small>结果由你确认</small>
+          </div>
+          <div class="demo-body">
+            <div class="demo-pane">
+              <span class="demo-caption">原文</span>
+              <p class="demo-text">这个问题我们还在看，<span class="selected">应该很快会有结果</span>。</p>
+            </div>
+            <div class="demo-pane">
+              <span class="demo-caption">润色后</span>
+              <p class="demo-text demo-output" aria-live="polite">我们正在定位问题，预计今天 18:00 前同步阶段性进展。</p>
+            </div>
+          </div>
+          <div class="demo-actions" aria-label="润色风格演示">
+            <button class="tone active" type="button" data-copy="我们正在定位问题，预计今天 18:00 前同步阶段性进展。">专业</button>
+            <button class="tone" type="button" data-copy="问题正在处理中，今天 18:00 前给你同步进展。">简洁</button>
+            <button class="tone" type="button" data-copy="让你久等了，我们正在认真排查，今天 18:00 前同步进展。">友好</button>
+            <span class="demo-copy">复制或替换 →</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="trust-strip">
+      <div class="container trust-inner">
+        <div class="trust-item"><strong>原地工作</strong><span>不离开当前上下文</span></div>
+        <div class="trust-item"><strong>差异可审阅</strong><span>修改前后清楚对照</span></div>
+        <div class="trust-item"><strong>采用由你决定</strong><span>复制或替换前确认</span></div>
+      </div>
+    </div>
+
+    <section class="demo-section" id="preview">
+      <div class="container demo-grid">
+        <div class="demo-video-shell reveal">
+          <video controls playsinline preload="metadata" poster="assets/photo-client.webp" aria-label="润笔产品流程预览视频">
+            <source src="assets/runbi-product-preview-30s.mp4" type="video/mp4" />
+            你的浏览器不支持内嵌视频。请下载视频文件后播放。
+          </video>
+        </div>
+        <div class="reveal">
+          <p class="eyebrow">30 秒预览</p>
+          <h2 class="section-title">先看工作流，再决定要不要下载。</h2>
+          <p class="section-copy">一段文字从选中，到得到候选版本、审阅差异，再复制或替换。这里用短视频把完整链路说清楚。</p>
+          <div class="evidence-list">
+            <div class="evidence-item"><i>1</i><div><strong>不离开当前上下文</strong><span>围绕正在写的文字工作，而不是把内容搬进另一段对话。</span></div></div>
+            <div class="evidence-item"><i>2</i><div><strong>先审阅，后采用</strong><span>生成结果只是候选；发送、复制或替换都由你确认。</span></div></div>
+            <div class="evidence-item"><i>3</i><div><strong>按实际版本核对能力</strong><span>支持范围、模型接入和系统要求在下载前均有明确说明。</span></div></div>
+          </div>
+          <p class="demo-note">视频为产品流程预览；具体界面和能力以当前发布版本为准。</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="workflow">
+      <div class="container">
+        <p class="eyebrow reveal">工作方式</p>
+        <h2 class="section-title reveal">把来回搬运文字，缩短成三个动作。</h2>
+        <p class="section-copy reveal">润笔关注的是完整链路：从你选中一句话开始，到确认最终版本结束。AI 提供候选，你保留判断。</p>
+        <div class="steps">
+          <article class="step reveal"><div><h3>选中需要修改的文字</h3><p>在当前工作现场开始，不需要新建对话，也不用重新解释上下文。</p></div></article>
+          <article class="step reveal"><div><h3>选择意图，审阅结果</h3><p>专业、简洁或友好，一键切换表达目标；对照原文与润色后再做决定。</p></div></article>
+          <article class="step reveal"><div><h3>复制，或替换回原位置</h3><p>确认之后再采用。原文不会因为一次生成就失去控制。</p></div></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="scenes" id="scenes">
+      <div class="container">
+        <p class="eyebrow reveal">应用场景</p>
+        <h2 class="section-title reveal">写给客户、读者，也写给一起工作的人。</h2>
+        <p class="section-copy reveal">同一条“选中—审阅—采用”链路，覆盖专业沟通、长文研究与技术协作。</p>
+        <div class="scene-grid">
+          <article class="scene-card reveal">
+            <img src="assets/photo-client.webp" alt="在办公室撰写客户回复的专业人士" loading="lazy" width="1536" height="1024" />
+            <div class="scene-copy"><span>Communication</span><h3>客户沟通</h3><p>让回复更稳妥、更明确，也保留属于你的语气。</p></div>
+          </article>
+          <article class="scene-card reveal">
+            <img src="assets/photo-research.webp" alt="在图书馆修订论文的研究者" loading="lazy" width="1536" height="1024" />
+            <div class="scene-copy"><span>Research</span><h3>论文与长文</h3><p>整理长句、统一语气，让复杂观点更容易被读懂。</p></div>
+          </article>
+          <article class="scene-card reveal">
+            <img src="assets/photo-developer.webp" alt="在工作室编写技术文档的开发者" loading="lazy" width="1536" height="1024" />
+            <div class="scene-copy"><span>Engineering</span><h3>技术文档与 PR</h3><p>写清楚做了什么、为什么做，以及可能影响谁。</p></div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="features">
+      <div class="container">
+        <p class="eyebrow reveal">为工作流而设计</p>
+        <h2 class="section-title reveal">不是另一个聊天窗口。</h2>
+        <div class="feature-grid">
+          <article class="feature-card reveal"><div class="feature-icon">划</div><h3>选中即开始</h3><p>围绕当前文字行动，减少复制、粘贴和上下文重建。</p></article>
+          <article class="feature-card reveal"><div class="feature-icon">差</div><h3>修改看得见</h3><p>原文与润色后清楚对照，不必盲目接受整段输出。</p></article>
+          <article class="feature-card reveal"><div class="feature-icon">意</div><h3>按意图改写</h3><p>根据发送对象，在专业、简洁、友好等方向间切换。</p></article>
+          <article class="feature-card reveal"><div class="feature-icon">控</div><h3>结果可控制</h3><p>复制或替换由用户确认，生成内容仍可继续编辑。</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="compatibility" id="support">
+      <div class="container compatibility-panel reveal">
+        <p class="eyebrow">支持与限制</p>
+        <h2 class="section-title">先知道适不适合，再开始使用。</h2>
+        <p class="section-copy">润笔的体验依赖目标应用是否允许读取、复制和替换文本。下面的边界比一句“到处都能用”更重要。</p>
+        <div class="compatibility-grid">
+          <article class="compatibility-card"><small>桌面端</small><h3>Windows 10/11（64 位）</h3><p>当前公开发布的桌面客户端面向 Windows；安装包和版本说明在 Release 中提供。</p></article>
+          <article class="compatibility-card"><small>浏览器扩展</small><h3>Chrome / Chromium 场景</h3><p>网页编辑器与可编辑文本区域是浏览器扩展的主要使用场景；具体权限以安装页为准。</p></article>
+          <article class="compatibility-card"><small>模型接入</small><h3>兼容端点与自带 Key</h3><p>可按当前版本提供的配置能力连接模型服务。你的服务商规则与费用仍由你管理。</p></article>
+          <article class="compatibility-card warn"><small>需要留意</small><h3>受保护内容可能受限</h3><p>密码输入框、受保护 PDF、只读控件及部分应用可能限制取词或替换。遇到限制时，请使用手动粘贴入口。</p></article>
+        </div>
+        <p class="demo-note">需要帮助？查看 <a href="support.html" style="color:var(--brand-strong);font-weight:750;">安装与支持说明</a>，或在 <a href="https://github.com/dcn-autotest-team/runbi-updates/issues" target="_blank" rel="noopener" style="color:var(--brand-strong);font-weight:750;">GitHub Issues</a> 提交问题。</p>
+      </div>
+    </section>
+
+    <section id="privacy">
+      <div class="container privacy-card reveal">
+        <div>
+          <p class="eyebrow">数据与模型</p>
+          <h2>接入方式，应该由你掌控。</h2>
+          <p>润笔支持按实际版本配置兼容模型端点与自带 Key。使用前可结合个人或组织策略，核对网络、日志和模型服务设置。</p>
+        </div>
+        <div class="privacy-list">
+          <div class="privacy-item"><span class="check">✓</span><div><b>自带 Key</b><span>模型费用与服务关系由你管理。</span></div></div>
+          <div class="privacy-item"><span class="check">✓</span><div><b>兼容端点</b><span>按当前版本提供的配置能力选择服务。</span></div></div>
+          <div class="privacy-item"><span class="check">✓</span><div><b>先审阅再采用</b><span>AI 生成不等于自动发送。</span></div></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="download" id="download">
+      <div class="container download-box reveal">
+        <p class="eyebrow">开始使用</p>
+        <h2>从下一段文字开始，少切一次窗口。</h2>
+        <p>下载 Windows 桌面端，或获取 Chrome 浏览器扩展。产品能力与系统要求以最新发布说明为准。</p>
+        <div class="download-actions">
+          <a class="button button-primary" data-track="download_release" href="https://github.com/dcn-autotest-team/runbi-updates/releases/latest" target="_blank" rel="noopener">下载最新版 <span aria-hidden="true">↗</span></a>
+          <a class="button button-secondary" href="https://github.com/dcn-autotest-team/runbi-updates" target="_blank" rel="noopener">查看 GitHub</a>
+        </div>
+        <div class="download-facts">
+          <div class="download-fact"><strong>当前发布版本</strong><span>v1.0.2 · 发布包与版本说明以 GitHub Release 为准。</span></div>
+          <div class="download-fact"><strong>安装与更新</strong><span>Windows NSIS 安装包；应用内更新会校验发布签名。</span></div>
+          <div class="download-fact"><strong>下载前核对</strong><span>Windows 10/11 64 位、模型服务配置与支持范围。</span></div>
+        </div>
+        <div class="download-note">免费使用 · BYOK · <a href="privacy.html" style="text-decoration:underline;">数据与隐私说明</a> · <a href="support.html" style="text-decoration:underline;">安装与支持</a></div>
+      </div>
+    </section>
+
+    <section class="faq" id="faq">
+      <div class="container">
+        <p class="eyebrow reveal">常见问题</p>
+        <h2 class="section-title reveal">想清楚，再开始。</h2>
+        <div class="faq-grid">
+          <details class="reveal"><summary>润笔会替我自动发送消息吗？</summary><p>不会。润笔生成候选文本，复制、替换和发送都由你确认。</p></details>
+          <details class="reveal"><summary>它和聊天式 AI 有什么不同？</summary><p>润笔围绕当前选中文本和最终采用动作设计，重点是减少切窗和文字搬运。</p></details>
+          <details class="reveal"><summary>所有地方都能成功取词吗？</summary><p>受保护 PDF、密码框、只读控件和部分应用可能限制复制；遇到限制时可使用手动粘贴入口。</p></details>
+          <details class="reveal"><summary>支持哪些模型？</summary><p>支持范围以当前版本的兼容端点配置为准。下载后可在设置中查看可用选项；你的服务商费用和规则由你管理。</p></details>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="container footer-inner">
+      <a class="brand" href="#top"><img src="assets/runbi-logo.png" alt="" width="34" height="34" /><span>润笔 Runbi</span></a>
+      <div class="footer-links">
+        <a href="https://github.com/dcn-autotest-team/runbi-updates" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/dcn-autotest-team/runbi-updates/issues" target="_blank" rel="noopener">问题反馈</a>
+        <a href="privacy.html">隐私说明</a>
+        <a href="support.html">安装与支持</a>
+      </div>
+      <span>© 2026 Runbi</span>
+    </div>
+  </footer>
+
+  <script>
+    const nav = document.querySelector('.nav');
+    const progress = document.querySelector('.scroll-progress');
+    const revealItems = document.querySelectorAll('.reveal');
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const menuToggle = document.querySelector('.menu-toggle');
+    const navLinks = document.querySelector('.nav-links');
+
+    function updateScrollUI() {
+      const y = window.scrollY;
+      const max = document.documentElement.scrollHeight - window.innerHeight;
+      nav.classList.toggle('is-scrolled', y > 12);
+      progress.style.setProperty('--scroll', max > 0 ? ((y / max) * 100).toFixed(2) + '%' : '0%');
+    }
+    updateScrollUI();
+    window.addEventListener('scroll', updateScrollUI, { passive: true });
+
+    menuToggle.addEventListener('click', () => {
+      const isOpen = menuToggle.getAttribute('aria-expanded') === 'true';
+      menuToggle.setAttribute('aria-expanded', String(!isOpen));
+      menuToggle.setAttribute('aria-label', isOpen ? '打开导航' : '关闭导航');
+      navLinks.classList.toggle('open', !isOpen);
+    });
+    navLinks.querySelectorAll('a').forEach((link) => link.addEventListener('click', () => {
+      menuToggle.setAttribute('aria-expanded', 'false');
+      menuToggle.setAttribute('aria-label', '打开导航');
+      navLinks.classList.remove('open');
+    }));
+
+    if (reduceMotion || !('IntersectionObserver' in window)) {
+      revealItems.forEach((item) => item.classList.add('is-visible'));
+    } else {
+      const observer = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting) return;
+          entry.target.classList.add('is-visible');
+          observer.unobserve(entry.target);
+        });
+      }, { rootMargin: '0px 0px -8% 0px', threshold: .08 });
+      revealItems.forEach((item) => observer.observe(item));
+    }
+
+    const output = document.querySelector('.demo-output');
+    document.querySelectorAll('.tone').forEach((button) => {
+      button.addEventListener('click', () => {
+        document.querySelectorAll('.tone').forEach((item) => item.classList.remove('active'));
+        button.classList.add('active');
+        output.animate(
+          [{ opacity: .2, transform: 'translateY(4px)' }, { opacity: 1, transform: 'translateY(0)' }],
+          { duration: reduceMotion ? 1 : 280, easing: 'cubic-bezier(.16,1,.3,1)' }
+        );
+        output.textContent = button.dataset.copy;
+      });
+    });
+
+    document.querySelectorAll('[data-track]').forEach((element) => element.addEventListener('click', () => {
+      window.dispatchEvent(new CustomEvent('runbi:conversion', { detail: { event: element.dataset.track, at: Date.now() } }));
+    }));
+  </script>
+</body>
+</html>

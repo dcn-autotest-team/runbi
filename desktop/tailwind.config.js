@@ -9,20 +9,19 @@ export default {
   theme: {
     extend: {
       colors: {
-        /* Brand unification: remap Tailwind teal onto the jade brand ramp
-           (#00BFA5) so every teal-* class renders on-brand without touching
-           component classes. */
+        /* 黑白灰主题:teal-* 全档位重映射到灰阶,品牌青彻底退场(组件零改动)。 */
         teal: {
-          50: '#E6FAF7',
-          100: '#C2F2EA',
-          200: '#99E8DC',
-          300: '#4DDCC7',
-          400: '#0FD2B8',
-          500: '#00BFA5',
-          600: '#00A892',
-          700: '#008F7C',
-          800: '#06766A',
-          900: '#0A5F55'
+          50: '#F9FAFB',
+          100: '#F3F4F6',
+          200: '#E5E7EB',
+          300: '#D1D5DB',
+          400: '#9CA3AF',
+          500: '#6B7280',
+          600: '#4B5563',
+          700: '#374151',
+          800: '#1F2937',
+          900: '#111827',
+          950: '#030712'
         },
         jade: {
           DEFAULT: '#00BFA5',
@@ -68,9 +67,9 @@ export default {
         'xl': '32px'
       },
       boxShadow: {
-        'floating': '0 25px 50px -12px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.08) inset, 0 10px 30px -5px rgba(0, 191, 165, 0.18)',
-        'glow-jade': '0 0 20px rgba(0, 191, 165, 0.35), 0 0 40px rgba(0, 191, 165, 0.15)',
-        'glow-subtle': '0 0 12px rgba(0, 191, 165, 0.25)',
+        'floating': '0 25px 50px -12px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.08) inset',
+        'glow-jade': '0 0 20px rgba(209, 213, 219, 0.25), 0 0 40px rgba(209, 213, 219, 0.10)',
+        'glow-subtle': '0 0 12px rgba(209, 213, 219, 0.20)',
         'panel-dark': '0 20px 40px -15px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.1)'
       },
       borderRadius: {
