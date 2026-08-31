@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="description" content="润笔 Runbi 安装、更新、支持范围与问题反馈说明。" />
+  <link rel="canonical" href="https://dcn-autotest-team.github.io/runbi-updates/support.html" />
   <meta name="theme-color" content="#10201c" />
   <title>安装与支持 — 润笔 Runbi</title>
   <link rel="icon" type="image/png" href="favicon-64.png" />
@@ -11,19 +12,21 @@
 </head>
 <body>
   <a class="skip-link" href="#main-content">跳到主要内容</a>
-  <header><nav class="container"><a class="brand" href="index.html"><img src="assets/runbi-logo.png" alt="" />润笔 Runbi</a><div class="nav-links"><a href="index.html#workflow">工作方式</a><a href="support.html">安装与支持</a><a href="privacy.html">隐私</a></div><a class="button" href="https://github.com/dcn-autotest-team/runbi-updates/releases/latest" target="_blank" rel="noopener">下载最新版</a></nav></header>
+  <header><nav class="container"><a class="brand" href="index.html"><img src="assets/runbi-logo.png" alt="" />润笔 Runbi</a><div class="nav-links"><a href="index.html#workflow">工作方式</a><a href="support.html">安装与支持</a><a href="privacy.html">隐私</a></div><a class="button" data-track="download_release" href="https://github.com/dcn-autotest-team/runbi-updates/releases/latest" target="_blank" rel="noopener">下载最新版</a></nav></header>
   <main id="main-content" class="container">
     <p class="eyebrow">Support</p>
     <h1>下载前说清楚，使用时少绕路。</h1>
     <p class="lead">这里汇总当前公开发布版本、安装方式、支持范围和已知限制。具体构建内容始终以 GitHub Release 的说明与安装包为准。</p>
-    <div class="notice">当前公开发布版本：v1.0.2。桌面端面向 Windows 10/11 64 位；安装包为 NSIS `.exe`，支持应用内签名校验更新。</div>
+    <div class="notice">当前公开发布版本：v1.0.3。桌面端面向 Windows 10/11 64 位；安装包为 NSIS `.exe`，支持应用内签名校验更新。</div>
     <nav class="toc" aria-label="本页目录"><a href="#install">安装</a><a href="#update">更新</a><a href="#scope">支持范围</a><a href="#limits">已知限制</a><a href="#help">获取帮助</a></nav>
-    <section id="install"><h2>1. 安装</h2><div class="grid"><article class="card"><h3>Windows 桌面端</h3><p>在公开 Release 中下载最新版安装包，运行 `.exe` 后按安装向导完成安装。首次使用时，根据你的模型服务商配置端点与 API Key。</p><p><a href="https://github.com/dcn-autotest-team/runbi-updates/releases/latest" target="_blank" rel="noopener">前往下载 Release →</a></p></article><article class="card"><h3>浏览器扩展</h3><p>浏览器扩展主要用于网页编辑器和可编辑文本区域。安装方式、权限与当前构建产物以对应发布说明为准。</p><p><a href="https://github.com/dcn-autotest-team/runbi-updates/releases" target="_blank" rel="noopener">查看发布说明 →</a></p></article></div></section>
+    <section id="install"><h2>1. 安装</h2><div class="grid"><article class="card"><h3>Windows 桌面端</h3><p>在公开 Release 中下载最新版安装包，运行 `.exe` 后按安装向导完成安装。首次使用时，根据你的模型服务商配置端点与 API Key。</p><p><a data-track="download_release" href="https://github.com/dcn-autotest-team/runbi-updates/releases/latest" target="_blank" rel="noopener">前往下载 Release →</a></p></article><article class="card"><h3>浏览器扩展</h3><p>浏览器扩展主要用于网页编辑器和可编辑文本区域。安装方式、权限与当前构建产物以对应发布说明为准。</p><p><a href="https://github.com/dcn-autotest-team/runbi-updates/releases" target="_blank" rel="noopener">查看发布说明 →</a></p></article></div></section>
     <section id="update"><h2>2. 更新与校验</h2><p>从 1.0.1 起，桌面端可以通过应用内更新通道获取后续版本。更新包会进行签名校验；若你希望手动更新，也可以直接从 Release 下载最新版覆盖安装。</p><p>如遇更新失败，请先查看应用内提示，再在反馈中附上版本号、错误提示与复现步骤；请勿提交 API Key、敏感文本或完整日志。</p></section>
     <section id="scope"><h2>3. 当前支持范围</h2><table><thead><tr><th>能力</th><th>说明</th></tr></thead><tbody><tr><td>选中后唤起</td><td>面向可编辑文本和允许复制的内容；实际体验依目标应用行为而定。</td></tr><tr><td>润色与审阅</td><td>结果以候选文本展示，支持在采用前审阅差异、复制或替换。</td></tr><tr><td>模型服务</td><td>可配置当前版本支持的兼容端点与自带 Key；费用与服务规则由你的模型服务商管理。</td></tr><tr><td>平台</td><td>公开桌面端为 Windows 10/11 64 位；浏览器能力以当前扩展发布说明为准。</td></tr></tbody></table></section>
     <section id="limits"><h2>4. 已知限制</h2><div class="grid"><article class="card"><h3>受保护或只读内容</h3><p>受保护 PDF、只读控件、密码输入框和部分企业防护环境可能限制取词、复制或替换。</p></article><article class="card"><h3>部分复杂应用</h3><p>部分 Electron 应用或特殊富文本控件的行为可能与网页编辑器不同。遇到问题时请使用手动粘贴入口并提交复现信息。</p></article></div></section>
     <section id="help"><div class="contact"><h2>需要帮助？</h2><p>提交时请提供：操作系统版本、润笔版本、目标应用名称、可公开的复现步骤和错误提示。不要提交 API Key、身份证号、客户消息或其他敏感内容。</p><a class="button" href="https://github.com/dcn-autotest-team/runbi-updates/issues" target="_blank" rel="noopener">前往问题反馈</a></div></section>
   </main>
   <footer><div class="container footer-inner"><span>润笔 Runbi · 安装与支持</span><span><a href="index.html">返回首页</a> · <a href="privacy.html">数据与隐私说明</a></span></div></footer>
+  <script src="analytics-config.js"></script>
+  <script src="analytics.js"></script>
 </body>
 </html>

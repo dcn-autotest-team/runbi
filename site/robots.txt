@@ -1,2 +1,4 @@
 User-agent: *
 Allow: /
+
+Sitemap: https://dcn-autotest-team.github.io/runbi-updates/sitemap.xml
