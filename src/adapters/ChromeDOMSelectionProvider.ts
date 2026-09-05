@@ -227,48 +227,49 @@ export class ChromeDOMSelectionProvider implements ISelectionProvider {
 
     let timer: ReturnType<typeof setTimeout> | null = null;
     let isMouseDown = false;
+    let revision = 0;
 
-    const evaluate = async () => {
-      const info = await this.getSelection();
-      callback(info);
-    };
-
-    const debouncedHandler = () => {
+    const handleSelectionChange = async () => {
+      const current = ++revision;
       if (timer !== null) {
         clearTimeout(timer);
-      }
-      timer = setTimeout(() => {
         timer = null;
-        void evaluate();
-      }, this.debounceMs);
+      }
+      const info = await this.getSelection();
+      if (current !== revision) return;
+      // Clearing a selection is urgent, including while a new drag is starting.
+      if (!info) {
+        callback(null);
+      } else if (!isMouseDown) {
+        timer = setTimeout(() => {
+          timer = null;
+          if (current === revision) callback(info);
+        }, this.debounceMs);
+      }
     };
 
     const handleMouseDown = () => {
       isMouseDown = true;
+      ++revision;
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
     };
 
     const handleMouseUp = () => {
       isMouseDown = false;
-      debouncedHandler();
-    };
-
-    const handleSelectionChange = () => {
-      // If mouse is currently dragging, wait until mouseup so UI doesn't jump prematurely
-      if (isMouseDown) {
-        return;
-      }
-      debouncedHandler();
+      void handleSelectionChange();
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
-      // Support keyboard selection (Shift + Arrow keys, Ctrl+A, Cmd+A, Home, End)
       if (
         e.shiftKey ||
         e.key === 'a' ||
         e.key === 'A' ||
         ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'].includes(e.key)
       ) {
-        debouncedHandler();
+        void handleSelectionChange();
       }
     };
 
@@ -278,6 +279,7 @@ export class ChromeDOMSelectionProvider implements ISelectionProvider {
     document.addEventListener('keyup', handleKeyUp);
 
     return () => {
+      ++revision;
       if (timer !== null) {
         clearTimeout(timer);
         timer = null;
@@ -317,3 +319,4 @@ export class ChromeDOMSelectionProvider implements ISelectionProvider {
 
 export const chromeDOMSelection = new ChromeDOMSelectionProvider();
 export default ChromeDOMSelectionProvider;
+

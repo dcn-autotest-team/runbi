@@ -134,4 +134,61 @@ describe('Desktop selection-to-polish flow', () => {
     expect(host.querySelector('[data-testid="translate-bar"]')).not.toBeNull();
     expect(host.textContent).toContain('Translated');
   });
+  it('hides an unfocused capsule on selection invalidation without advancing timers', async () => {
+    await act(async () => root.render(<App />));
+    const select = eventMocks.listeners.get('runbi://captured-selection')!;
+    const invalidate = eventMocks.listeners.get('runbi://selection-invalidated');
+    expect(invalidate).toBeTypeOf('function');
+    await act(async () => select({ payload: { text: '选中文本', trigger: 'selection', generation: 1 } }));
+    expect(host.querySelector('[role="toolbar"]')).not.toBeNull();
+
+    const invoke = (window as any).__TAURI_INTERNALS__.invoke;
+    invoke.mockClear();
+    await act(async () => invalidate!({ payload: 2 }));
+    expect(invoke).toHaveBeenCalledWith('hide_capsule_window', {}, undefined);
+    expect(host.querySelector('[role="toolbar"]')).toBeNull();
+
+    // A late UIA/clipboard result must not resurrect the cancelled selection.
+    await act(async () => select({ payload: { text: '旧选区', trigger: 'selection', generation: 1 } }));
+    expect(host.querySelector('[role="toolbar"]')).toBeNull();
+    await act(async () => select({ payload: { text: '新选区', trigger: 'selection', generation: 2 } }));
+    expect(host.querySelector('[role="toolbar"]')).not.toBeNull();
+    // A delayed invalidation belonging to an older interaction must be ignored.
+    await act(async () => invalidate!({ payload: 1 }));
+    expect(host.querySelector('[role="toolbar"]')).not.toBeNull();
+  });
+
+  it('does not hide a panel while capsule expansion is awaiting native positioning', async () => {
+    await act(async () => root.render(<App />));
+    await act(async () => eventMocks.listeners.get('runbi://captured-selection')!({
+      payload: { text: '需要翻译的选区', trigger: 'selection', generation: 1 },
+    }));
+    let finishPosition!: () => void;
+    const invoke = (window as any).__TAURI_INTERNALS__.invoke;
+    invoke.mockImplementation((command: string) => command === 'position_window_at_cursor'
+      ? new Promise<void>((resolve) => { finishPosition = resolve; })
+      : Promise.resolve(null));
+    await act(async () => (host.querySelector('button[aria-label="翻译选中文本"]') as HTMLButtonElement).click());
+    await act(async () => eventMocks.listeners.get('runbi://selection-invalidated')!({ payload: 2 }));
+    expect(invoke.mock.calls.some(([command]: [string]) => command === 'hide_capsule_window')).toBe(false);
+    await act(async () => finishPosition());
+    expect(host.querySelector('[data-testid="translate-bar"]')).not.toBeNull();
+  });
+
+  it('keeps a newer capsule when an older native hide completes late', async () => {
+    await act(async () => root.render(<App />));
+    const select = eventMocks.listeners.get('runbi://captured-selection')!;
+    await act(async () => select({ payload: { text: '旧选区', trigger: 'selection', generation: 1 } }));
+    let finishHide!: () => void;
+    (window as any).__TAURI_INTERNALS__.invoke.mockImplementation((command: string) =>
+      command === 'hide_capsule_window'
+        ? new Promise<void>((resolve) => { finishHide = resolve; })
+        : Promise.resolve(null));
+    await act(async () => eventMocks.listeners.get('runbi://selection-invalidated')!({ payload: 2 }));
+    await act(async () => select({ payload: { text: '新选区', trigger: 'selection', generation: 2 } }));
+    await act(async () => finishHide());
+    expect(host.querySelector('[role="toolbar"]')).not.toBeNull();
+  });
+
 });
+

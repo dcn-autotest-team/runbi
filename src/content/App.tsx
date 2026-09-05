@@ -90,6 +90,7 @@ export const App: React.FC<AppProps> = ({
   const isGeneratingRef = useRef<boolean>(false);
   const viewModeRef = useRef<AppViewMode>(viewMode);
   const selectionRef = useRef<SelectionInfo | null>(selection);
+  const selectionRevisionRef = useRef(0);
   const isInteractingRef = useRef<boolean>(false);
 
   useEffect(() => {
@@ -116,6 +117,7 @@ export const App: React.FC<AppProps> = ({
 
   // Dismiss entire floating interface
   const handleDismiss = useCallback(() => {
+    ++selectionRevisionRef.current;
     cleanupStream();
     setViewMode('idle');
     setPolishedText('');
@@ -305,6 +307,7 @@ export const App: React.FC<AppProps> = ({
     if (!selectionProvider.subscribeToSelectionChange) return;
 
     const unsubscribe = selectionProvider.subscribeToSelectionChange(async (info) => {
+      const revision = ++selectionRevisionRef.current;
       if (!info) {
         if (isInteractingRef.current) return;
         if (viewModeRef.current === 'capsule') {
@@ -327,6 +330,8 @@ export const App: React.FC<AppProps> = ({
 
         const triggerMode = await storageProvider.get<string>('triggerMode', 'capsule');
 
+        if (revision !== selectionRevisionRef.current) return;
+
         // Prevent interrupting active panel streaming
         if (viewModeRef.current === 'panel' && isGeneratingRef.current) {
           return;
@@ -347,6 +352,7 @@ export const App: React.FC<AppProps> = ({
     });
 
     return () => {
+      ++selectionRevisionRef.current;
       unsubscribe();
     };
   }, [selectionProvider, storageProvider, activeStyle, startStream]);
@@ -450,3 +456,4 @@ export const App: React.FC<AppProps> = ({
 };
 
 export default App;
+

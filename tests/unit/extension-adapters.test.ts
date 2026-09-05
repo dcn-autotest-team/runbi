@@ -201,6 +201,39 @@ describe('Milestone 2: Chrome Extension Platform Adapters & Integration', () => 
       }
     });
 
+    it('notifies selection clearing immediately and cancels a pending popup', async () => {
+      vi.useFakeTimers();
+      const provider = new ChromeDOMSelectionProvider();
+      const callback = vi.fn();
+      const input = document.createElement('textarea');
+      input.value = '需要选择的文字';
+      document.body.appendChild(input);
+      input.focus();
+      input.setSelectionRange(0, 6);
+      const unbind = provider.subscribeToSelectionChange(callback);
+      try {
+        document.dispatchEvent(new Event('selectionchange'));
+        await vi.advanceTimersByTimeAsync(150);
+        expect(callback.mock.lastCall?.[0]?.text).toBe('需要选择的文');
+        callback.mockClear();
+        // Start a replacement selection, then collapse it before debounce ends.
+        document.dispatchEvent(new Event('selectionchange'));
+        await Promise.resolve();
+        document.dispatchEvent(new MouseEvent('mousedown'));
+        input.setSelectionRange(0, 0);
+        document.dispatchEvent(new Event('selectionchange'));
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(callback).toHaveBeenCalledWith(null);
+        callback.mockClear();
+        await vi.advanceTimersByTimeAsync(500);
+        expect(callback).not.toHaveBeenCalled();
+      } finally {
+        unbind();
+        vi.useRealTimers();
+      }
+    });
+
     it('should clear selection on input and DOM selection', async () => {
       const provider = new ChromeDOMSelectionProvider();
       const textarea = document.createElement('textarea');
@@ -611,6 +644,32 @@ describe('Milestone 2: Chrome Extension Platform Adapters & Integration', () => 
       expect(mockTextReplacer.replaceText).toHaveBeenCalledWith('已润色内容', mockSelection);
     });
 
+    it('does not resurrect a cleared selection after async settings resolve', async () => {
+      let notify!: (selection: SelectionInfo | null) => void;
+      let resolveEnabled!: (value: boolean) => void;
+      const selectionProvider: ISelectionProvider = {
+        getSelection: vi.fn().mockResolvedValue(null),
+        subscribeToSelectionChange: (callback) => { notify = callback; return () => {}; },
+        clearSelection: vi.fn().mockResolvedValue(undefined),
+      };
+      const storageProvider: IStorageProvider = {
+        get: vi.fn().mockImplementation((key, fallback) => key === 'enabled'
+          ? new Promise<boolean>((resolve) => { resolveEnabled = resolve; })
+          : Promise.resolve(fallback)),
+        set: vi.fn().mockResolvedValue(undefined),
+        remove: vi.fn().mockResolvedValue(undefined),
+        subscribe: vi.fn().mockReturnValue(() => {}),
+      };
+      await renderComponent(React.createElement(App, { selectionProvider, storageProvider }));
+      await act(async () => { notify({
+        text: '已取消的选区', rawText: '已取消的选区',
+        rect: new DOMRect(10, 10, 100, 20), isEditable: false,
+      }); });
+      await act(async () => { notify(null); });
+      await act(async () => resolveEnabled(true));
+      expect(container.querySelector('#runbi-trigger-capsule')).toBeNull();
+    });
+
     it('should inject custom IStorageProvider into PopupApp and OptionsApp', async () => {
       const customStore = new Map<string, any>([
         ['enabled', true],
@@ -641,3 +700,4 @@ describe('Milestone 2: Chrome Extension Platform Adapters & Integration', () => 
     });
   });
 });
+
