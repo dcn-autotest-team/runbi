@@ -349,7 +349,7 @@ export const App: React.FC = () => {
     lastChatApp: '',
     uiMode: 'panel' as 'panel' | 'capsule',
     armCapsule: (_info: CapsuleInfo) => {},
-    hideCapsule: () => {},
+    hideCapsule: (_immediate?: boolean) => {},
     handleStartPolish: (_t: string, _s: PolishStyle, _c?: string, _img?: string | null) => {},
     handleStartScreenReplyAnalysis: (_hint?: string) => {},
     handleStartTextReplyAnalysis: (_msg: string) => {},
@@ -398,6 +398,8 @@ export const App: React.FC = () => {
 
   // —— 缺陷2:微胶囊状态机。窗口隐藏复用 hide_window;capsule→panel 由 expandCapsule 完成 ——
   const capsuleInfoRef = useRef<CapsuleInfo | null>(null);
+  const capsuleRevisionRef = useRef(0);
+  const selectionGenerationRef = useRef(0);
 
   const clearCapsuleTimers = () => {
     if (capsuleArmTimerRef.current) {
@@ -410,33 +412,35 @@ export const App: React.FC = () => {
     }
   };
 
-  // 淡出动画播完再藏窗口,并把状态机复位回 panel,等下一次划词重新武装
-  const hideCapsule = useCallback(() => {
+  // Selection invalidation bypasses both the idle timer and fade animation.
+  const hideCapsule = useCallback((immediate = false) => {
     clearCapsuleTimers();
+    const revision = ++capsuleRevisionRef.current;
     capsuleInfoRef.current = null;
     setCapsuleVisible(false);
-    capsuleFadeTimerRef.current = setTimeout(() => {
+    const finish = async () => {
       capsuleFadeTimerRef.current = null;
-      void (async () => {
-        if (isTauri) {
-          try {
-            // Hide and restore the native panel geometry in one command so the
-            // next tray/settings open cannot inherit a 196x44 always-on-top window.
-            await invoke('hide_capsule_window');
-          } catch (e) {
-            console.warn('reset capsule window failed:', e);
-          }
+      if (isTauri) {
+        try {
+          await invoke('hide_capsule_window');
+        } catch (e) {
+          console.warn('reset capsule window failed:', e);
         }
-        setUiMode('panel');
-        setCapsule(null);
-        setCapsuleVisible(true);
-      })();
-    }, CAPSULE_FADE_MS);
+      }
+      // A newer selection/expansion may arrive while native hide is resolving.
+      if (revision !== capsuleRevisionRef.current) return;
+      setUiMode('panel');
+      setCapsule(null);
+      setCapsuleVisible(true);
+    };
+    if (immediate) void finish();
+    else capsuleFadeTimerRef.current = setTimeout(() => void finish(), CAPSULE_FADE_MS);
   }, [isTauri]);
 
   // 划词到达:挂胶囊并启动 1.2s 无人问津淡出计时
   const armCapsule = useCallback((info: CapsuleInfo) => {
     clearCapsuleTimers();
+    ++capsuleRevisionRef.current;
     capsuleInfoRef.current = info;
     setCapsule(info);
     setCapsuleVisible(true);
@@ -454,6 +458,7 @@ export const App: React.FC = () => {
       const info = capsuleInfoRef.current;
       if (!info) return;
       clearCapsuleTimers();
+      ++capsuleRevisionRef.current;
       capsuleInfoRef.current = null;
       if (isTauri) {
         try {
@@ -509,6 +514,7 @@ export const App: React.FC = () => {
     if (!info) return;
     clearCapsuleTimers();
     adapters.textReplacer.copyToClipboard(info.text).then((ok) => {
+      if (capsuleInfoRef.current !== info) return;
       if (!ok) {
         hideCapsule();
         return;
@@ -1325,8 +1331,21 @@ export const App: React.FC = () => {
 
       // Listen for selection events from Rust global shortcut or mouse hook
       const unlistens: Array<Promise<(() => void) | undefined>> = [];
+      unlistens.push(listen<number>('runbi://selection-invalidated', ({ payload: generation }) => {
+        if (generation < selectionGenerationRef.current) return;
+        selectionGenerationRef.current = generation;
+        // The ref is cleared synchronously on expansion, before its IPC await.
+        if (capsuleInfoRef.current || capsuleFadeTimerRef.current) stateRef.current.hideCapsule(true);
+      }).catch((e) => {
+        console.warn('listen selection invalidation failed:', e);
+        return undefined;
+      }));
       unlistens.push(listen('runbi://captured-selection', (event: any) => {
         const __p = event?.payload || {};
+        if (shouldShowCapsule(__p) && typeof __p.generation === 'number') {
+          if (__p.generation < selectionGenerationRef.current) return;
+          selectionGenerationRef.current = __p.generation;
+        }
         invoke('append_log', { msg: `frontend: event received t=${__p.trigger} hs=${__p.hasScreenshot} keys=[${Object.keys(__p).join(',')}] text=${String(__p.text || '').slice(0, 24)}` }).catch(() => {});
         setShowOnboarding(false);
         setShowSettings(false);
@@ -1983,7 +2002,7 @@ export const App: React.FC = () => {
         e.preventDefault();
         // 胶囊态 Esc = 直接收走胶囊
         if (s.uiMode === 'capsule') {
-          s.hideCapsule();
+          s.hideCapsule(true);
           return;
         }
         // 内置库浮层在最上层，优先关闭（浮层自己的 Esc 监听与这里同在 window，
@@ -2911,3 +2930,4 @@ export const App: React.FC = () => {
 };
 
 export default App;
+

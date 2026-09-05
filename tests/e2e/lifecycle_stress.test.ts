@@ -844,6 +844,7 @@ describe('Lifecycle, Concurrency & Adversarial Stress Testing (challenger_tier5_
       hostInput.value = 'Webpage user input';
       document.body.appendChild(hostInput);
       hostInput.focus();
+      hostInput.setSelectionRange(0, 7); // Keep the seeded capsule backed by a real selection.
 
       const mockSelection: SelectionInfo = {
         text: '选中文本',
@@ -916,3 +917,4 @@ describe('Lifecycle, Concurrency & Adversarial Stress Testing (challenger_tier5_
     });
   });
 });
+

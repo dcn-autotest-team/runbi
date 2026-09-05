@@ -262,6 +262,7 @@ pub fn handle_clipboard_change(app: &AppHandle, state: &ClipboardMonitorState) {
     }
 
     if should_trigger {
+        let generation = crate::commands::mouse_hook::SELECTION_GENERATION.load(Ordering::SeqCst);
         let is_chat = crate::commands::screenshot::is_likely_conversation_window(
             source_app.as_deref(),
             window_title.as_deref(),
@@ -276,25 +277,35 @@ pub fn handle_clipboard_change(app: &AppHandle, state: &ClipboardMonitorState) {
             let win_clone = window.clone();
             let text_clone = text.clone();
             tauri::async_runtime::spawn(async move {
+                if generation != crate::commands::mouse_hook::SELECTION_GENERATION.load(Ordering::SeqCst) {
+                    return;
+                }
                 // Automatic clipboard capture follows the same entry rule as
                 // mouse selection: show the capsule, never the full panel.
                 if let Err(e) = position_window_at_cursor(win_clone.clone(), Some(true)).await {
                     eprintln!("[Runbi] clipboard capsule positioning failed: {e}");
                     return;
                 }
-                let _ = win_clone.show();
-                let _ = win_clone.unminimize();
-                let _ = win_clone.emit(
-                    "runbi://captured-selection",
-                    serde_json::json!({
-                        "text": text_clone,
-                        "sourceApp": source_app,
-                        "windowTitle": window_title,
-                        "screenshot": screenshot,
-                        "trigger": "clipboard",
-                        "capsule": true,
-                    }),
-                );
+                let app = win_clone.app_handle().clone();
+                let _ = app.run_on_main_thread(move || {
+                    if generation != crate::commands::mouse_hook::SELECTION_GENERATION.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    let _ = win_clone.show();
+                    let _ = win_clone.unminimize();
+                    let _ = win_clone.emit(
+                        "runbi://captured-selection",
+                        serde_json::json!({
+                            "text": text_clone,
+                            "sourceApp": source_app,
+                            "windowTitle": window_title,
+                            "screenshot": screenshot,
+                            "trigger": "clipboard",
+                            "generation": generation,
+                            "capsule": true,
+                        }),
+                    );
+                });
             });
         }
     }
@@ -534,3 +545,4 @@ mod tests {
         assert!(!is_sensitive_or_password("会议改到明天下午三点"));
     }
 }
+

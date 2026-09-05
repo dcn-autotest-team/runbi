@@ -28,6 +28,10 @@ impl Default for SelectionMonitorState {
     }
 }
 
+// Every physical interaction invalidates captures still awaiting UIA/clipboard.
+// Shared with the clipboard path so it cannot resurrect a dismissed capsule.
+pub static SELECTION_GENERATION: AtomicU64 = AtomicU64::new(0);
+
 #[cfg(windows)]
 static MONITOR_STATE: Mutex<Option<(SelectionMonitorState, AppHandle)>> = Mutex::new(None);
 #[cfg(windows)]
@@ -40,18 +44,19 @@ static LAST_UP_MS: AtomicU64 = AtomicU64::new(0);
 /// 文本各自开任务,并发 set_size/set_always_on_top 同一窗口曾触发堆破坏
 /// (0xc0000374,WER 8/28 三份 release 报告同码),这里是硬闸。
 #[cfg(windows)]
-static LAST_POP_TEXT: Mutex<Option<(u64, String)>> = Mutex::new(None);
+static LAST_POP_TEXT: Mutex<Option<(u64, u64, String)>> = Mutex::new(None);
 
 #[cfg(windows)]
 fn should_pop_once(text: &str) -> bool {
     let now = current_time_ms();
+    let generation = SELECTION_GENERATION.load(Ordering::SeqCst);
     if let Ok(mut slot) = LAST_POP_TEXT.lock() {
-        if let Some((ts, prev)) = slot.as_ref() {
-            if now.saturating_sub(*ts) < 2000 && prev == text {
+        if let Some((previous_generation, ts, prev)) = slot.as_ref() {
+            if *previous_generation == generation && now.saturating_sub(*ts) < 2000 && prev == text {
                 return false;
             }
         }
-        *slot = Some((now, text.to_string()));
+        *slot = Some((generation, now, text.to_string()));
         true
     } else {
         false
@@ -78,19 +83,78 @@ fn should_handle_selection(state: &SelectionMonitorState) -> bool {
 }
 
 #[cfg(windows)]
+unsafe fn is_runbi_window(hwnd: windows_sys::Win32::Foundation::HWND) -> bool {
+    let mut pid = 0;
+    windows_sys::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(hwnd, &mut pid);
+    pid == std::process::id()
+}
+
+#[cfg(windows)]
+fn invalidate_selection() {
+    let generation = SELECTION_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    if let Ok(guard) = MONITOR_STATE.try_lock() {
+        if let Some((_, app)) = guard.as_ref() {
+            let app_handle = app.clone();
+            // Never call blocking window operations from a low-level hook.
+            let _ = app.run_on_main_thread(move || {
+                let _ = app_handle.emit("runbi://selection-invalidated", generation);
+            });
+        }
+    }
+}
+
+#[cfg(windows)]
+unsafe extern "system" fn low_level_keyboard_proc(
+    n_code: i32,
+    w_param: usize,
+    l_param: isize,
+) -> isize {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CallNextHookEx, GetForegroundWindow, KBDLLHOOKSTRUCT, LLKHF_INJECTED,
+        WM_KEYDOWN, WM_SYSKEYDOWN,
+    };
+    if n_code >= 0 && (w_param == WM_KEYDOWN as usize || w_param == WM_SYSKEYDOWN as usize) {
+        let event = &*(l_param as *const KBDLLHOOKSTRUCT);
+        // Ignore injected Ctrl+C and bare modifiers; the source app owns focus
+        // while the capsule is visible, so DOM keydown/blur cannot observe these.
+        let modifier = matches!(event.vkCode, 0x10..=0x12 | 0x5B..=0x5C | 0xA0..=0xA5);
+        if event.flags & LLKHF_INJECTED == 0 && !modifier
+            && !is_runbi_window(GetForegroundWindow())
+        {
+            invalidate_selection();
+        }
+    }
+    CallNextHookEx(std::ptr::null_mut(), n_code, w_param, l_param)
+}
+
+#[cfg(windows)]
 unsafe extern "system" fn low_level_mouse_proc(
     n_code: i32,
     w_param: usize,
     l_param: isize,
 ) -> isize {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CallNextHookEx, MSLLHOOKSTRUCT, WM_LBUTTONDOWN, WM_LBUTTONUP,
+        CallNextHookEx, WindowFromPoint, MSLLHOOKSTRUCT, LLMHF_INJECTED,
+        WM_LBUTTONDOWN, WM_LBUTTONUP, WM_RBUTTONDOWN, WM_MBUTTONDOWN,
     };
 
     if n_code >= 0 {
         let hook_struct = *(l_param as *const MSLLHOOKSTRUCT);
         let pt = hook_struct.pt;
         let now = current_time_ms();
+
+        if hook_struct.flags & LLMHF_INJECTED != 0 {
+            return CallNextHookEx(std::ptr::null_mut(), n_code, w_param, l_param);
+        }
+        if matches!(w_param as u32, WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN) {
+            if is_runbi_window(WindowFromPoint(pt)) {
+                // Clicking a capsule action also cancels unfinished captures,
+                // but must leave the capsule alive long enough to receive click.
+                SELECTION_GENERATION.fetch_add(1, Ordering::SeqCst);
+            } else {
+                invalidate_selection();
+            }
+        }
 
         if w_param == WM_LBUTTONDOWN as usize {
             LAST_DOWN_X.store(pt.x, Ordering::Relaxed);
@@ -125,13 +189,15 @@ unsafe extern "system" fn low_level_mouse_proc(
                         if should_handle_selection(state) {
                             let app = app_handle.clone();
                             let state_clone = state.clone();
+                            let generation = SELECTION_GENERATION.load(Ordering::SeqCst);
 
                             // Trigger grab asynchronously
                             tauri::async_runtime::spawn(async move {
                                 // The low-level hook sees mouse-up before the target control does.
                                 // Let it commit the selection before sending Ctrl+C.
                                 tokio::time::sleep(Duration::from_millis(55)).await;
-                                if !should_handle_selection(&state_clone) {
+                                if generation != SELECTION_GENERATION.load(Ordering::SeqCst)
+                                    || !should_handle_selection(&state_clone) {
                                     return;
                                 }
 
@@ -188,6 +254,9 @@ unsafe extern "system" fn low_level_mouse_proc(
                                         }
                                     };
 
+                                if generation != SELECTION_GENERATION.load(Ordering::SeqCst) {
+                                    return;
+                                }
                                 let trimmed = captured_text.trim();
                                 if trimmed.is_empty()
                                     || trimmed.len() > 30000
@@ -228,21 +297,29 @@ unsafe extern "system" fn low_level_mouse_proc(
                                             );
                                             return;
                                         }
-                                        let _ = window.show();
-                                        let _ = window.unminimize();
-                                        // Keep focus and the selection in the source app. The
-                                        // toolbar becomes active only when an action is clicked.
-                                        let _ = window.emit(
-                                            "runbi://captured-selection",
-                                            serde_json::json!({
-                                                "text": captured_text,
-                                                "sourceApp": source_app,
-                                                "windowTitle": window_title,
-                                                "hasScreenshot": has_screenshot,
-                                                "trigger": "selection",
-                                                "capsule": true,
-                                            }),
-                                        );
+                                        // Serialize show/emit with invalidation delivery on the
+                                        // main thread; an already-cancelled capture must not show.
+                                        let _ = app.run_on_main_thread(move || {
+                                            if generation != SELECTION_GENERATION.load(Ordering::SeqCst) {
+                                                return;
+                                            }
+                                            let _ = window.show();
+                                            let _ = window.unminimize();
+                                            // Keep focus and the selection in the source app. The
+                                            // toolbar becomes active only when an action is clicked.
+                                            let _ = window.emit(
+                                                "runbi://captured-selection",
+                                                serde_json::json!({
+                                                    "text": captured_text,
+                                                    "sourceApp": source_app,
+                                                    "windowTitle": window_title,
+                                                    "hasScreenshot": has_screenshot,
+                                                    "trigger": "selection",
+                                                    "generation": generation,
+                                                    "capsule": true,
+                                                }),
+                                            );
+                                        });
                                     }
                                 }
                             });
@@ -260,7 +337,7 @@ pub fn start_mouse_selection_monitor(app: &AppHandle, state: SelectionMonitorSta
     #[cfg(windows)]
     {
         use windows_sys::Win32::UI::WindowsAndMessaging::{
-            DispatchMessageW, GetMessageW, SetWindowsHookExW, TranslateMessage, MSG, WH_MOUSE_LL,
+            DispatchMessageW, GetMessageW, SetWindowsHookExW, TranslateMessage, MSG, WH_MOUSE_LL, WH_KEYBOARD_LL,
         };
 
         if let Ok(mut lock) = MONITOR_STATE.lock() {
@@ -279,6 +356,16 @@ pub fn start_mouse_selection_monitor(app: &AppHandle, state: SelectionMonitorSta
             if hook.is_null() {
                 eprintln!("[Runbi] Failed to install global mouse selection hook");
                 return;
+            }
+
+            let keyboard_hook = SetWindowsHookExW(
+                WH_KEYBOARD_LL,
+                Some(low_level_keyboard_proc),
+                std::ptr::null_mut(),
+                0,
+            );
+            if keyboard_hook.is_null() {
+                eprintln!("[Runbi] Failed to install selection dismissal keyboard hook");
             }
 
             let mut msg: MSG = std::mem::zeroed();
@@ -343,3 +430,4 @@ mod tests {
         assert!(a && !b && c);
     }
 }
+
