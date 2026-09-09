@@ -1,6 +1,6 @@
 [package]
 name = "runbi-desktop"
-version = "1.0.8"
+version = "1.0.9"
 description = "Runbi Desktop - Raycast-like AI Text Polishing Assistant (Tauri 2.x + Rust)"
 authors = ["Runbi Core Team"]
 license = "MIT"

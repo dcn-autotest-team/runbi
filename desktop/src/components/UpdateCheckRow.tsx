@@ -32,7 +32,7 @@ export function UpdateCheckRow({
   autoCheck = false,
   prominent = false,
   onUpdateFound,
-}: UpdateCheckRowProps = {}) {
+}: UpdateCheckRowProps) {
   const [phase, setPhase] = useState<'idle' | 'checking' | 'downloading' | 'done'>('idle');
   const [note, setNote] = useState('');
   const [update, setUpdate] = useState<Update | null>(null);
