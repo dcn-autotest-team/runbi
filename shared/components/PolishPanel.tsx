@@ -83,6 +83,9 @@ export interface PolishPanelProps {
   /** 翻译模式：当前目标语言与切换回调(传入才显示语言条)。 */
   translateTarget?: TranslateTargetId;
   onTranslateTargetChange?: (id: TranslateTargetId) => void;
+  /** 重新截屏：传入才在屏幕上下文场景显示按钮(桌面端)。 */
+  onRecapture?: () => void;
+  isRecapturing?: boolean;
 }
 
 /** 细线警示图标(替代 emoji,单色跟随文字颜色) */
@@ -147,6 +150,8 @@ export const PolishPanel: React.FC<PolishPanelProps> = ({
   onOpenExperts,
   translateTarget,
   onTranslateTargetChange,
+  onRecapture,
+  isRecapturing = false,
 }) => {
   const [isCollapsed, setIsCollapsed] = useState(defaultCollapsed);
   const [showConvSummary, setShowConvSummary] = useState(false);
@@ -415,15 +420,33 @@ export const PolishPanel: React.FC<PolishPanelProps> = ({
                     </span>
                   )}
                 </div>
-                {screenReplyAnalysis.conversation && screenReplyAnalysis.conversation.length > 1 && (
-                  <button
-                    type="button"
-                    onClick={() => setShowConvSummary((prev) => !prev)}
-                    className="text-[11px] text-slate-400 hover:text-teal-600 dark:hover:text-teal-300 cursor-pointer transition-colors shrink-0 ml-2"
-                  >
-                    {showConvSummary ? '收起记录 ▴' : `展开记录(${screenReplyAnalysis.conversation.length}) ▾`}
-                  </button>
-                )}
+                <div className="flex shrink-0 items-center gap-1.5 ml-2">
+                  {onRecapture && (
+                    <button
+                      type="button"
+                      data-testid="recapture-screenshot"
+                      onClick={onRecapture}
+                      disabled={isRecapturing}
+                      title="重新截取当前聊天窗口 (F9，面板聚焦时按 R)"
+                      className="runbi-focus-ring flex items-center gap-1 rounded-lg border border-slate-200 px-1.5 py-1 text-[11px] text-slate-500 transition-colors hover:bg-slate-100 hover:text-teal-600 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/10 dark:text-slate-400 dark:hover:bg-white/10 dark:hover:text-teal-300"
+                    >
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={`h-3 w-3 ${isRecapturing ? 'animate-spin' : ''}`} aria-hidden="true">
+                        <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z" />
+                        <circle cx="12" cy="13" r="3" />
+                      </svg>
+                      {isRecapturing ? '截屏中…' : '重新截屏'}
+                    </button>
+                  )}
+                  {screenReplyAnalysis.conversation && screenReplyAnalysis.conversation.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => setShowConvSummary((prev) => !prev)}
+                      className="text-[11px] text-slate-400 hover:text-teal-600 dark:hover:text-teal-300 cursor-pointer transition-colors"
+                    >
+                      {showConvSummary ? '收起记录 ▴' : `展开记录(${screenReplyAnalysis.conversation.length}) ▾`}
+                    </button>
+                  )}
+                </div>
               </div>
 
               {/* Multi-turn conversation history ONLY if multiple turns and expanded */}

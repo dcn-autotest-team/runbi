@@ -126,6 +126,9 @@ fn main() {
     let run_result = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
+                commands::mouse_hook::leave_capsule_mode();
+                #[cfg(windows)]
+                commands::mouse_hook::clear_outside_dismissal();
                 let _ = window.show();
                 let _ = window.set_focus();
             }
@@ -160,6 +163,8 @@ fn main() {
                             LAST_FIRE_MS.store(now_ms, std::sync::atomic::Ordering::Relaxed);
                             eprintln!("[Runbi] wake shortcut fired");
                             commands::file_log(app, "wake shortcut fired");
+                            #[cfg(windows)]
+                            commands::mouse_hook::clear_outside_dismissal();
                             let app_handle = app.clone();
                             if let Some(window) = app.get_webview_window("main") {
                                 if window.is_visible().unwrap_or(false) {
@@ -167,6 +172,7 @@ fn main() {
                                 } else {
                                     // Capture selected text first while the target app still has focus.
                                     let (source_app, window_title) = commands::get_foreground_context();
+                                    commands::input::remember_foreground_window();
                                     let is_chat = commands::screenshot::is_likely_conversation_window(
                                         source_app.as_deref(),
                                         window_title.as_deref(),
@@ -253,6 +259,16 @@ fn main() {
             // Start Global Mouse Drag-Selection Monitor (Doubao / Cherry Studio style)
             let selection_state = commands::mouse_hook::SelectionMonitorState::default();
             app.manage(selection_state.clone());
+            #[cfg(windows)]
+            if let Some(window) = app.get_webview_window("main") {
+                if let Ok(hwnd) = window.hwnd() {
+                    commands::mouse_hook::set_runbi_window_handle(hwnd.0 as isize);
+                    commands::file_log(
+                        app.handle(),
+                        &format!("runbi host hwnd=0x{:X}", hwnd.0 as usize),
+                    );
+                }
+            }
             commands::mouse_hook::start_mouse_selection_monitor(app.handle(), selection_state);
 
             // Register the wake shortcut (persisted value, or the default)
@@ -310,6 +326,7 @@ fn main() {
             commands::set_global_shortcut,
             commands::set_clipboard_monitor_enabled,
             commands::get_clipboard_monitor_enabled,
+            commands::write_clipboard_text,
             commands::set_selection_monitor_enabled,
             commands::get_selection_monitor_enabled,
             commands::stream_llm_chat,
@@ -325,6 +342,8 @@ fn main() {
             commands::load_app_config,
             commands::save_app_config,
             commands::set_auto_popup_enabled,
+            commands::feishu_copilot::capture_feishu_multi_turn_context,
+            commands::feishu_copilot::send_to_feishu_input,
         ])
         .run(tauri::generate_context!());
 

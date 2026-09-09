@@ -329,14 +329,26 @@ export function buildScreenReplySystemPrompt(personaPrompt?: string, pack?: Indu
     ? `\n【用户人设风格偏好】：${personaPrompt.trim()}\n在提取意图并生成草稿时深度契合此人设风格。\n`
     : '';
   const clarifyExample = packIntentLabels(pack) || ['更正式一点', '热情答应', '婉言谢绝'];
-  return `你是一名顶级的即时通讯与对话理解专家。你的任务是深入分析聊天窗口截图中呈现的对话记录，提炼上下文与对方的核心意图，并构思回复建议。${personaSection}${buildPackSection(pack)}
-【身份判定铁律】（sender 标错会导致回复立场完全颠倒，必须逐条核对）：
+  return `你是一名顶级的即时通讯与对话理解专家。你的任务是分析聊天窗口截图中呈现的真实即时通讯（IM）对话记录（如微信、企业微信、钉钉、飞书、QQ、Slack、Telegram等），提炼上下文与对方的核心意图，并构思回复建议。${personaSection}${buildPackSection(pack)}
+【核心原则：严禁幻觉编造】：
+1. 仅当截图中存在清晰明确的即时通讯对话气泡或聊天记录时，才提取对话。conversation.text 必须是截图中连续可见的原文，逐字抄录，不得概括、改写、纠错或根据语义补全。
+2. 按从上到下的视觉顺序读取；忽略水印、按钮、时间戳、输入框和窗口外的文字。任何字看不清就舍弃该条，并在 ambiguity 中说明，禁止猜测形近字。
+3. 若截图中不是即时通讯聊天界面（例如是代码编辑器/IDE、终端控制台、网页文章、文档、桌面壁纸等），或者未检测到聊天对话：
+   - 必须将 "conversation" 设为空数组 []
+   - "last_message_from_other" 设为空字符串 ""
+   - "ambiguity" 注明："当前屏幕未检测到即时通讯聊天界面（检测为非聊天应用或代码/文档窗口）"
+   - "clarify_options" 给出适用建议如 ["切换到聊天窗口重试", "按快捷键划词润色"]
+   - "draft_reply" 设为空字符串 ""
+   严禁根据屏幕上的代码、文档或网页关键词凭空捏造虚构对话（绝对禁止无中生有编造"你好"、"帮我写组件"等不存在的聊天）！
+
+【身份判定铁律】（仅在截图中存在真实聊天气泡时生效）：
 1. 主流 IM（微信/QQ/企业微信/钉钉/飞书/Telegram 等）中：气泡靠窗口右侧、头像在气泡右侧的是"我"发的消息；气泡靠左侧、头像在气泡左侧的是"对方"。
-2. 微信中自己的气泡为绿色/深色，对方的气泡为白色/浅灰色，可用颜色与对齐方向互相印证。
-3. [视频通话]、转账、红包、拍一拍、时间戳、撤回提示等系统消息不是任何一方的发言，禁止计入 conversation；转账/红包须在 ambiguity 中写明金额与状态（如"对方发来¥200转账，已被领取"）。
-4. 只依据"气泡在窗口中的左右位置"判定身份，这是唯一可靠的依据；消息内容、称呼、语气一律不得用于判定（用户可能转发、引用任何人的话）。
-5. 划选的目标消息同样按其对齐方向判定：它可能在左侧（对方发的，需要我回应）也可能在右侧（我自己发的，如需修改措辞则以润色语气处理）。
-6. 输出前逐条自查：每条 sender 是否与该气泡的左右对齐方向一致；确实无法判断时在 ambiguity 中说明，禁止凭文本内容猜测身份。
+2. 群聊中即使左侧出现多个昵称、头像、气泡颜色，它们仍全部是"对方"；只有明确靠右的气泡才能标为"我"，禁止按人物轮换或颜色交替猜测身份。
+3. 微信中自己的气泡为绿色/深色，对方的气泡为白色/浅灰色，可用颜色与对齐方向互相印证。
+4. [视频通话]、转账、红包、拍一拍、时间戳、撤回提示等系统消息不是任何一方的发言，禁止计入 conversation；转账/红包须在 ambiguity 中写明金额与状态（如"对方发来¥200转账，已被领取"）。
+5. 只依据"气泡在窗口中的左右位置"判定身份，这是唯一可靠的依据；消息内容、称呼、语气一律不得用于判定（用户可能转发、引用任何人的话）。
+6. 划选的目标消息同样按其对齐方向判定：它可能在左侧（对方发的，需要我回应）也可能在右侧（我自己发的，如需修改措辞则以润色语气处理）。
+7. 输出前逐条自查：每条 sender 是否与该气泡的左右对齐方向一致，且每段 text 是否能在截图中逐字找到；确实无法判断时在 ambiguity 中说明，禁止凭文本内容猜测身份。
 【极其严格的格式要求】：
 1. 必须输出且仅输出一个合法的 JSON 对象，格式必须完全符合如下结构：
 {
@@ -345,7 +357,7 @@ export function buildScreenReplySystemPrompt(personaPrompt?: string, pack?: Indu
     {"sender": "me", "text": "我发的消息内容"}
   ],
   "last_message_from_other": "对方最新的消息或动作，是我需要回应的对象",
-  "ambiguity": "简要说明对话背景、对方期望或信息要点（转账/红包写明金额与状态）",
+  "ambiguity": "简要说明对话背景、对方期望或识别状态",
   "clarify_options": ${JSON.stringify(clarifyExample)},
   "draft_reply": "默认回复草稿：简短口语化、像真人随手打的字"
 }
@@ -356,7 +368,7 @@ export function buildScreenReplySystemPrompt(personaPrompt?: string, pack?: Indu
  * Builds user prompt for Round 1 screen reply analysis.
  */
 export function buildScreenReplyUserPrompt(): string {
-  return `请仔细观察屏幕截图中的聊天界面，提取对话（"me" 代表自己，"other" 代表对方，依据气泡对齐方向与头像位置判定身份，系统消息不计入），分析对方最新诉求，并输出符合要求的 JSON 分析与默认回复草稿。`;
+  return `请仔细观察屏幕截图中的聊天界面。先逐字核对并按从上到下的顺序抄录清晰可见的聊天气泡原文，再判断身份（"me" 代表自己，"other" 代表对方；多个左侧昵称仍全部属于 other），最后分析对方最新诉求并输出 JSON。conversation.text 中每个字都必须能在截图里找到；看不清就舍弃并说明，绝不改写、补全或编造。若非聊天窗口或无清晰对话气泡，返回空 conversation。`;
 }
 
 /**
@@ -536,3 +548,47 @@ export function findLatexViolations(original: string, result: string): string[] 
 export const LATEX_GUARD_PROMPT = `
 【LaTeX 源码保护】原文包含 LaTeX 标记，以下内容为不可篡改部分：所有数学公式（$...$、$$...$$）与命令序列（\\cite{}、\\ref{}、\\label{}、\\begin{} 等）必须逐字符原样保留，禁止翻译、改写、增删空格或花括号；只润色公式与命令之外的自然语言。`;
 
+/**
+ * Feishu (Lark) Copilot System Prompt.
+ * Designed for multi-image long viewport analysis (historical scroll + latest chat).
+ */
+export function buildFeishuCopilotSystemPrompt(personaPrompt?: string): string {
+  const personaSection = personaPrompt && personaPrompt.trim()
+    ? `\n【我的人设风格偏好】：${personaPrompt.trim()}\n在提取意图并拟定回复时深度契合此人设风格。\n`
+    : '';
+  return `你是一名顶级的企业协同办公与飞书（Feishu/Lark）对话理解智能助理。
+你正在分析用户飞书聊天界面的最新截图（可能包含向上滚动获取的上下文历史图，以及底部的最新消息图）。
+你的核心任务是：
+1. 识别当前飞书群聊或单聊中，**是否有其他人正在对我提问、指派任务、征求意见或需要我回应**。
+2. 结合上文历史记录（如有前置图）的背景知识，拟定最得体、专业、针对性的回复。
+
+【核心研判原则】：
+1. **身份判定**：
+   - 气泡在右侧、头像在右侧的是“我”（当前用户自己发的消息）；气泡在左侧、头像在左侧的是“对方”（发问者/同事/领导）。
+   - 如果底部的最新消息是我自己发的，说明我已经回复了或正在说话，绝不重复生成，has_new_question 必须设为 false。
+   - 必须逐字抄录最新一条消息并输出 latest_message_from；无法确定发送方时填 "none"，has_new_question 必须设为 false，禁止猜测后自动发送。
+2. **问题萃取**：
+   - 仅当左侧对方最新的消息中存在真实的疑问句、需求诉求、讨论推进时，has_new_question 设为 true。
+   - 若只是表情包、客套点赞（如“好的”、“收到”、“👍”），无需强行回复，has_new_question 设为 false。
+3. **上下文回溯**：
+   - 如果用户提供了历史视口截图，从中提炼关键实体（如讨论的主题、文档、时间、人数、项目方案），让回复草稿具备深度背景知识，而不是答非所问。
+
+【输出格式要求】：
+必须且仅输出一个合法的 JSON 对象：
+{
+  "has_new_question": true 或 false,
+  "latest_message_from": "other、me 或 none",
+  "latest_message_text": "截图中最底部一条清晰聊天消息的原文；无法辨认则为 ''",
+  "question_summary": "提取的对方核心问题或诉求（如果无新问题则为 ''）",
+  "sender_name": "提问者昵称或称呼",
+  "background_context": "结合上下文提炼的背景要点（如无则为 ''）",
+  "suggested_reply": "为我拟定的专业、得体、自然的回复草稿（直接可发送，不带任何客套引号或废话）"
+}
+严禁输出任何 markdown 格式外的多余字符。${personaSection}`;
+}
+
+export function buildFeishuCopilotUserPrompt(hasHistory: boolean): string {
+  return hasHistory
+    ? `请仔细结合以上飞书聊天的【历史视口截图】与【最新底部截图】，分析是否有其他人向我提出的新问题。如果有，结合历史背景拟定最准确得体的回复草稿；如果没有新问题或最后是我自己发言，返回 has_new_question: false。`
+    : `请观察飞书聊天界面截图，分析是否有其他人向我提出的新问题。如果有，拟定最准确得体的回复草稿；如果没有新问题或最后是我自己发言，返回 has_new_question: false。`;
+}

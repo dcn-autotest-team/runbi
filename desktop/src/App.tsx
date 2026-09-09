@@ -33,12 +33,15 @@ import {
   buildScreenReplyRefinePrompt,
   buildTextReplySystemPrompt,
   buildTextReplyUserPrompt,
+  buildFeishuCopilotSystemPrompt,
+  buildFeishuCopilotUserPrompt,
   buildExpertSystemPrompt,
   buildTranslateSystemPrompt,
   findBannedWords,
   buildGlossaryPrompt,
   buildStyleSamplesPrompt,
   buildAppStylePrompt,
+  getChatAppName,
   hasLatexMarkers,
   findLatexViolations,
   TRANSLATE_TARGETS,
@@ -66,11 +69,28 @@ const STYLE_NAMES: Record<PolishStyle, string> = {
   translate: '翻译',
 };
 
+function parseModelJson<T>(raw: string): T {
+  const body = raw
+    .replace(/<think>[\s\S]*?<\/think>\s*/gi, '')
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim();
+  const candidate = body.match(/\{[\s\S]*\}/)?.[0] || body;
+  try {
+    return JSON.parse(candidate) as T;
+  } catch {
+    const repaired = candidate
+      .replace(/([{,]\s*)([A-Za-z_$][\w$-]*)\s*:/g, '$1"$2":')
+      .replace(/,\s*([}\]])/g, '$1');
+    return JSON.parse(repaired) as T;
+  }
+}
+
 const DEFAULT_SHORTCUT = 'Ctrl+Shift+Space';
 
 // —— 缺陷2：划词微胶囊（Mini Capsule）常量 ——
 // 窗口尺寸(196×44)与定位由 Rust 侧 position_window_at_cursor(is_capsule) 负责
-const CAPSULE_IDLE_MS = 6000; // 6s 内鼠标未移到胶囊上 → 静默淡出(悬停即取消,1.2s 实测来不及注意到)
+const CAPSULE_IDLE_MS = 6000; // 6s 内鼠标未移到胶囊上 → 静默淡出(悬停即取消)
 const CAPSULE_FADE_MS = 220; // 淡出等待，与 SelectionCapsule 的 CSS opacity 过渡保持一致
 
 // 胶囊暂存的划词上下文：展开面板时按它重放现有润色/回复流程
@@ -162,6 +182,7 @@ export const App: React.FC = () => {
   const [model, setModel] = useState<string>('deepseek-chat');
   const [wakeShortcut, setWakeShortcut] = useState<string>(DEFAULT_SHORTCUT);
   const [autoCopyPopup, setAutoCopyPopup] = useState<boolean>(false);
+  const [clipboardTriggerEnabled, setClipboardTriggerEnabled] = useState<boolean>(false);
   const [autostart, setAutostart] = useState<boolean>(false);
   const [readChatScreenshot, setReadChatScreenshot] = useState<boolean>(true);
   const [isSavingSettings, setIsSavingSettings] = useState<boolean>(false);
@@ -194,6 +215,14 @@ export const App: React.FC = () => {
   const windowOpacityRef = useRef<number>(1);
   windowOpacityRef.current = windowOpacity;
   const [skin, setSkin] = useState<'dark' | 'light'>('dark');
+  // 飞书智能副驾追踪与应答
+  const [feishuCopilotEnabled, setFeishuCopilotEnabled] = useState<boolean>(false);
+  const [feishuCopilotMode, setFeishuCopilotMode] = useState<'collaborative' | 'autopilot'>('collaborative');
+  const [feishuCopilotStatus, setFeishuCopilotStatus] = useState<string>('');
+  const feishuLastRepliedSummaryRef = useRef<string>('');
+  const feishuLastScreenshotRef = useRef<string>('');
+  const feishuAutoPilotCooldownUntilRef = useRef<number>(0);
+  const feishuPollingActiveRef = useRef<boolean>(false);
 
   // 内置库（话术模板/专家提示词）与多专家并行
   const [showScriptLibrary, setShowScriptLibrary] = useState<boolean>(false);
@@ -240,6 +269,10 @@ export const App: React.FC = () => {
   const [capsuleCopied, setCapsuleCopied] = useState<boolean>(false);
   const capsuleArmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const capsuleFadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const panelBlurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const capsuleActionRef = useRef<'expanding' | 'copying' | null>(null);
+  const capsuleRevisionRef = useRef(0);
+  const selectionGenerationRef = useRef(0);
 
   // Data Safety & Fault Tolerance State
   const [history, setHistory] = useState<HistoryRecord[]>([]);
@@ -250,6 +283,7 @@ export const App: React.FC = () => {
   const [lastReplacement, setLastReplacement] = useState<LastReplacementSnapshot | null>(null);
   const persistedNativeSettingsRef = useRef<{
     autoCopyPopup: boolean;
+    clipboardTriggerEnabled: boolean;
     autostart: boolean;
     wakeShortcut: string;
   } | null>(null);
@@ -347,12 +381,14 @@ export const App: React.FC = () => {
     autoMode: true,
     translateTarget: 'en' as TranslateTargetId,
     lastChatApp: '',
+    recaptureForceVision: false,
     uiMode: 'panel' as 'panel' | 'capsule',
     armCapsule: (_info: CapsuleInfo) => {},
-    hideCapsule: (_immediate?: boolean) => {},
+    hideCapsule: (_immediate?: boolean, _nativeAlreadyHidden?: boolean) => {},
     handleStartPolish: (_t: string, _s: PolishStyle, _c?: string, _img?: string | null) => {},
     handleStartScreenReplyAnalysis: (_hint?: string) => {},
     handleStartTextReplyAnalysis: (_msg: string) => {},
+    handleRecapture: () => {},
   });
   stateRef.current.apiKey = apiKey;
   stateRef.current.endpoint = endpoint;
@@ -398,8 +434,6 @@ export const App: React.FC = () => {
 
   // —— 缺陷2:微胶囊状态机。窗口隐藏复用 hide_window;capsule→panel 由 expandCapsule 完成 ——
   const capsuleInfoRef = useRef<CapsuleInfo | null>(null);
-  const capsuleRevisionRef = useRef(0);
-  const selectionGenerationRef = useRef(0);
 
   const clearCapsuleTimers = () => {
     if (capsuleArmTimerRef.current) {
@@ -413,22 +447,33 @@ export const App: React.FC = () => {
   };
 
   // Selection invalidation bypasses both the idle timer and fade animation.
-  const hideCapsule = useCallback((immediate = false) => {
+  const hideCapsule = useCallback((immediate = false, nativeAlreadyHidden = false) => {
     clearCapsuleTimers();
+    const generation = selectionGenerationRef.current;
     const revision = ++capsuleRevisionRef.current;
-    capsuleInfoRef.current = null;
+    capsuleActionRef.current = null;
+    stateRef.current.uiMode = 'panel';
     setCapsuleVisible(false);
     const finish = async () => {
       capsuleFadeTimerRef.current = null;
-      if (isTauri) {
+      let nativeHideFailed = false;
+      if (isTauri && !nativeAlreadyHidden) {
         try {
-          await invoke('hide_capsule_window');
+          await invoke('hide_capsule_window', { generation });
         } catch (e) {
+          nativeHideFailed = true;
           console.warn('reset capsule window failed:', e);
         }
       }
       // A newer selection/expansion may arrive while native hide is resolving.
       if (revision !== capsuleRevisionRef.current) return;
+      if (nativeHideFailed && isTauri) {
+        // The generation guard above proves this is still the same capsule;
+        // hide the window as a last resort so a failed IPC call cannot leave a
+        // transparent always-on-top window behind.
+        invoke('hide_window').catch(() => {});
+      }
+      capsuleInfoRef.current = null;
       setUiMode('panel');
       setCapsule(null);
       setCapsuleVisible(true);
@@ -440,11 +485,20 @@ export const App: React.FC = () => {
   // 划词到达:挂胶囊并启动 1.2s 无人问津淡出计时
   const armCapsule = useCallback((info: CapsuleInfo) => {
     clearCapsuleTimers();
+    if (panelBlurTimerRef.current) {
+      clearTimeout(panelBlurTimerRef.current);
+      panelBlurTimerRef.current = null;
+    }
     ++capsuleRevisionRef.current;
+    capsuleActionRef.current = null;
     capsuleInfoRef.current = info;
     setCapsule(info);
     setCapsuleVisible(true);
     setCapsuleCopied(false);
+    // Keep the imperative state mirror in sync before React schedules the
+    // render; the deferred blur guard reads this ref while the native capsule
+    // is intentionally shown without activating the WebView.
+    stateRef.current.uiMode = 'capsule';
     setUiMode('capsule');
     capsuleArmTimerRef.current = setTimeout(() => {
       capsuleArmTimerRef.current = null;
@@ -456,17 +510,30 @@ export const App: React.FC = () => {
   const expandCapsule = useCallback(
     async (mode: 'polish' | 'reply' | 'translate') => {
       const info = capsuleInfoRef.current;
-      if (!info) return;
+      if (!info || capsuleActionRef.current) return;
       clearCapsuleTimers();
-      ++capsuleRevisionRef.current;
+      capsuleActionRef.current = 'expanding';
+      const revision = ++capsuleRevisionRef.current;
       capsuleInfoRef.current = null;
+      setCapsuleVisible(false);
       if (isTauri) {
         try {
           await invoke('position_window_at_cursor', { isCapsule: false });
         } catch (e) {
           console.warn('expand capsule reposition failed:', e);
+          if (revision === capsuleRevisionRef.current) {
+            capsuleActionRef.current = null;
+            setUiMode('panel');
+            setCapsule(null);
+            invoke('hide_window').catch(() => {});
+          }
+          return;
         }
       }
+      // A newer selection supersedes an expansion that was still repositioning
+      // the native window. Never let the old request overwrite the new capsule.
+      if (revision !== capsuleRevisionRef.current) return;
+      capsuleActionRef.current = null;
       // Render the full panel only after its native window has expanded. This
       // avoids a clipped 196x44 panel flash on slower machines.
       setUiMode('panel');
@@ -511,26 +578,38 @@ export const App: React.FC = () => {
 
   const handleCapsuleCopy = useCallback(() => {
     const info = capsuleInfoRef.current;
-    if (!info) return;
+    if (!info || capsuleActionRef.current) return;
+    invoke('append_log', { msg: `frontend: capsule copy start len=${info.text.length}` }).catch(() => {});
     clearCapsuleTimers();
-    adapters.textReplacer.copyToClipboard(info.text).then((ok) => {
+    capsuleActionRef.current = 'copying';
+    void adapters.textReplacer.copyToClipboard(info.text).then((ok) => {
       if (capsuleInfoRef.current !== info) return;
+      capsuleActionRef.current = null;
+      invoke('append_log', { msg: `frontend: capsule copy result ok=${ok}` }).catch(() => {});
       if (!ok) {
-        hideCapsule();
+        hideCapsule(true);
         return;
       }
+      showToast('已复制到剪贴板');
       setCapsuleCopied(true);
       // Copy is not the end of the flow: keep the other actions available and
-      // show a persistent success state until the regular idle timeout.
+      // show the success state until the normal idle timeout.
       capsuleArmTimerRef.current = setTimeout(() => {
         capsuleArmTimerRef.current = null;
         hideCapsule();
       }, CAPSULE_IDLE_MS);
+    }).catch((error) => {
+      if (capsuleInfoRef.current !== info) return;
+      capsuleActionRef.current = null;
+      console.warn('capsule copy failed:', error);
+      invoke('append_log', { msg: `frontend: capsule copy error=${String(error).slice(0, 180)}` }).catch(() => {});
+      hideCapsule();
     });
-  }, [adapters.textReplacer, hideCapsule]);
+  }, [adapters.textReplacer, hideCapsule, showToast]);
 
   const handleCapsuleSearch = useCallback(() => {
-    const text = capsuleInfoRef.current?.text;
+    const info = capsuleInfoRef.current;
+    const text = info?.text;
     if (!text?.trim()) return;
     clearCapsuleTimers();
     const url = buildBrowserSearchUrl(text);
@@ -538,7 +617,9 @@ export const App: React.FC = () => {
       ? invoke('open_url', { url })
       : Promise.resolve(window.open(url, '_blank', 'noopener,noreferrer'));
     void open
-      .then(() => hideCapsule())
+      .then(() => {
+        if (capsuleInfoRef.current === info) hideCapsule();
+      })
       .catch((error) => {
         console.warn('open browser search failed:', error);
         showToast('无法打开浏览器，请稍后重试', 3000);
@@ -550,17 +631,28 @@ export const App: React.FC = () => {
       if (hovered) {
         // 悬停即取消一切自动淡出
         clearCapsuleTimers();
+        // The pointer can re-enter during the CSS fade. Restore the capsule
+        // while its context is still current instead of leaving a dead window.
+        if (capsuleInfoRef.current && stateRef.current.uiMode === 'capsule') {
+          setCapsuleVisible(true);
+        }
         return;
       }
-      // 移开后停留半秒再淡出,给误移出的用户一点回旋
+      // 移开后给用户回到胶囊的时间，避免操作入口突然消失
       clearCapsuleTimers();
       capsuleFadeTimerRef.current = setTimeout(() => {
         capsuleFadeTimerRef.current = null;
+        if (capsuleActionRef.current === 'expanding') return;
         hideCapsule();
       }, 500);
     },
     [hideCapsule]
   );
+
+  useEffect(() => () => {
+    clearCapsuleTimers();
+    if (panelBlurTimerRef.current) clearTimeout(panelBlurTimerRef.current);
+  }, []);
 
   stateRef.current.armCapsule = armCapsule;
   stateRef.current.hideCapsule = hideCapsule;
@@ -731,7 +823,13 @@ export const App: React.FC = () => {
     const currentEndpoint = stateRef.current.endpoint || endpoint;
     const currentModel = stateRef.current.model || model;
 
-    const useScreenshot = Boolean(style === 'reply' && stateRef.current.readChatScreenshot && (screenshotUrl || stateRef.current.hasScreenshot));
+    // 翻译外的润色也可带屏幕上下文(F9 重新截屏后由 recaptureForceVision 驱动);
+    // reply 沿用原条件, 非 reply 仅在 recapture 刚截完屏时带图
+    const useScreenshot = Boolean(
+      ((style === 'reply' && stateRef.current.readChatScreenshot) || stateRef.current.recaptureForceVision)
+      && (screenshotUrl || stateRef.current.hasScreenshot)
+    );
+    stateRef.current.recaptureForceVision = false;
 
     if (useScreenshot) {
       adapters.storageProvider.get<boolean>('hasShownVisionNotice', false).then((shown) => {
@@ -943,7 +1041,7 @@ export const App: React.FC = () => {
       apiKey: currentApiKey || undefined,
       baseUrl: currentEndpoint || undefined,
       model: currentModel || undefined,
-      temperature: 0.3,
+      temperature: 0,
       useLastScreenshot: true,
     };
 
@@ -968,12 +1066,7 @@ export const App: React.FC = () => {
             const noThink = rawOutput.replace(/<think>[\s\S]*?<\/think>\s*/gi, '');
             let parsed: ScreenReplyAnalysis | null = null;
             try {
-              const cleaned = noThink
-                .replace(/^```json\s*/i, '')
-                .replace(/^```\s*/i, '')
-                .replace(/\s*```$/i, '')
-                .trim();
-              parsed = JSON.parse(cleaned);
+              parsed = parseModelJson<ScreenReplyAnalysis>(noThink);
             } catch {
               const fallbackMsg = existingHint?.trim() || '对方发来的消息';
               parsed = {
@@ -985,6 +1078,15 @@ export const App: React.FC = () => {
             }
 
             if (parsed) {
+              const hasValidConv = (parsed.conversation && parsed.conversation.length > 0) || Boolean(parsed.last_message_from_other);
+              if (!hasValidConv) {
+                // Non-chat window or no chat bubbles found
+                setScreenReplyAnalysis(null);
+                const infoMsg = parsed.ambiguity || '未在截图中识别到聊天气泡，请在微信/钉钉等聊天窗口中使用';
+                showToast(infoMsg, 4000);
+                return;
+              }
+
               setScreenReplyAnalysis(parsed);
               const draft = parsed.draft_reply || rawOutput.trim();
               setPolishedText(draft);
@@ -1110,12 +1212,7 @@ export const App: React.FC = () => {
 
             let parsed: ScreenReplyAnalysis | null = null;
             try {
-              const cleaned = rawOutput
-                .replace(/^```json\s*/i, '')
-                .replace(/^```\s*/i, '')
-                .replace(/\s*```$/i, '')
-                .trim();
-              parsed = JSON.parse(cleaned);
+              parsed = parseModelJson<ScreenReplyAnalysis>(rawOutput);
             } catch {
               parsed = {
                 conversation: [{ sender: 'other', text: messageText }],
@@ -1189,6 +1286,165 @@ export const App: React.FC = () => {
     handleStartPolish(refinePrompt, 'reply', chipText, undefined, historyOriginal);
   }, [handleStartPolish, attachedFiles, activePersonaPrompt, activePackPrompt, glossaryPromptText]);
 
+  // 飞书智能应答追踪循环（多模态视口滚动 + 双模式应答）
+  useEffect(() => {
+    if (!feishuCopilotEnabled || !isTauri) {
+      setFeishuCopilotStatus('');
+      return;
+    }
+
+    let mounted = true;
+    feishuLastScreenshotRef.current = '';
+    const pollFeishu = async () => {
+      if (!mounted || feishuPollingActiveRef.current) return;
+      if (feishuCopilotMode === 'autopilot' && Date.now() < feishuAutoPilotCooldownUntilRef.current) {
+        setFeishuCopilotStatus('自动应答冷却中，防止重复发送');
+        return;
+      }
+      feishuPollingActiveRef.current = true;
+      setFeishuCopilotStatus('正在检查当前聊天窗口的新消息…');
+
+      try {
+        // 监控只读当前视口，避免每轮滚动聊天窗口、重复编码历史截图。
+        const captures = await invoke<string[]>('capture_feishu_multi_turn_context', { scrollUpSteps: 1 });
+
+        if (!captures || captures.length === 0 || !mounted) {
+          setFeishuCopilotStatus('未找到可读取的聊天窗口');
+          return;
+        }
+
+        const latestShot = captures[captures.length - 1];
+        const hasHistory = captures.length > 1;
+
+        const currentEndpoint = endpoint.trim();
+        const currentKey = apiKey.trim();
+        const currentModel = model.trim();
+
+        if (!currentKey || !currentEndpoint) {
+          setFeishuCopilotStatus('请先配置并保存 API Key');
+          return;
+        }
+        if (latestShot === feishuLastScreenshotRef.current) {
+          setFeishuCopilotStatus('监控中 · 画面无变化');
+          return;
+        }
+        feishuLastScreenshotRef.current = latestShot;
+
+        // 2. 调用多模态模型判断是否有新问题
+        const sysPrompt = buildFeishuCopilotSystemPrompt(activePersonaPrompt);
+        const userPrompt = buildFeishuCopilotUserPrompt(hasHistory);
+
+        let rawOutput = '';
+        await adapters.llmTransport.streamChat(
+          {
+            text: userPrompt,
+            config: {
+              baseUrl: currentEndpoint,
+              apiKey: currentKey,
+              model: currentModel,
+              style: 'reply',
+              customPrompt: sysPrompt,
+              imageDataUrl: latestShot,
+              temperature: 0,
+            },
+          },
+          {
+            onChunk: (delta) => {
+              rawOutput += delta;
+            },
+            onDone: async () => {
+              if (!mounted) return;
+              try {
+                const parsed = parseModelJson<Record<string, any>>(rawOutput);
+
+                if (parsed && parsed.has_new_question && parsed.suggested_reply?.trim()) {
+                  const replyText = parsed.suggested_reply.trim();
+                  const questionSummary = parsed.question_summary || replyText;
+                  const isAutoPilot = feishuCopilotMode === 'autopilot';
+
+                  if (isAutoPilot && parsed.latest_message_from !== 'other') {
+                    setFeishuCopilotStatus('自动应答已跳过：无法确认最新消息来自对方');
+                    return;
+                  }
+
+                  // 避免同条消息死循环重复发送
+                  if (feishuLastRepliedSummaryRef.current === questionSummary) {
+                    setFeishuCopilotStatus('监控中 · 最新问题已处理');
+                    return;
+                  }
+                  // 3. 执行应答：人机协同模式（预填输入框）vs 全自动模式（自动发送）
+                  try {
+                    await invoke('send_to_feishu_input', {
+                      text: replyText,
+                      autoSubmit: isAutoPilot,
+                    });
+                  } catch (deliveryError) {
+                    feishuLastScreenshotRef.current = '';
+                    const message = `${isAutoPilot ? '自动发送' : '预填'}失败：${String(deliveryError).slice(0, 80)}`;
+                    setFeishuCopilotStatus(message);
+                    showToast(message, 5000);
+                    return;
+                  }
+                  feishuLastRepliedSummaryRef.current = questionSummary;
+
+                  if (isAutoPilot) {
+                    // ponytail: global 15s cooldown covers Feishu UI settling;
+                    // replace with per-chat message IDs if a native Feishu API is introduced.
+                    feishuAutoPilotCooldownUntilRef.current = Date.now() + 15_000;
+                    setFeishuCopilotStatus('已自动回复最新问题');
+                    showToast(`[自动应答] 已自动回复 ${parsed.sender_name || '对方'}: ${replyText.slice(0, 20)}...`, 4000);
+                  } else {
+                    setFeishuCopilotStatus('已预填到当前聊天输入框，等待你确认发送');
+                    showToast(`[聊天协同助手] 已将回复预填至当前聊天输入框，按回车即可发送`, 4500);
+                  }
+
+                  // 记入历史记录
+                  addHistoryRecord({
+                    originalText: `[聊天·${parsed.sender_name || '对方'}] ${questionSummary}`,
+                    polishedText: replyText,
+                    style: 'reply',
+                    model: currentModel,
+                    tokens: 0,
+                    durationMs: 0,
+                  });
+                } else {
+                  setFeishuCopilotStatus('监控中 · 暂无需要回复的新问题');
+                }
+              } catch (e) {
+                feishuLastScreenshotRef.current = '';
+                console.warn('[Feishu Copilot] parse output error:', e);
+                setFeishuCopilotStatus(`识别结果解析失败：${String(e).slice(0, 60)}`);
+              }
+            },
+            onError: (err) => {
+              feishuLastScreenshotRef.current = '';
+              console.warn('[Feishu Copilot] stream error:', err);
+              setFeishuCopilotStatus(`识别请求失败：${String(err).slice(0, 60)}`);
+            },
+          }
+        );
+      } catch (e) {
+        feishuLastScreenshotRef.current = '';
+        console.warn('[Feishu Copilot] polling error:', e);
+        setFeishuCopilotStatus(`运行失败：${String(e).slice(0, 60)}`);
+      } finally {
+        feishuPollingActiveRef.current = false;
+      }
+    };
+
+    void pollFeishu();
+    // 10 秒轮询；相同画面不调用模型。
+    const timer = setInterval(() => {
+      void pollFeishu();
+    }, 10_000);
+
+    return () => {
+      mounted = false;
+      clearInterval(timer);
+    };
+  }, [feishuCopilotEnabled, feishuCopilotMode, isTauri, apiKey, endpoint, model, activePersonaPrompt, adapters, showToast]);
+
+
   // Load Saved Settings on Mount
   useEffect(() => {
     const loadConfig = async () => {
@@ -1198,6 +1454,7 @@ export const App: React.FC = () => {
       const savedModel = String(config.model || 'deepseek-chat');
       const savedStyle = (config.defaultStyle || 'academic') as PolishStyle;
       const savedAutoPopup = Boolean(config.autoCopyPopup ?? false);
+      const savedClipboardTrigger = Boolean(config.clipboardTriggerEnabled ?? false);
       const savedReadScreenshot = Boolean(config.readChatScreenshot ?? true);
       const savedWakeShortcut = String(config.wakeShortcut || DEFAULT_SHORTCUT);
       const savedAutostart = Boolean(config.autostart ?? false);
@@ -1238,6 +1495,12 @@ export const App: React.FC = () => {
         setTranslateTarget(savedTranslateTarget as TranslateTargetId);
       }
       if (savedDsn) setGlitchtipDsn(savedDsn);
+      if (config.feishuCopilotEnabled !== undefined) {
+        setFeishuCopilotEnabled(Boolean(config.feishuCopilotEnabled));
+      }
+      if (config.feishuCopilotMode === 'autopilot' || config.feishuCopilotMode === 'collaborative') {
+        setFeishuCopilotMode(config.feishuCopilotMode);
+      }
 
       const savedHistory = (config.generationHistory || []) as HistoryRecord[];
       if (Array.isArray(savedHistory)) setHistory(savedHistory);
@@ -1250,6 +1513,7 @@ export const App: React.FC = () => {
       }
 
       setAutoCopyPopup(savedAutoPopup);
+      setClipboardTriggerEnabled(savedClipboardTrigger);
       stateRef.current.autoCopyPopup = savedAutoPopup;
       // 应用持久化的窗口透明度（仅深色主题支持；浅色一律 100% 不透明）。
       // 注意用 savedSkin 而非 skin：setSkin 是异步 state,这里读闭包会拿到过期值,
@@ -1267,6 +1531,7 @@ export const App: React.FC = () => {
       setAutostart(savedAutostart);
       persistedNativeSettingsRef.current = {
         autoCopyPopup: savedAutoPopup,
+        clipboardTriggerEnabled: savedClipboardTrigger,
         autostart: savedAutostart,
         wakeShortcut: savedWakeShortcut,
       };
@@ -1280,12 +1545,10 @@ export const App: React.FC = () => {
         try {
           const [sc] = await Promise.all([
             invoke<string>('get_global_shortcut'),
-            savedAutoPopup
-              ? Promise.all([
-                  invoke('set_auto_popup_enabled', { enabled: true }),
-                  invoke('set_clipboard_monitor_enabled', { enabled: true }),
-                ])
-              : Promise.resolve(false),
+            Promise.all([
+              invoke('set_auto_popup_enabled', { enabled: savedAutoPopup }),
+              invoke('set_clipboard_monitor_enabled', { enabled: savedClipboardTrigger }),
+            ]),
           ]);
           if (sc) {
             setWakeShortcut(sc);
@@ -1332,10 +1595,10 @@ export const App: React.FC = () => {
       // Listen for selection events from Rust global shortcut or mouse hook
       const unlistens: Array<Promise<(() => void) | undefined>> = [];
       unlistens.push(listen<number>('runbi://selection-invalidated', ({ payload: generation }) => {
-        if (generation < selectionGenerationRef.current) return;
+        if (generation <= selectionGenerationRef.current) return;
         selectionGenerationRef.current = generation;
         // The ref is cleared synchronously on expansion, before its IPC await.
-        if (capsuleInfoRef.current || capsuleFadeTimerRef.current) stateRef.current.hideCapsule(true);
+        if (capsuleInfoRef.current || capsuleFadeTimerRef.current) stateRef.current.hideCapsule(true, true);
       }).catch((e) => {
         console.warn('listen selection invalidation failed:', e);
         return undefined;
@@ -1345,6 +1608,18 @@ export const App: React.FC = () => {
         if (shouldShowCapsule(__p) && typeof __p.generation === 'number') {
           if (__p.generation < selectionGenerationRef.current) return;
           selectionGenerationRef.current = __p.generation;
+        }
+        // A shortcut or another direct trigger supersedes a visible capsule.
+        // Clear the compact DOM synchronously because the native shortcut path
+        // has already resized/focused the full window before emitting here.
+        if (!shouldShowCapsule(__p) && stateRef.current.uiMode === 'capsule') {
+          clearCapsuleTimers();
+          ++capsuleRevisionRef.current;
+          capsuleActionRef.current = null;
+          capsuleInfoRef.current = null;
+          setCapsule(null);
+          setCapsuleVisible(true);
+          setUiMode('panel');
         }
         invoke('append_log', { msg: `frontend: event received t=${__p.trigger} hs=${__p.hasScreenshot} keys=[${Object.keys(__p).join(',')}] text=${String(__p.text || '').slice(0, 24)}` }).catch(() => {});
         setShowOnboarding(false);
@@ -1473,6 +1748,19 @@ export const App: React.FC = () => {
         return undefined;
       }));
 
+      // 选区没了(鼠标 hook 检测到胶囊挂载期间的普通单击)→ 收胶囊。
+      // 面板态忽略:面板不受选区生命周期约束。
+      unlistens.push(listen('runbi://selection-cleared', () => {
+        if (stateRef.current.uiMode === 'capsule') {
+          stateRef.current.hideCapsule();
+        }
+      }).then((un) => un, (e) => { console.warn('listen selection-cleared failed:', e); return undefined; }));
+
+      // 全局快捷键 F9：重新截取屏幕上下文并重跑当前流程
+      unlistens.push(listen('runbi://recapture', () => {
+        void stateRef.current.handleRecapture();
+      }).then((un) => un, (e) => { console.warn('listen recapture failed:', e); return undefined; }));
+
       // Tray "设置" menu → show window & open the settings form
       unlistens.push(listen('runbi://open-settings', () => {
         setShowEpoch((n) => n + 1);
@@ -1534,6 +1822,7 @@ export const App: React.FC = () => {
         model: model.trim(),
         defaultStyle: activeStyle,
         autoCopyPopup,
+        clipboardTriggerEnabled,
         readChatScreenshot,
         autostart,
         wakeShortcut: sc,
@@ -1548,16 +1837,18 @@ export const App: React.FC = () => {
         styleSamples: styleSamples.map((s) => s.trim()).filter(Boolean),
         skin,
         glitchtipDsn: glitchtipDsn.trim(),
+        feishuCopilotEnabled,
+        feishuCopilotMode,
       });
 
       if (isTauri) {
         const previous = persistedNativeSettingsRef.current;
         const nativeUpdates: Promise<unknown>[] = [];
         if (!previous || previous.autoCopyPopup !== autoCopyPopup) {
-          nativeUpdates.push(
-            invoke('set_auto_popup_enabled', { enabled: autoCopyPopup }),
-            invoke('set_clipboard_monitor_enabled', { enabled: autoCopyPopup }),
-          );
+          nativeUpdates.push(invoke('set_auto_popup_enabled', { enabled: autoCopyPopup }));
+        }
+        if (!previous || previous.clipboardTriggerEnabled !== clipboardTriggerEnabled) {
+          nativeUpdates.push(invoke('set_clipboard_monitor_enabled', { enabled: clipboardTriggerEnabled }));
         }
         if (!previous || previous.autostart !== autostart) {
           nativeUpdates.push(invoke('set_autostart', { enabled: autostart }));
@@ -1572,13 +1863,16 @@ export const App: React.FC = () => {
 
       persistedNativeSettingsRef.current = {
         autoCopyPopup,
+        clipboardTriggerEnabled,
         autostart,
         wakeShortcut: sc,
       };
       stateRef.current.autoCopyPopup = autoCopyPopup;
       stateRef.current.readChatScreenshot = readChatScreenshot;
       setShowSettings(false);
-      showToast('设置已安全保存并即时生效');
+      showToast(feishuCopilotEnabled
+        ? `设置已保存，聊天${feishuCopilotMode === 'collaborative' ? '人机协同' : '自动应答'}正在监控`
+        : '设置已安全保存并即时生效');
     } catch (e) {
       showToast(`保存失败：${String(e)}`, 4000);
     } finally {
@@ -1700,6 +1994,20 @@ export const App: React.FC = () => {
     const text = stateRef.current.originalText;
     if (text.trim()) stateRef.current.handleStartTextReplyAnalysis(text);
   }, []);
+
+  const handleSwitchToTranslate = useCallback(() => {
+    if (stateRef.current.activeStyle === 'translate') return;
+    stateRef.current.activeExpert = null;
+    setActiveExpert(null);
+    setScreenReplyAnalysis(null);
+    stateRef.current.activeStyle = 'translate';
+    setActiveStyle('translate');
+    const text = stateRef.current.originalText;
+    const target = stateRef.current.translateTarget;
+    setTranslateTarget(target);
+    adapters.storageProvider.set('translateTarget', target).catch(() => {});
+    if (text.trim()) handleStartPolish(text, 'translate', undefined);
+  }, [handleStartPolish, adapters.storageProvider]);
 
   // ---- 多专家并行：同一输入并发发给 2-4 位专家，各自独立流式 ----
   const applyParallelWindowSize = useCallback((wide: boolean) => {
@@ -1897,6 +2205,46 @@ export const App: React.FC = () => {
     }
   }, [showToast, handleStartPolish]);
 
+  // 重新截屏：后台无焦点重抓最近聊天窗口的截图，重跑当前屏幕分析/润色流程。
+  // 供面板按钮、面板快捷键 R、全局快捷键 F9(经 runbi://recapture 事件)共用。
+  const [isRecapturing, setIsRecapturing] = useState(false);
+  const handleRecapture = useCallback(async () => {
+    if (isRecapturing || !isTauri) return;
+    setIsRecapturing(true);
+    try {
+      const fg = await invoke<{ sourceApp: string | null } | null>('get_foreground_info').catch(() => null);
+      const fgApp = (fg as any)?.sourceApp as string | undefined;
+      // 语义:重新截屏 = 截"用户眼前所见"。优先当前前台窗口;仅当前台就是 Runbi 自己
+      // (面板聚焦)时才按 lastChatApp 后台抓源聊天窗口,否则前台是什么截什么。
+      // 旧逻辑优先 lastChatApp,用户切窗口后再按 F9 会截到早已切走的旧窗口,
+      // 分析结果与眼前所见对不上,读起来像模型在编造。
+      const app = stateRef.current.lastChatApp;
+      const useBackgroundApp = (!fgApp || fgApp.toLowerCase().includes('runbi'))
+        && app && !app.toLowerCase().includes('runbi');
+      if (useBackgroundApp) {
+        await invoke('capture_app_screenshot', { processName: app });
+      } else {
+        await invoke('capture_foreground_screenshot');
+      }
+      stateRef.current.hasScreenshot = true;
+      if (stateRef.current.screenReplyAnalysis || stateRef.current.activeStyle === 'reply') {
+        showToast('已重新截取聊天窗口，重新分析中…');
+        stateRef.current.handleStartScreenReplyAnalysis(undefined);
+      } else {
+        showToast('已重新截取屏幕，正在重新生成…');
+        setScreenReplyAnalysis(null);
+        stateRef.current.recaptureForceVision = true;
+        stateRef.current.handleStartPolish(stateRef.current.originalText, stateRef.current.activeStyle, undefined, null);
+      }
+    } catch (e) {
+      console.warn('recapture failed:', e);
+      showToast('重新截屏失败，请确认目标窗口未最小化', 3000);
+    } finally {
+      setIsRecapturing(false);
+    }
+  }, [isRecapturing, isTauri, showToast]);
+  stateRef.current.handleRecapture = handleRecapture;
+
   // Copy to Clipboard
   const handleCopy = async () => {
     const textToCopy = polishedText || originalText;
@@ -2055,6 +2403,13 @@ export const App: React.FC = () => {
       // Don't hijack keys while the user is editing a field or in settings or in history.
       if (typing || s.showSettings || s.showHistory || s.showParallel) return;
 
+      // 面板聚焦时 R = 重新截屏（截图上下文才有意义）
+      if ((e.key === 'r' || e.key === 'R') && !e.ctrlKey && !e.metaKey && !e.altKey && s.hasScreenshot) {
+        e.preventDefault();
+        void handleRecapture();
+        return;
+      }
+
       if (e.key === 'Enter') {
         e.preventDefault();
         if (s.isGenerating) {
@@ -2064,21 +2419,25 @@ export const App: React.FC = () => {
         }
         return;
       }
-
     };
 
     const onBlur = () => {
       const s = stateRef.current;
       // 胶囊模式不随失焦隐藏:划词后焦点通常仍留在源应用,胶囊的退场
       // 由悬停离开/空闲淡出/Esc 负责(Raycast 式失焦即隐藏只适用面板)。
-      if (s.uiMode === 'capsule') return;
-      // Raycast behavior: hide whenever focus leaves, unless pinned / generating /
-      // in settings / in history / showing screen-reply analysis / parallel running.
-      if (!s.isPinned && !s.isGenerating && !s.showSettings && !s.showHistory && !s.screenReplyAnalysis && !s.showParallel && !s.parallelRunning) {
-        if (isTauri) {
-          invoke('hide_window').catch(() => {});
+      if (panelBlurTimerRef.current) clearTimeout(panelBlurTimerRef.current);
+      // The native capsule deliberately does not activate the WebView. Its
+      // captured-selection event can therefore arrive just after blur; defer
+      // the panel-only hide so that blur cannot hide a newly shown capsule and
+      // leave its native generation active.
+      panelBlurTimerRef.current = setTimeout(() => {
+        panelBlurTimerRef.current = null;
+        const current = stateRef.current;
+        if (current.uiMode === 'capsule') return;
+        if (!current.isPinned && !current.isGenerating && !current.showSettings && !current.showHistory && !current.screenReplyAnalysis && !current.showParallel && !current.parallelRunning) {
+          if (isTauri) invoke('hide_window').catch(() => {});
         }
-      }
+      }, 120);
     };
 
     window.addEventListener('keydown', onKeyDown);
@@ -2087,7 +2446,7 @@ export const App: React.FC = () => {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('blur', onBlur);
     };
-  }, [handleReplace, handleStyleChange, closeParallel, isTauri]);
+  }, [handleReplace, handleStyleChange, closeParallel, isTauri, handleRecapture, handleClose]);
 
   // 缺陷2 微胶囊:独占整棵渲染树。窗口只有 196×44,若把胶囊塞进面板容器树,
   // 标题栏(shrink-0)先占满高度,胶囊被 overflow-hidden 裁出可视区——
@@ -2133,10 +2492,10 @@ export const App: React.FC = () => {
               <button
                 type="button"
                 role="tab"
-                aria-selected={!(activeStyle === 'reply' || screenReplyAnalysis)}
+                aria-selected={activeStyle !== 'reply' && activeStyle !== 'translate' && !screenReplyAnalysis}
                 title="润色：改写我自己的文字"                onClick={handleSwitchToPolish}
                 className={`rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors cursor-pointer ${
-                  !(activeStyle === 'reply' || screenReplyAnalysis)
+                  activeStyle !== 'reply' && activeStyle !== 'translate' && !screenReplyAnalysis
                     ? 'bg-white/10 text-slate-200'
                     : 'text-slate-500 hover:text-slate-300'
                 }`}
@@ -2156,6 +2515,20 @@ export const App: React.FC = () => {
                 }`}
               >
                 回复
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeStyle === 'translate'}
+                title="翻译：精准双向翻译"
+                onClick={handleSwitchToTranslate}
+                className={`rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors cursor-pointer ${
+                  activeStyle === 'translate'
+                    ? 'bg-teal-500/20 text-teal-300 border border-teal-500/30'
+                    : 'text-slate-500 hover:text-slate-300'
+                }`}
+              >
+                翻译
               </button>
             </div>
           </div>
@@ -2507,10 +2880,16 @@ export const App: React.FC = () => {
                 </div>
 
                 <SettingsToggle
-                  label="划词/复制后自动唤起"
-                  description="开启后监控划词与新复制文本；关闭后仅响应全局快捷键。"
+                  label="划词后显示胶囊"
+                  description="选中文字后显示轻量操作胶囊；关闭后仅响应全局快捷键。"
                   checked={autoCopyPopup}
                   onChange={setAutoCopyPopup}
+                />
+                <SettingsToggle
+                  label="复制后自动显示胶囊"
+                  description="普通复制也显示胶囊，默认关闭，避免复制操作反复打扰。"
+                  checked={clipboardTriggerEnabled}
+                  onChange={setClipboardTriggerEnabled}
                 />
                 <SettingsToggle
                   label="开机自动启动"
@@ -2518,12 +2897,55 @@ export const App: React.FC = () => {
                   checked={autostart}
                   onChange={setAutostart}
                 />
-                <SettingsToggle
-                  label="读取聊天上下文截图"
-                  description="在微信/飞书等聊天窗口，智能识别上文对方说的话。"
+                  <SettingsToggle
+                    label="读取聊天上下文截图"
+                    description="在聊天窗口中，智能识别上文对方说的话。"
                   checked={readChatScreenshot}
                   onChange={setReadChatScreenshot}
                 />
+
+                <div className="runbi-settings-card space-y-2 p-3">
+                  <SettingsToggle
+                    label="聊天智能应答追踪 (Beta)"
+                    description="自动追踪当前聊天窗口中的提问，结合会话上下文拟定回复。"
+                    checked={feishuCopilotEnabled}
+                    onChange={setFeishuCopilotEnabled}
+                  />
+                  {feishuCopilotEnabled && (
+                    <div className="space-y-1.5 pt-1 pl-1">
+                      <label className="block text-[11px] font-medium text-slate-300">应答模式</label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setFeishuCopilotMode('collaborative')}
+                          className={`rounded-lg border px-2.5 py-1.5 text-left text-xs transition-colors cursor-pointer ${
+                            feishuCopilotMode === 'collaborative'
+                              ? 'border-teal-500/80 bg-teal-500/15 text-teal-200'
+                              : 'border-white/10 bg-white/5 text-slate-400 hover:border-white/20'
+                          }`}
+                        >
+                          <div className="font-medium text-slate-200">人机协同 (推荐)</div>
+                          <div className="text-[10px] text-slate-400">自动预填到当前聊天输入框，按回车确认发送</div>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setFeishuCopilotMode('autopilot')}
+                          className={`rounded-lg border px-2.5 py-1.5 text-left text-xs transition-colors cursor-pointer ${
+                            feishuCopilotMode === 'autopilot'
+                              ? 'border-teal-500/80 bg-teal-500/15 text-teal-200'
+                              : 'border-white/10 bg-white/5 text-slate-400 hover:border-white/20'
+                          }`}
+                        >
+                          <div className="font-medium text-slate-200">全自动无人值守</div>
+                          <div className="text-[10px] text-slate-400">生成后自动模拟回车直接发出</div>
+                        </button>
+                      </div>
+                      {feishuCopilotStatus && (
+                        <p className="text-[10px] text-teal-300" role="status">{feishuCopilotStatus}</p>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 
@@ -2814,6 +3236,8 @@ export const App: React.FC = () => {
             showOriginalPreview={!screenReplyAnalysis}
             screenReplyAnalysis={screenReplyAnalysis}
             onSelectClarifyChip={handleSelectClarifyChip}
+            onRecapture={handleRecapture}
+            isRecapturing={isRecapturing}
             onOpenScriptLibrary={() => setShowScriptLibrary(true)}
             autoMode={autoMode}
             onAutoMode={handleAutoMode}
@@ -2859,7 +3283,11 @@ export const App: React.FC = () => {
               }
             }}
             onToastDismiss={() => setToastVisible(false)}
-            replaceLabel="贴回"
+            replaceLabel={
+              activeStyle === 'reply' || Boolean(screenReplyAnalysis)
+                ? `发送至${getChatAppName(stateRef.current.lastChatApp)}`
+                : '贴回'
+            }
           />
         )}
 
@@ -2930,4 +3358,3 @@ export const App: React.FC = () => {
 };
 
 export default App;
-

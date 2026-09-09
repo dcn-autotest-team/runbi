@@ -5,6 +5,48 @@
 use serde::{Deserialize, Serialize};
 use tauri::{LogicalSize, PhysicalPosition, WebviewWindow};
 
+#[cfg(windows)]
+fn set_capsule_no_activate(window: &WebviewWindow, enabled: bool) -> Result<(), String> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE,
+    };
+    const WS_EX_NOACTIVATE: isize = 0x0800_0000;
+    const WS_EX_TOOLWINDOW: isize = 0x0000_0080;
+    let hwnd = window.hwnd().map_err(|e| e.to_string())?.0;
+    unsafe {
+        let current = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        let next = if enabled {
+            current | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW
+        } else {
+            current & !WS_EX_NOACTIVATE & !WS_EX_TOOLWINDOW
+        };
+        if SetWindowLongPtrW(hwnd, GWL_EXSTYLE, next) == 0 && current != 0 {
+            return Err("SetWindowLongPtrW(GWL_EXSTYLE) failed".to_string());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn set_capsule_no_activate(_window: &WebviewWindow, _enabled: bool) -> Result<(), String> {
+    Ok(())
+}
+
+/// Roll back a compact resize when an asynchronous capsule capture becomes
+/// stale after positioning but before its native show/emit step.
+pub fn restore_panel_window(window: &WebviewWindow) -> Result<(), String> {
+    window
+        .set_min_size(Some(LogicalSize::new(480.0, 420.0)))
+        .map_err(|e| e.to_string())?;
+    window.set_resizable(true).map_err(|e| e.to_string())?;
+    window
+        .set_size(LogicalSize::new(560.0, 520.0))
+        .map_err(|e| e.to_string())?;
+    set_capsule_no_activate(window, false)?;
+    let _ = window.set_always_on_top(false);
+    Ok(())
+}
+
 /// 全局几何写锁:鼠标钩子、复制兜底、剪贴板监听三条路径都会对同一个
 /// WebView2 窗口并发做 set_min_size/set_resizable/set_size/set_position/
 /// set_always_on_top,交错执行曾触发 WebView2 堆破坏(0xc0000374,8/28 与
@@ -25,15 +67,6 @@ fn acquire_geometry_lock() -> bool {
 
 fn release_geometry_lock() {
     WINDOW_GEOMETRY_LOCK.store(false, std::sync::atomic::Ordering::SeqCst);
-}
-
-/// 供其他命令模块(hide_capsule_window)纳入同一把几何锁。
-pub fn acquire_geometry_lock_pub() -> bool {
-    acquire_geometry_lock()
-}
-
-pub fn release_geometry_lock_pub() {
-    release_geometry_lock()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -154,6 +187,28 @@ pub async fn position_window_at_cursor(
     is_capsule: Option<bool>,
 ) -> Result<PositionResult, String> {
     let is_capsule = is_capsule.unwrap_or(false);
+    position_window_at_point_inner(window, is_capsule, None).await
+}
+
+/// Capsule positioning variant that uses the mouse-up point captured by the
+/// global hook instead of a later, potentially moved cursor position.
+pub async fn position_window_at_point(
+    window: WebviewWindow,
+    is_capsule: bool,
+    cursor_x: i32,
+    cursor_y: i32,
+) -> Result<PositionResult, String> {
+    position_window_at_point_inner(window, is_capsule, Some((cursor_x, cursor_y))).await
+}
+
+async fn position_window_at_point_inner(
+    window: WebviewWindow,
+    is_capsule: bool,
+    cursor: Option<(i32, i32)>,
+) -> Result<PositionResult, String> {
+    if !is_capsule {
+        crate::commands::mouse_hook::leave_capsule_mode();
+    }
 
     // 几何写串行化:拿不到锁说明另一条路径正在弹层,直接放弃本次。
     // 晚 20ms 重试一次,再失败就静默丢(旧胶囊还挂着比堆崩溃好得多)。
@@ -164,7 +219,7 @@ pub async fn position_window_at_cursor(
         }
     }
 
-    let result = position_window_at_cursor_locked(&window, is_capsule).await;
+    let result = position_window_at_cursor_locked(&window, is_capsule, cursor).await;
     release_geometry_lock();
     result
 }
@@ -172,6 +227,7 @@ pub async fn position_window_at_cursor(
 async fn position_window_at_cursor_locked(
     window: &WebviewWindow,
     is_capsule: bool,
+    cursor: Option<(i32, i32)>,
 ) -> Result<PositionResult, String> {
     let (logical_w, logical_h) = if is_capsule {
         // 196px 五等宽动作条(搜索/润色/回复/翻译/复制)。
@@ -195,8 +251,12 @@ async fn position_window_at_cursor_locked(
     window
         .set_size(LogicalSize::new(logical_w, logical_h))
         .map_err(|e| e.to_string())?;
+    // Keep the transient capsule from activating the WebView. Without this
+    // style, the first click on another app only transfers focus back to it;
+    // the drag that should start a new selection is lost.
+    set_capsule_no_activate(window, is_capsule)?;
 
-    let (cursor_x, cursor_y) = get_global_cursor();
+    let (cursor_x, cursor_y) = cursor.unwrap_or_else(get_global_cursor);
 
     // Default dimensions
     let (win_w, win_h) = window

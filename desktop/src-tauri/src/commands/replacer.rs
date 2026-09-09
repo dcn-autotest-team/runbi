@@ -45,6 +45,7 @@ pub async fn replace_text(
     new_text: String,
     restore_original_clipboard: Option<bool>,
     hide_window: Option<bool>,
+    auto_send: Option<bool>,
 ) -> Result<ReplacerResponse, String> {
     if new_text.is_empty() {
         return Ok(ReplacerResponse {
@@ -58,6 +59,7 @@ pub async fn replace_text(
 
     let should_restore = restore_original_clipboard.unwrap_or(true);
     let should_hide = hide_window.unwrap_or(true);
+    let should_auto_send = auto_send.unwrap_or(false);
     let app = window.app_handle();
     let clipboard = app.clipboard();
 
@@ -83,6 +85,14 @@ pub async fn replace_text(
         tokio::time::sleep(Duration::from_millis(30)).await;
     }
 
+    // The capsule/panel takes focus when its action is clicked. Return focus
+    // to the source control before writing and pasting, otherwise Ctrl+V is
+    // delivered to the hidden Runbi WebView and the selected text stays put.
+    unsafe {
+        crate::commands::input::restore_foreground_window();
+    }
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
     // 3. Write new text to clipboard
     let length = new_text.len();
     if let Err(e) = clipboard.write_text(&new_text) {
@@ -101,6 +111,22 @@ pub async fn replace_text(
     let direct_ack = unsafe { crate::commands::input::paste_via_focused_control() };
     if !direct_ack {
         unsafe { crate::commands::input::simulate_ctrl_v() };
+    }
+
+    if should_auto_send {
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        #[cfg(windows)]
+        unsafe {
+            use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+                SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VK_RETURN,
+            };
+            let mut inputs: [INPUT; 2] = std::mem::zeroed();
+            inputs[0].r#type = INPUT_KEYBOARD;
+            inputs[0].Anonymous.ki = KEYBDINPUT { wVk: VK_RETURN, wScan: 0, dwFlags: 0, time: 0, dwExtraInfo: 0 };
+            inputs[1].r#type = INPUT_KEYBOARD;
+            inputs[1].Anonymous.ki = KEYBDINPUT { wVk: VK_RETURN, wScan: 0, dwFlags: KEYEVENTF_KEYUP, time: 0, dwExtraInfo: 0 };
+            SendInput(2, inputs.as_mut_ptr(), std::mem::size_of::<INPUT>() as i32);
+        }
     }
 
     // 5. Restore the original text, image, or empty clipboard after the target

@@ -6,7 +6,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 use tauri::ipc::Channel;
-use tauri::{LogicalSize, WebviewWindow};
+use tauri::WebviewWindow;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TestConnectionRequest {
@@ -300,22 +300,19 @@ pub fn hide_window(window: WebviewWindow) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn hide_capsule_window(window: WebviewWindow) -> Result<(), String> {
-    window.hide().map_err(|e| e.to_string())?;
-    // 与弹层共用几何锁:hide 后的恢复序列也是一组几何写,交错会堆破坏
-    if crate::commands::position::acquire_geometry_lock_pub() {
-        let _ = window.set_always_on_top(false);
-        let _ = window.set_min_size(Some(LogicalSize::new(480.0, 420.0)));
-        let _ = window.set_resizable(true);
-        let r = window
-            .set_size(LogicalSize::new(560.0, 520.0))
-            .map_err(|e| e.to_string());
-        crate::commands::position::release_geometry_lock_pub();
-        r
-    } else {
-        // 窗口已隐藏,几何稍后由下次 position 收敛,这里不阻塞
-        Ok(())
-    }
+pub async fn hide_capsule_window(window: WebviewWindow, generation: u64) -> Result<(), String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let target = window.clone();
+    window
+        .run_on_main_thread(move || {
+            let _ = tx.send(crate::commands::mouse_hook::dismiss_native_capsule(
+                &target, generation,
+            ));
+        })
+        .map_err(|e| e.to_string())?;
+    // Geometry is set by every position call; resizing a hidden window here can
+    // race a new selection. Only hide the capsule this request belongs to.
+    rx.await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

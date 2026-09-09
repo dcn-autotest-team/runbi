@@ -7,8 +7,9 @@ use windows::Win32::{
         COINIT_MULTITHREADED,
     },
     UI::Accessibility::{
-        CUIAutomation, IUIAutomation, IUIAutomationTextPattern, TextPatternRangeEndpoint_Start,
-        TextUnit_Character, UIA_TextPatternId,
+        CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationTextPattern,
+        IUIAutomationTreeWalker, TextPatternRangeEndpoint_Start, TextUnit_Character,
+        UIA_EditControlTypeId, UIA_TextPatternId,
     },
 };
 
@@ -28,6 +29,84 @@ unsafe fn focused_text_pattern() -> Option<(ComGuard, IUIAutomationTextPattern)>
     let focused = automation.GetFocusedElement().ok()?;
     let pattern = focused.GetCurrentPatternAs(UIA_TextPatternId).ok()?;
     Some((guard, pattern))
+}
+
+fn edit_candidate_score(left: i32, top: i32, right: i32, bottom: i32) -> Option<(i32, i64)> {
+    let width = (right - left) as i64;
+    let height = (bottom - top) as i64;
+    (width >= 80 && height >= 15).then_some((bottom, width * height))
+}
+
+unsafe fn find_bottom_edit(
+    walker: &IUIAutomationTreeWalker,
+    element: &IUIAutomationElement,
+    best: &mut Option<((i32, i64), IUIAutomationElement)>,
+    visited: &mut usize,
+) {
+    if *visited >= 2_000 {
+        return;
+    }
+    *visited += 1;
+
+    if element.CurrentControlType().ok() == Some(UIA_EditControlTypeId)
+        && element
+            .CurrentIsEnabled()
+            .map(|v| v.as_bool())
+            .unwrap_or(false)
+        && element
+            .CurrentIsKeyboardFocusable()
+            .map(|v| v.as_bool())
+            .unwrap_or(false)
+    {
+        if let Ok(rect) = element.CurrentBoundingRectangle() {
+            if let Some(score) = edit_candidate_score(rect.left, rect.top, rect.right, rect.bottom)
+            {
+                if best.as_ref().map(|(old, _)| score > *old).unwrap_or(true) {
+                    *best = Some((score, element.clone()));
+                }
+            }
+        }
+    }
+
+    let Ok(mut child) = walker.GetFirstChildElement(element) else {
+        return;
+    };
+    loop {
+        find_bottom_edit(walker, &child, best, visited);
+        let Ok(next) = walker.GetNextSiblingElement(&child) else {
+            break;
+        };
+        child = next;
+    }
+}
+
+/// Focuses the lowest editable control in a top-level application window.
+/// Feishu exposes its message composer through UI Automation even though the
+/// native HWND itself is a Chromium render surface.
+pub fn focus_bottom_editable_in_window(hwnd: isize) -> bool {
+    unsafe {
+        if CoInitializeEx(None, COINIT_MULTITHREADED).ok().is_err() {
+            return false;
+        }
+        let _guard = ComGuard;
+        let Ok(automation): Result<IUIAutomation, _> =
+            CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
+        else {
+            return false;
+        };
+        let Ok(root) = automation.ElementFromHandle(windows::Win32::Foundation::HWND(
+            hwnd as *mut core::ffi::c_void,
+        )) else {
+            return false;
+        };
+        let Ok(walker) = automation.ControlViewWalker() else {
+            return false;
+        };
+        let mut best = None;
+        let mut visited = 0;
+        find_bottom_edit(&walker, &root, &mut best, &mut visited);
+        best.and_then(|(_, edit)| edit.SetFocus().ok()).is_some()
+    }
 }
 
 fn clean_text(text: String) -> Option<String> {
@@ -94,7 +173,7 @@ pub fn wait_for_pasted_text(expected: &str, timeout: Duration) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{clean_text, suffix_matches};
+    use super::{clean_text, edit_candidate_score, suffix_matches};
 
     #[test]
     fn normalizes_uia_text_without_accepting_empty_or_oversized_values() {
@@ -105,5 +184,11 @@ mod tests {
         assert_eq!(clean_text(" \r\n".into()), None);
         assert!(clean_text("x".repeat(30_001)).is_none());
         assert!(suffix_matches("before\r\n润色完成", "润色完成"));
+    }
+
+    #[test]
+    fn editable_candidate_rejects_tiny_controls_and_prefers_the_lower_one() {
+        assert_eq!(edit_candidate_score(0, 0, 20, 20), None);
+        assert!(edit_candidate_score(0, 500, 400, 650) > edit_candidate_score(0, 10, 300, 40));
     }
 }

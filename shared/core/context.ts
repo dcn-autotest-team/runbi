@@ -30,6 +30,21 @@ export interface ContextClassification {
   reason: string;
 }
 
+export function getChatAppName(sourceApp?: string | null, windowTitle?: string | null): string {
+  const s = (sourceApp || '').toLowerCase();
+  const w = (windowTitle || '').toLowerCase();
+  if (s.includes('weixin') || s.includes('wechat') || w.includes('微信')) return '微信';
+  if (s.includes('feishu') || s.includes('lark') || w.includes('飞书')) return '飞书';
+  if (s.includes('dingtalk') || w.includes('钉钉')) return '钉钉';
+  if (s.includes('qq') || s.includes('tim') || w.includes('qq')) return 'QQ';
+  if (s.includes('slack') || w.includes('slack')) return 'Slack';
+  if (s.includes('telegram') || w.includes('telegram')) return 'Telegram';
+  if (s.includes('teams') || w.includes('teams')) return 'Teams';
+  if (s.includes('wework') || w.includes('企业微信')) return '企业微信';
+  if (s.includes('whatsapp') || w.includes('whatsapp')) return 'WhatsApp';
+  return '聊天';
+}
+
 const CHAT_APP_PATTERN =
   /wechat|weixin|微信|企业微信|dingtalk|钉钉|feishu|lark|飞书|telegram|slack|teams|discord|whatsapp|\bqq|tim\b/i;
 

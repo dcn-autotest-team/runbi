@@ -224,6 +224,32 @@ pub fn read_system_clipboard() -> Option<String> {
     None
 }
 
+/// Writes text through the Rust-side clipboard plugin. This keeps the capsule
+/// copy action independent from WebView clipboard permissions and suppresses
+/// the monitor feedback loop while the write is in progress.
+#[tauri::command]
+pub fn write_clipboard_text(app: AppHandle, text: String) -> Result<(), String> {
+    if text.is_empty() {
+        return Err("Cannot copy empty text".to_string());
+    }
+    crate::commands::input::set_internal_action(&app, true, None);
+    let result = app
+        .clipboard()
+        .write_text(&text)
+        .map_err(|error| error.to_string());
+    crate::commands::input::set_internal_action(&app, false, Some(&text));
+    crate::commands::file_log(
+        &app,
+        &format!(
+            "clipboard copy: len={} ok={} error={:?}",
+            text.len(),
+            result.is_ok(),
+            result.as_ref().err()
+        ),
+    );
+    result
+}
+
 /// Core clipboard change evaluation
 pub fn handle_clipboard_change(app: &AppHandle, state: &ClipboardMonitorState) {
     if !state.enabled.load(Ordering::Relaxed) {
@@ -288,11 +314,9 @@ pub fn handle_clipboard_change(app: &AppHandle, state: &ClipboardMonitorState) {
                 }
                 let app = win_clone.app_handle().clone();
                 let _ = app.run_on_main_thread(move || {
-                    if generation != crate::commands::mouse_hook::SELECTION_GENERATION.load(Ordering::SeqCst) {
+                    if !crate::commands::mouse_hook::show_native_capsule(&win_clone, generation).unwrap_or(false) {
                         return;
                     }
-                    let _ = win_clone.show();
-                    let _ = win_clone.unminimize();
                     let _ = win_clone.emit(
                         "runbi://captured-selection",
                         serde_json::json!({

@@ -231,7 +231,7 @@ describe('Shared Core: Prompt Engine & Dynamic Builder', () => {
       expect(prompt).toContain('头像在气泡右侧的是"我"');
       expect(prompt).toContain('头像在气泡左侧的是"对方"');
       expect(prompt).toContain('禁止计入 conversation');
-      expect(buildScreenReplyUserPrompt()).toContain('依据气泡对齐方向与头像位置判定身份');
+      expect(buildScreenReplyUserPrompt()).toContain('再判断身份');
     });
 
     it('should build screen reply user prompt for vision parsing', () => {

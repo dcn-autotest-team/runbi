@@ -104,6 +104,16 @@ export interface AppSettings {
    * 官方试用通道已消耗的估算 token 数（本地记账）。
    */
   trialTokensUsed?: number;
+
+  /**
+   * 飞书智能应答追踪是否开启。
+   */
+  feishuCopilotEnabled?: boolean;
+
+  /**
+   * 飞书智能应答模式：'collaborative'（人机协同预填）或 'autopilot'（全自动应答回车发送）。
+   */
+  feishuCopilotMode?: 'collaborative' | 'autopilot';
 }
 
 /**

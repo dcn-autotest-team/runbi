@@ -34,23 +34,23 @@ pub(crate) fn encode_bgra_to_jpeg(
     let img = image::RgbImage::from_raw(width as u32, height as u32, rgb)
         .ok_or_else(|| "Failed to construct image buffer".to_string())?;
 
-    // Downscale to max width 1280 to keep latency minimal (< 10ms with Nearest)
-    let target_img = if width > 1280 {
-        let target_height = (height as f32 * 1280.0 / width as f32) as u32;
+    // Keep Chinese chat text readable for vision models. 1280px + nearest
+    // neighbour made small glyphs collapse into similar-looking characters.
+    let target_img = if width > 1920 {
+        let target_height = (height as f32 * 1920.0 / width as f32) as u32;
         image::imageops::resize(
             &img,
-            1280,
+            1920,
             target_height,
-            image::imageops::FilterType::Nearest,
+            image::imageops::FilterType::Lanczos3,
         )
     } else {
         img
     };
 
     let mut jpeg_bytes = Vec::new();
-    let mut cursor = std::io::Cursor::new(&mut jpeg_bytes);
-    target_img
-        .write_to(&mut cursor, image::ImageFormat::Jpeg)
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg_bytes, 90)
+        .encode_image(&target_img)
         .map_err(|e| format!("Failed to encode JPEG: {}", e))?;
 
     use base64::Engine;
@@ -113,7 +113,7 @@ pub fn capture_app_screenshot(process_name: String) -> Result<String, String> {
 }
 
 #[cfg(windows)]
-fn process_name_matches(process_id: u32, want_lower: &str) -> bool {
+pub(crate) fn process_name_matches(process_id: u32, want_lower: &str) -> bool {
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::System::Threading::{
         OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
@@ -192,7 +192,7 @@ unsafe fn find_window_by_process(want_lower: &str) -> Option<windows_sys::Win32:
 }
 
 #[cfg(windows)]
-unsafe fn capture_hwnd_to_jpeg(
+pub(crate) unsafe fn capture_hwnd_to_jpeg(
     hwnd: windows_sys::Win32::Foundation::HWND,
 ) -> Result<String, String> {
     use windows_sys::Win32::Foundation::{BOOL, HWND, RECT};
@@ -240,19 +240,22 @@ unsafe fn capture_hwnd_to_jpeg(
             return Err("Failed to select capture bitmap".to_string());
         }
 
-        // Try PrintWindow first with PW_RENDERFULLCONTENT (2) — it renders the
-        // window itself, so this also works while the window is in the
-        // background. Fall back to screen BitBlt only if PrintWindow refuses.
-        let printed = PrintWindow(hwnd, hdc_mem, 2);
-        if printed == 0 {
-            let src_x = rect.left.max(0);
-            let src_y = rect.top.max(0);
-            let blt_w = (rect.right - src_x).min(width).max(1);
-            let blt_h = (rect.bottom - src_y).min(height).max(1);
-            BitBlt(
-                hdc_mem, 0, 0, blt_w, blt_h, hdc_screen, src_x, src_y, SRCCOPY,
-            );
-        }
+        // BitBlt the screen first: it always reflects what the user actually
+        // sees right now. PrintWindow(PW_RENDERFULLCONTENT) is only the
+        // fallback — on Chromium/DirectComposition windows it can succeed yet
+        // hand back a STALE frame (old tab content), which made the vision
+        // model analyze a page the user had already navigated away from and
+        // read as "the model is making things up".
+        // ponytail: BitBlt captures whatever overlays the window rect when the
+        // window is occluded — acceptable, since "what the user sees" is
+        // exactly the goal; PrintWindow stays as the occluded-window fallback.
+        let src_x = rect.left.max(0);
+        let src_y = rect.top.max(0);
+        let blt_w = (rect.right - src_x).min(width).max(1);
+        let blt_h = (rect.bottom - src_y).min(height).max(1);
+        BitBlt(
+            hdc_mem, 0, 0, blt_w, blt_h, hdc_screen, src_x, src_y, SRCCOPY,
+        );
 
         let mut bmi: BITMAPINFO = std::mem::zeroed();
         bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
@@ -272,6 +275,29 @@ unsafe fn capture_hwnd_to_jpeg(
             &mut bmi,
             DIB_RGB_COLORS,
         );
+
+        // All-black read = window occluded/protected (BitBlt off screen gets
+        // nothing usable). Retry with PrintWindow, which renders the window
+        // content directly even while it is in the background.
+        // ponytail: scanning with any() short-circuits on the first non-black
+        // pixel (typically within a few rows). It only scans the full buffer
+        // when the screen is actually all-black, avoiding PrintWindow's stale
+        // DirectComposition frames on maximized Chromium windows whose top
+        // border or dark titlebar is black.
+        if copied_rows != 0 {
+            let all_black = is_buffer_all_black(&buffer);
+            if all_black && PrintWindow(hwnd, hdc_mem, 2) != 0 {
+                GetDIBits(
+                    hdc_mem,
+                    h_bitmap,
+                    0,
+                    height as u32,
+                    buffer.as_mut_ptr() as *mut _,
+                    &mut bmi,
+                    DIB_RGB_COLORS,
+                );
+            }
+        }
 
         SelectObject(hdc_mem, h_old_bmp);
         DeleteObject(h_bitmap);
@@ -351,6 +377,12 @@ pub fn is_likely_conversation_window(source_app: Option<&str>, window_title: Opt
     false
 }
 
+/// Checks if every pixel in the BGRA buffer is black (R=G=B=0).
+/// Short-circuits immediately on the first non-black pixel.
+pub(crate) fn is_buffer_all_black(buffer: &[u8]) -> bool {
+    !buffer.chunks_exact(4).any(|px| px[0] | px[1] | px[2] != 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -399,10 +431,15 @@ mod tests {
 
     #[test]
     fn jpeg_encode_downscales_wide_windows_instead_of_failing() {
-        // 1281px wide windows hit the resize path — was a distinct failure mode
-        let buf = vec![10u8; 1281 * 2 * 4];
-        let url = encode_bgra_to_jpeg(1281, 2, buf).expect("wide encode must succeed");
+        let buf = vec![10u8; 1921 * 2 * 4];
+        let url = encode_bgra_to_jpeg(1921, 2, buf).expect("wide encode must succeed");
         assert!(url.starts_with("data:image/jpeg;base64,"));
+
+        use base64::Engine;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(url.trim_start_matches("data:image/jpeg;base64,"))
+            .unwrap();
+        assert_eq!(image::load_from_memory(&bytes).unwrap().width(), 1920);
     }
 
     #[test]
@@ -427,5 +464,23 @@ mod tests {
             out.is_err(),
             "crate now supports RGBA-Jpeg; revisit encode_bgra_to_jpeg comment"
         );
+    }
+
+    #[test]
+    fn test_is_buffer_all_black() {
+        // All black pixels
+        let black = vec![0u8; 4096 * 4];
+        assert!(is_buffer_all_black(&black));
+
+        // First 4096 pixels black, but a non-black pixel at 4097
+        let mut with_content = vec![0u8; 4096 * 4 + 4];
+        with_content[4096 * 4 + 1] = 255; // G = 255
+        assert!(!is_buffer_all_black(&with_content));
+
+        // Alpha non-zero does NOT count as non-black
+        let mut black_opaque = vec![0u8; 16];
+        black_opaque[3] = 255;
+        black_opaque[7] = 255;
+        assert!(is_buffer_all_black(&black_opaque));
     }
 }

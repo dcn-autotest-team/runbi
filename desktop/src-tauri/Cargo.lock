@@ -3406,7 +3406,7 @@ dependencies = [
 
 [[package]]
 name = "runbi-desktop"
-version = "1.0.3"
+version = "1.0.6"
 dependencies = [
  "base64 0.22.1",
  "futures-util",

@@ -25,12 +25,18 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => {
                 if let Some(window) = app.get_webview_window("main") {
+                    crate::commands::mouse_hook::leave_capsule_mode();
+                    #[cfg(windows)]
+                    crate::commands::mouse_hook::clear_outside_dismissal();
                     let _ = window.show();
                     let _ = window.set_focus();
                 }
             }
             "settings" => {
                 if let Some(window) = app.get_webview_window("main") {
+                    crate::commands::mouse_hook::leave_capsule_mode();
+                    #[cfg(windows)]
+                    crate::commands::mouse_hook::clear_outside_dismissal();
                     let _ = window.show();
                     let _ = window.set_focus();
                     let _ = window.emit("runbi://open-settings", ());
@@ -55,6 +61,9 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
             {
                 let app = tray.app_handle();
                 if let Some(window) = app.get_webview_window("main") {
+                    crate::commands::mouse_hook::leave_capsule_mode();
+                    #[cfg(windows)]
+                    crate::commands::mouse_hook::clear_outside_dismissal();
                     if window.is_visible().unwrap_or(false) {
                         let _ = window.hide();
                     } else {

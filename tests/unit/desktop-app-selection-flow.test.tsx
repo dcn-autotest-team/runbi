@@ -134,6 +134,54 @@ describe('Desktop selection-to-polish flow', () => {
     expect(host.querySelector('[data-testid="translate-bar"]')).not.toBeNull();
     expect(host.textContent).toContain('Translated');
   });
+
+  it('keeps a capsule recoverable when the pointer re-enters during fade-out', async () => {
+    await act(async () => root.render(<App />));
+    await act(async () => eventMocks.listeners.get('runbi://captured-selection')!({
+      payload: { text: '可恢复的选区', trigger: 'selection', generation: 1 },
+    }));
+    const toolbar = host.querySelector('[role="toolbar"]') as HTMLElement;
+    toolbar.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+    await act(async () => vi.advanceTimersByTimeAsync(500));
+    toolbar.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+    expect(toolbar.className).toContain('is-visible');
+    await act(async () => vi.advanceTimersByTimeAsync(220));
+    expect(host.querySelector('[role="toolbar"]')).not.toBeNull();
+  });
+
+  it('serializes capsule expansion clicks while native positioning is pending', async () => {
+    await act(async () => root.render(<App />));
+    await act(async () => eventMocks.listeners.get('runbi://captured-selection')!({
+      payload: { text: '只展开一次', trigger: 'selection', generation: 1 },
+    }));
+    let finishPosition!: () => void;
+    const invoke = (window as any).__TAURI_INTERNALS__.invoke;
+    invoke.mockImplementation((command: string) => command === 'position_window_at_cursor'
+      ? new Promise<void>((resolve) => { finishPosition = resolve; })
+      : Promise.resolve(null));
+    const translate = host.querySelector('button[aria-label="翻译选中文本"]') as HTMLButtonElement;
+    const polish = host.querySelector('button[aria-label="润色选中文本"]') as HTMLButtonElement;
+    await act(async () => {
+      translate.click();
+      polish.click();
+    });
+    expect(invoke.mock.calls.filter(([command]: [string]) => command === 'position_window_at_cursor')).toHaveLength(1);
+    await act(async () => finishPosition());
+  });
+
+  it('switches directly to the panel when a shortcut supersedes a capsule', async () => {
+    await act(async () => root.render(<App />));
+    const select = eventMocks.listeners.get('runbi://captured-selection')!;
+    await act(async () => select({
+      payload: { text: '旧胶囊内容', trigger: 'selection', generation: 1 },
+    }));
+    expect(host.querySelector('[role="toolbar"]')).not.toBeNull();
+    await act(async () => select({
+      payload: { text: '快捷键新内容', trigger: 'shortcut' },
+    }));
+    expect(host.querySelector('[role="toolbar"]')).toBeNull();
+  });
+
   it('hides an unfocused capsule on selection invalidation without advancing timers', async () => {
     await act(async () => root.render(<App />));
     const select = eventMocks.listeners.get('runbi://captured-selection')!;
@@ -145,7 +193,8 @@ describe('Desktop selection-to-polish flow', () => {
     const invoke = (window as any).__TAURI_INTERNALS__.invoke;
     invoke.mockClear();
     await act(async () => invalidate!({ payload: 2 }));
-    expect(invoke).toHaveBeenCalledWith('hide_capsule_window', {}, undefined);
+    // Rust has already hidden the native window; do not send a delayed hide IPC.
+    expect(invoke.mock.calls.some(([command]: [string]) => command === 'hide_capsule_window')).toBe(false);
     expect(host.querySelector('[role="toolbar"]')).toBeNull();
 
     // A late UIA/clipboard result must not resurrect the cancelled selection.
@@ -155,6 +204,8 @@ describe('Desktop selection-to-polish flow', () => {
     expect(host.querySelector('[role="toolbar"]')).not.toBeNull();
     // A delayed invalidation belonging to an older interaction must be ignored.
     await act(async () => invalidate!({ payload: 1 }));
+    expect(host.querySelector('[role="toolbar"]')).not.toBeNull();
+    await act(async () => invalidate!({ payload: 2 }));
     expect(host.querySelector('[role="toolbar"]')).not.toBeNull();
   });
 
@@ -184,10 +235,28 @@ describe('Desktop selection-to-polish flow', () => {
       command === 'hide_capsule_window'
         ? new Promise<void>((resolve) => { finishHide = resolve; })
         : Promise.resolve(null));
-    await act(async () => eventMocks.listeners.get('runbi://selection-invalidated')!({ payload: 2 }));
+    await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    expect((window as any).__TAURI_INTERNALS__.invoke).toHaveBeenCalledWith('hide_capsule_window', { generation: 1 }, undefined);
     await act(async () => select({ payload: { text: '新选区', trigger: 'selection', generation: 2 } }));
     await act(async () => finishHide());
     expect(host.querySelector('[role="toolbar"]')).not.toBeNull();
+  });
+
+  it('clears 50 successive invalidations without timers or a native hide round trip', async () => {
+    await act(async () => root.render(<App />));
+    const select = eventMocks.listeners.get('runbi://captured-selection')!;
+    const invalidate = eventMocks.listeners.get('runbi://selection-invalidated')!;
+    const invoke = (window as any).__TAURI_INTERNALS__.invoke;
+    invoke.mockClear();
+    for (let generation = 1; generation < 100; generation += 2) {
+      await act(async () => select({ payload: { text: '重复划词', trigger: 'selection', generation } }));
+      expect(host.querySelector('[role="toolbar"]')).not.toBeNull();
+      await act(async () => invalidate({ payload: generation + 1 }));
+      expect(host.querySelector('[role="toolbar"]')).toBeNull();
+      await act(async () => select({ payload: { text: '过期结果', trigger: 'selection', generation } }));
+      expect(host.querySelector('[role="toolbar"]')).toBeNull();
+    }
+    expect(invoke.mock.calls.some(([command]: [string]) => command === 'hide_capsule_window')).toBe(false);
   });
 
 });

@@ -212,8 +212,8 @@ pub async fn grab_selected_text_with_retry(app: &tauri::AppHandle) -> Option<Str
             crate::commands::input::simulate_ctrl_c();
         }
 
-        for _ in 0..6 {
-            tokio::time::sleep(Duration::from_millis(20)).await;
+        for _ in 0..4 {
+            tokio::time::sleep(Duration::from_millis(15)).await;
             let current_seq = get_clipboard_seq();
             if let Some(text) = crate::commands::clipboard_monitor::read_system_clipboard()
                 .or_else(|| app.clipboard().read_text().ok())
@@ -259,11 +259,19 @@ pub async fn grab_selected_text_with_retry(app: &tauri::AppHandle) -> Option<Str
 /// 会让前台应用的剪贴板被写入/更新,若不同步监听器的 last_content,它的监听循环会把
 /// 同一份文本当"新复制"再弹一次完整面板,把刚弹出的胶囊顶掉(实测必现)。
 pub fn sync_clipboard_monitor_baseline(app: &tauri::AppHandle, text: &str) {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+    // The selection fallback may have restored the user's original clipboard,
+    // so the captured selection is not necessarily the current clipboard value.
+    // Baseline the monitor against what is actually there or it will emit a
+    // second popup for the restored text.
+    let baseline = crate::commands::clipboard_monitor::read_system_clipboard()
+        .or_else(|| app.clipboard().read_text().ok())
+        .unwrap_or_else(|| text.to_string());
     if let Some(state) =
         app.try_state::<crate::commands::clipboard_monitor::ClipboardMonitorState>()
     {
         if let Ok(mut last) = state.last_content.lock() {
-            *last = text.to_string();
+            *last = baseline;
         }
     }
 }

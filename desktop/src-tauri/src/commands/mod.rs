@@ -3,6 +3,7 @@ pub mod clipboard_monitor;
 pub mod clipboard_snapshot;
 pub mod config;
 pub mod feedback;
+pub mod feishu_copilot;
 pub mod input;
 pub mod mouse_hook;
 pub mod position;
@@ -179,6 +180,11 @@ impl OpacityAlpha for tauri::WebviewWindow {
 /// %APPDATA%\com.runbi.desktop\runbi.log
 pub fn file_log(app: &tauri::AppHandle, msg: &str) {
     use std::io::Write;
+    static LOG_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    let _guard = LOG_LOCK
+        .get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .ok();
     let Ok(dir) = app.path().app_config_dir() else {
         return;
     };

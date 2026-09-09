@@ -2,8 +2,53 @@
 //! Unifies Win32 SendInput (Ctrl+C, Ctrl+V) and provides consistent
 //! internal flag guards to prevent feedback loops between monitors.
 
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicIsize, Ordering};
 use tauri::{AppHandle, Manager};
+
+#[cfg(windows)]
+static LAST_TARGET_WINDOW: AtomicIsize = AtomicIsize::new(0);
+
+/// Remember the application that owned focus before Runbi showed its capsule.
+/// Clicking the capsule transfers focus to the WebView; paste must explicitly
+/// return focus to the original control before sending Ctrl+V.
+#[cfg(windows)]
+pub fn remember_foreground_window() {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, GetWindowThreadProcessId,
+    };
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if hwnd.is_null() {
+            return;
+        }
+        let mut pid = 0;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if pid != std::process::id() {
+            LAST_TARGET_WINDOW.store(hwnd as isize, Ordering::SeqCst);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+pub fn remember_foreground_window() {}
+
+#[cfg(windows)]
+pub unsafe fn restore_foreground_window() -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        IsWindow, SetForegroundWindow, ShowWindow, SW_RESTORE,
+    };
+    let hwnd = LAST_TARGET_WINDOW.load(Ordering::SeqCst) as windows_sys::Win32::Foundation::HWND;
+    if hwnd.is_null() || IsWindow(hwnd) == 0 {
+        return false;
+    }
+    let _ = ShowWindow(hwnd, SW_RESTORE);
+    SetForegroundWindow(hwnd) != 0
+}
+
+#[cfg(not(windows))]
+pub unsafe fn restore_foreground_window() -> bool {
+    false
+}
 
 #[cfg(windows)]
 pub unsafe fn simulate_ctrl_c() {

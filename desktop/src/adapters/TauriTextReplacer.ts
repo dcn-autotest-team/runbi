@@ -32,7 +32,7 @@ export class TauriTextReplacer implements ITextReplacer {
   /**
    * Replaces the selected text with the new polished text.
    */
-  public async replaceText(newText: string, context?: SelectionInfo | null, hideWindow: boolean = true): Promise<ReplacementResult> {
+  public async replaceText(newText: string, context?: SelectionInfo | null, hideWindow: boolean = true, autoSend: boolean = false): Promise<ReplacementResult> {
     if (!newText || newText.trim().length === 0) {
       return { success: false, error: 'Empty replacement text provided' };
     }
@@ -43,6 +43,7 @@ export class TauriTextReplacer implements ITextReplacer {
           newText,
           restoreOriginalClipboard: true,
           hideWindow,
+          autoSend,
         })) as TauriReplacerResult;
 
         if (result.success) {
@@ -109,7 +110,15 @@ export class TauriTextReplacer implements ITextReplacer {
    */
   public async copyToClipboard(text: string): Promise<boolean> {
     try {
-      if (this.isTauri()) {
+      try {
+        // Try the Rust command first. This is independent of WebView focus and
+        // also works when the production bridge marker is attached late.
+        await invoke('write_clipboard_text', { text });
+        return true;
+      } catch (err) {
+        if (this.isTauri()) {
+          console.warn('[TauriTextReplacer] Rust clipboard write failed:', err);
+        }
         try {
           await writeText(text);
           return true;
