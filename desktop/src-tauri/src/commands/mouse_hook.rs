@@ -466,6 +466,13 @@ unsafe extern "system" fn low_level_mouse_proc(
                 }
             }
             if w_param == WM_LBUTTONDOWN as usize {
+                // If the user switched to another app while the Runbi panel stayed
+                // open, the low-level hook still sees that app as foreground before
+                // Windows focuses the clicked Runbi button. Keep paste/send aimed at
+                // the app the user just left instead of an older selection target.
+                if !outside_runbi {
+                    crate::commands::input::remember_foreground_window();
+                }
                 if capsule_visible && outside_runbi {
                     // A blank click dismisses the current capsule. Give any
                     // already queued clipboard/UIA capture a short grace

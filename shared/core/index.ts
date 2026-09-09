@@ -15,3 +15,4 @@ export * from './capturedSelection';
 export * from './scriptLibrary';
 export * from './expertAgents';
 export * from './localModels';
+export * from './jsonParser';

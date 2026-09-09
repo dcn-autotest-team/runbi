@@ -146,7 +146,9 @@ pub(crate) fn process_name_matches(process_id: u32, want_lower: &str) -> bool {
 }
 
 #[cfg(windows)]
-unsafe fn find_window_by_process(want_lower: &str) -> Option<windows_sys::Win32::Foundation::HWND> {
+pub(crate) unsafe fn find_window_by_process(
+    want_lower: &str,
+) -> Option<windows_sys::Win32::Foundation::HWND> {
     use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsWindowVisible,
@@ -337,16 +339,16 @@ pub fn has_last_screenshot() -> bool {
 
 /// Checks if foreground window is likely an IM / chat communication application
 /// where vision context (screenshots) is genuinely useful for smart replies.
+pub(crate) const CHAT_PROCESS_NAMES: &[&str] = &[
+    "wechat", "weixin", "wxwork", "dingtalk", "feishu", "lark", "slack", "teams", "telegram",
+    "discord", "qq", "whatsapp", "skype", "line",
+];
+
 pub fn is_likely_conversation_window(source_app: Option<&str>, window_title: Option<&str>) -> bool {
     let app_lower = source_app.unwrap_or_default().to_ascii_lowercase();
     let title_lower = window_title.unwrap_or_default().to_ascii_lowercase();
 
-    let chat_apps = [
-        "wechat", "weixin", "wxwork", "dingtalk", "feishu", "lark", "slack", "teams", "telegram",
-        "discord", "qq", "whatsapp", "skype", "line",
-    ];
-
-    for app in &chat_apps {
+    for app in CHAT_PROCESS_NAMES {
         if app_lower.contains(app) {
             return true;
         }

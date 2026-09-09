@@ -135,6 +135,49 @@ describe('Desktop selection-to-polish flow', () => {
     expect(host.textContent).toContain('Translated');
   });
 
+  it('sends a generated reply instead of only pasting it', async () => {
+    await act(async () => {
+      root.render(<App />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      eventMocks.listeners.get('runbi://captured-selection')!({
+        payload: {
+          text: '明天下午三点开会可以吗？',
+          sourceApp: 'WeChat.exe',
+          trigger: 'selection',
+          generation: 1,
+        },
+      });
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      (host.querySelector('button[aria-label="智能回复选中文本"]') as HTMLButtonElement).click();
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+
+    const sendButton = Array.from(host.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('发送至微信')
+    ) as HTMLButtonElement;
+    expect(sendButton).toBeDefined();
+
+    const invoke = (window as any).__TAURI_INTERNALS__.invoke;
+    invoke.mockClear();
+    invoke.mockImplementation(async (command: string) => command === 'replace_text'
+      ? { success: true, restored_clipboard: true }
+      : null);
+    await act(async () => sendButton.click());
+
+    expect(invoke).toHaveBeenCalledWith(
+      'replace_text',
+      expect.objectContaining({ autoSend: true }),
+      undefined
+    );
+  });
+
   it('keeps a capsule recoverable when the pointer re-enters during fade-out', async () => {
     await act(async () => root.render(<App />));
     await act(async () => eventMocks.listeners.get('runbi://captured-selection')!({

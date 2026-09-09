@@ -88,8 +88,16 @@ pub async fn replace_text(
     // The capsule/panel takes focus when its action is clicked. Return focus
     // to the source control before writing and pasting, otherwise Ctrl+V is
     // delivered to the hidden Runbi WebView and the selected text stays put.
-    unsafe {
-        crate::commands::input::restore_foreground_window();
+    let target_restored = unsafe { crate::commands::input::restore_foreground_window() };
+    if !target_restored {
+        crate::commands::input::set_internal_action(app, false, None);
+        return Ok(ReplacerResponse {
+            success: false,
+            replaced_length: 0,
+            restored_clipboard: true,
+            safe_to_copy_fallback: true,
+            error: Some("未找到要贴回的目标窗口，结果已复制，可在目标位置按 Ctrl+V".to_string()),
+        });
     }
     tokio::time::sleep(Duration::from_millis(20)).await;
 
@@ -113,27 +121,46 @@ pub async fn replace_text(
         unsafe { crate::commands::input::simulate_ctrl_v() };
     }
 
-    if should_auto_send {
+    let acknowledged = direct_ack || wait_for_uia_paste_ack(&new_text).await;
+    let auto_send_error = if should_auto_send && !acknowledged {
+        Some("未确认回复已进入输入框，已取消自动发送".to_string())
+    } else if should_auto_send {
         tokio::time::sleep(Duration::from_millis(80)).await;
         #[cfg(windows)]
-        unsafe {
+        let sent = unsafe {
             use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
                 SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VK_RETURN,
             };
             let mut inputs: [INPUT; 2] = std::mem::zeroed();
             inputs[0].r#type = INPUT_KEYBOARD;
-            inputs[0].Anonymous.ki = KEYBDINPUT { wVk: VK_RETURN, wScan: 0, dwFlags: 0, time: 0, dwExtraInfo: 0 };
+            inputs[0].Anonymous.ki = KEYBDINPUT {
+                wVk: VK_RETURN,
+                wScan: 0,
+                dwFlags: 0,
+                time: 0,
+                dwExtraInfo: 0,
+            };
             inputs[1].r#type = INPUT_KEYBOARD;
-            inputs[1].Anonymous.ki = KEYBDINPUT { wVk: VK_RETURN, wScan: 0, dwFlags: KEYEVENTF_KEYUP, time: 0, dwExtraInfo: 0 };
-            SendInput(2, inputs.as_mut_ptr(), std::mem::size_of::<INPUT>() as i32);
-        }
-    }
+            inputs[1].Anonymous.ki = KEYBDINPUT {
+                wVk: VK_RETURN,
+                wScan: 0,
+                dwFlags: KEYEVENTF_KEYUP,
+                time: 0,
+                dwExtraInfo: 0,
+            };
+            SendInput(2, inputs.as_mut_ptr(), std::mem::size_of::<INPUT>() as i32) == 2
+        };
+        #[cfg(not(windows))]
+        let sent = false;
+        (!sent).then(|| "回车发送失败，回复仍保留在输入框中".to_string())
+    } else {
+        None
+    };
 
     // 5. Restore the original text, image, or empty clipboard after the target
     // acknowledges the paste. Clipboard sequence numbers cannot prove reads,
     // so they are deliberately not used as an acknowledgement.
     let actually_restored = if should_restore {
-        let acknowledged = direct_ack || wait_for_uia_paste_ack(&new_text).await;
         if acknowledged {
             let restored = snapshot.restore(app);
             let monitor_text = if restored {
@@ -169,11 +196,11 @@ pub async fn replace_text(
     };
 
     Ok(ReplacerResponse {
-        success: true,
+        success: auto_send_error.is_none(),
         replaced_length: length,
         restored_clipboard: actually_restored,
-        safe_to_copy_fallback: false,
-        error: None,
+        safe_to_copy_fallback: auto_send_error.is_some() && !acknowledged,
+        error: auto_send_error,
     })
 }
 

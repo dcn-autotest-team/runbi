@@ -1,16 +1,29 @@
-//! Feishu (Lark) Copilot Module
-//! Provides viewport background capture (scroll up / scroll down) and smart response delivery
-//! (collaborative pre-fill into Feishu input box vs auto-pilot submit with Return).
+//! Chat Copilot Module
+//! Provides viewport background capture and smart response delivery for supported chat apps.
 
 use std::time::Duration;
 
 #[cfg(windows)]
-pub fn find_feishu_window() -> Option<windows_sys::Win32::Foundation::HWND> {
+pub fn find_chat_window(
+    process_name: Option<&str>,
+) -> Option<windows_sys::Win32::Foundation::HWND> {
     use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsWindowVisible,
         GWL_EXSTYLE, WS_EX_TOOLWINDOW,
     };
+
+    let preferred = process_name
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_ascii_lowercase)
+        .map(|name| name.strip_suffix(".exe").unwrap_or(&name).to_string());
+    if let Some(name) = preferred.as_deref() {
+        if !crate::commands::screenshot::is_likely_conversation_window(Some(name), None) {
+            return None;
+        }
+        return unsafe { crate::commands::screenshot::find_window_by_process(name) };
+    }
 
     struct Scan {
         best: Option<HWND>,
@@ -31,8 +44,9 @@ pub fn find_feishu_window() -> Option<windows_sys::Win32::Foundation::HWND> {
         if pid == 0 {
             return 1;
         }
-        let matches = crate::commands::screenshot::process_name_matches(pid, "feishu")
-            || crate::commands::screenshot::process_name_matches(pid, "lark");
+        let matches = crate::commands::screenshot::CHAT_PROCESS_NAMES
+            .iter()
+            .any(|name| crate::commands::screenshot::process_name_matches(pid, name));
         if !matches {
             return 1;
         }
@@ -58,11 +72,12 @@ pub fn find_feishu_window() -> Option<windows_sys::Win32::Foundation::HWND> {
     scan.best
 }
 
-/// Scrolls Feishu chat history up to capture historical background context, then scrolls back.
+/// Scrolls chat history up to capture historical background context, then scrolls back.
 /// Returns an array of JPEG data URLs [historical_viewport, current_viewport].
 #[tauri::command]
 pub async fn capture_feishu_multi_turn_context(
     scroll_up_steps: Option<u32>,
+    process_name: Option<String>,
 ) -> Result<Vec<String>, String> {
     #[cfg(windows)]
     {
@@ -71,8 +86,8 @@ pub async fn capture_feishu_multi_turn_context(
             GetAncestor, GetWindowRect, PostMessageW, WM_MOUSEWHEEL,
         };
 
-        let hwnd = find_feishu_window()
-            .ok_or_else(|| "未找到正在运行的飞书窗口，请先打开飞书客户端".to_string())?;
+        let hwnd = find_chat_window(process_name.as_deref())
+            .ok_or_else(|| "未找到可读取的聊天窗口，请先打开一个受支持的聊天应用".to_string())?;
 
         let root = unsafe {
             GetAncestor(hwnd, 2 /* GA_ROOT */)
@@ -138,19 +153,20 @@ pub async fn capture_feishu_multi_turn_context(
     }
     #[cfg(not(windows))]
     {
-        let _ = scroll_up_steps;
-        Err("Feishu Copilot is only supported on Windows".to_string())
+        let _ = (scroll_up_steps, process_name);
+        Err("聊天智能应答仅支持 Windows".to_string())
     }
 }
 
-/// Deliver response to Feishu input box:
-/// - prefill_only: pastes text into Feishu's active input box without sending (Collaborative mode).
+/// Deliver response to a supported chat input box:
+/// - prefill_only: pastes text into the active input box without sending (Collaborative mode).
 /// - auto_submit: pastes text and triggers Return key to immediately send (Auto-Pilot mode).
 #[tauri::command]
 pub async fn send_to_feishu_input(
     app: tauri::AppHandle,
     text: String,
     auto_submit: bool,
+    process_name: Option<String>,
 ) -> Result<bool, String> {
     #[cfg(windows)]
     {
@@ -167,10 +183,11 @@ pub async fn send_to_feishu_input(
             return Err("Cannot deliver empty response".to_string());
         }
 
-        let hwnd = find_feishu_window().ok_or_else(|| "未找到正在运行的飞书窗口".to_string())?;
+        let hwnd = find_chat_window(process_name.as_deref())
+            .ok_or_else(|| "未找到可发送的聊天窗口".to_string())?;
         let hwnd_val = hwnd as isize;
 
-        // 1. Bring Feishu window to foreground
+        // 1. Bring the chat window to foreground
         unsafe {
             ShowWindow(hwnd_val as HWND, SW_RESTORE);
             SetForegroundWindow(hwnd_val as HWND);
@@ -178,9 +195,14 @@ pub async fn send_to_feishu_input(
         tokio::time::sleep(Duration::from_millis(150)).await;
 
         if !crate::commands::uia::focus_bottom_editable_in_window(hwnd_val) {
-            return Err("未找到飞书消息输入框，请先打开一个聊天会话".to_string());
+            return Err("未找到聊天消息输入框，请先打开一个聊天会话".to_string());
         }
         tokio::time::sleep(Duration::from_millis(80)).await;
+
+        let snapshot = crate::commands::clipboard_snapshot::ClipboardSnapshot::capture(&app);
+        if !snapshot.can_restore() {
+            return Err("剪贴板中含文件或暂不支持的富媒体；为避免覆盖，已取消发送".to_string());
+        }
 
         // 2. Set internal action flag to avoid tripping clipboard / selection monitors
         crate::commands::input::set_internal_action(&app, true, Some(&text));
@@ -213,8 +235,15 @@ pub async fn send_to_feishu_input(
         // caret. Collaborative mode leaves the pasted text for user review.
         if auto_submit {
             if !pasted {
-                crate::commands::input::set_internal_action(&app, false, Some(&text));
-                return Err("未确认回复已进入飞书输入框，已取消自动发送".to_string());
+                let restored = app.clipboard().read_text().ok().as_deref() == Some(text.as_str())
+                    && snapshot.restore(&app);
+                let monitor_text = if restored {
+                    snapshot.text_for_monitor()
+                } else {
+                    text.as_str()
+                };
+                crate::commands::input::set_internal_action(&app, false, Some(monitor_text));
+                return Err("未确认回复已进入聊天输入框，已取消自动发送".to_string());
             }
             let sent = unsafe {
                 let mut inputs: [INPUT; 2] = std::mem::zeroed();
@@ -239,19 +268,33 @@ pub async fn send_to_feishu_input(
                 SendInput(2, inputs.as_mut_ptr(), std::mem::size_of::<INPUT>() as i32) == 2
             };
             if !sent {
-                crate::commands::input::set_internal_action(&app, false, Some(&text));
-                return Err("飞书回车发送失败，回复仍保留在输入框中".to_string());
+                let restored = app.clipboard().read_text().ok().as_deref() == Some(text.as_str())
+                    && snapshot.restore(&app);
+                let monitor_text = if restored {
+                    snapshot.text_for_monitor()
+                } else {
+                    text.as_str()
+                };
+                crate::commands::input::set_internal_action(&app, false, Some(monitor_text));
+                return Err("回车发送失败，回复仍保留在输入框中".to_string());
             }
         }
 
-        crate::commands::input::set_internal_action(&app, false, Some(&text));
+        let restored = app.clipboard().read_text().ok().as_deref() == Some(text.as_str())
+            && snapshot.restore(&app);
+        let monitor_text = if restored {
+            snapshot.text_for_monitor()
+        } else {
+            text.as_str()
+        };
+        crate::commands::input::set_internal_action(&app, false, Some(monitor_text));
 
         Ok(true)
     }
     #[cfg(not(windows))]
     {
-        let _ = (app, text, auto_submit);
-        Err("Feishu Copilot is only supported on Windows".to_string())
+        let _ = (app, text, auto_submit, process_name);
+        Err("聊天智能应答仅支持 Windows".to_string())
     }
 }
 
@@ -260,7 +303,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_feishu_detection_does_not_panic() {
+    fn test_chat_detection_does_not_panic() {
         #[cfg(windows)]
         {
             use std::sync::atomic::{AtomicUsize, Ordering};
@@ -301,8 +344,8 @@ mod tests {
                 EnumWindows(Some(debug_win), 0);
             }
             println!("TOTAL_WINS: {}", TOTAL_WINS.load(Ordering::Relaxed));
-            let hwnd = find_feishu_window();
-            println!("find_feishu_window result: {:?}", hwnd);
+            let hwnd = find_chat_window(None);
+            println!("find_chat_window result: {:?}", hwnd);
         }
     }
 }

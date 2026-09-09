@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { check, type Update } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { RefreshCw } from './Icons';
@@ -22,12 +22,22 @@ export function formatUpdateError(error: unknown): string {
  * Settings row: check GitHub Releases for app updates via tauri-plugin-updater.
  * Fails gracefully (inline note) when offline / endpoint not published yet.
  */
-export function UpdateCheckRow() {
+interface UpdateCheckRowProps {
+  autoCheck?: boolean;
+  prominent?: boolean;
+  onUpdateFound?: () => void;
+}
+
+export function UpdateCheckRow({
+  autoCheck = false,
+  prominent = false,
+  onUpdateFound,
+}: UpdateCheckRowProps = {}) {
   const [phase, setPhase] = useState<'idle' | 'checking' | 'downloading' | 'done'>('idle');
   const [note, setNote] = useState('');
   const [update, setUpdate] = useState<Update | null>(null);
 
-  const onCheck = async () => {
+  const onCheck = useCallback(async () => {
     setPhase('checking');
     setNote('');
     try {
@@ -36,6 +46,7 @@ export function UpdateCheckRow() {
         setUpdate(u);
         setPhase('done');
         setNote(`发现新版本 ${u.version}，可立即安装`);
+        onUpdateFound?.();
       } else {
         setUpdate(null);
         setPhase('done');
@@ -45,7 +56,11 @@ export function UpdateCheckRow() {
       setPhase('done');
       setNote(formatUpdateError(e));
     }
-  };
+  }, [onUpdateFound]);
+
+  useEffect(() => {
+    if (autoCheck) void onCheck();
+  }, [autoCheck, onCheck]);
 
   const onInstall = async () => {
     if (!update) return;
@@ -64,6 +79,58 @@ export function UpdateCheckRow() {
   };
 
   const busy = phase === 'checking' || phase === 'downloading';
+
+  if (prominent) {
+    if (!update) return null;
+    return (
+      <div className="absolute inset-0 z-[100] flex items-center justify-center bg-black/70 p-5 backdrop-blur-sm">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="runbi-update-title"
+          className="w-full max-w-sm rounded-2xl border border-teal-300/30 bg-slate-950 p-5 shadow-2xl"
+        >
+          <p className="text-[11px] font-medium text-teal-300">发现新版本</p>
+          <h2 id="runbi-update-title" className="mt-1 text-lg font-semibold text-white">
+            Runbi {update.version} 可以更新
+          </h2>
+          <p className="mt-2 text-xs leading-5 text-slate-400">
+            建议立即更新，以获得最新功能和问题修复。
+          </p>
+          {update.body && (
+            <p className="mt-3 max-h-24 overflow-auto whitespace-pre-wrap rounded-lg bg-white/5 p-2.5 text-[11px] leading-5 text-slate-300">
+              {update.body}
+            </p>
+          )}
+          {note && phase === 'downloading' && (
+            <p className="mt-3 text-[11px] text-teal-300">{note}</p>
+          )}
+          {note.startsWith('安装失败') && (
+            <p role="alert" className="mt-3 text-[11px] text-rose-300">{note}</p>
+          )}
+          <div className="mt-5 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setUpdate(null)}
+              disabled={busy}
+              className="runbi-focus-ring rounded-lg px-3 py-2 text-xs text-slate-300 hover:bg-white/10 disabled:opacity-50"
+            >
+              稍后提醒
+            </button>
+            <button
+              type="button"
+              onClick={onInstall}
+              disabled={busy}
+              className="runbi-focus-ring flex items-center gap-1.5 rounded-lg runbi-accent-bg px-4 py-2 text-xs font-medium disabled:opacity-60"
+            >
+              {phase === 'downloading' && <RefreshCw className="h-3.5 w-3.5 animate-spin" />}
+              {phase === 'downloading' ? '正在更新…' : '立即更新'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="mt-1 rounded-lg border border-white/10 bg-white/5 px-3 py-2.5">

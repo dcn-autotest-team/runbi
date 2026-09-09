@@ -45,6 +45,7 @@ import {
   hasLatexMarkers,
   findLatexViolations,
   TRANSLATE_TARGETS,
+  parseModelJson,
   type ScreenReplyAnalysis,
   type TranslateTargetId,
 } from '@runbi/shared/core';
@@ -53,10 +54,7 @@ import { OnboardingView } from './components/OnboardingView';
 import { ParallelResultsView, type ParallelSession } from './components/ParallelResultsView';
 import { buildBrowserSearchUrl, SelectionCapsule, shouldShowCapsule } from './components/SelectionCapsule';
 import { AdvancedSettings } from './components/AdvancedSettings';
-
-const UpdateCheckRow = React.lazy(() =>
-  import('./components/UpdateCheckRow').then((module) => ({ default: module.UpdateCheckRow }))
-);
+import { UpdateCheckRow } from './components/UpdateCheckRow';
 
 const STYLE_NAMES: Record<PolishStyle, string> = {
   polished: '通用润色',
@@ -68,23 +66,6 @@ const STYLE_NAMES: Record<PolishStyle, string> = {
   reply: '智能回复',
   translate: '翻译',
 };
-
-function parseModelJson<T>(raw: string): T {
-  const body = raw
-    .replace(/<think>[\s\S]*?<\/think>\s*/gi, '')
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/\s*```$/i, '')
-    .trim();
-  const candidate = body.match(/\{[\s\S]*\}/)?.[0] || body;
-  try {
-    return JSON.parse(candidate) as T;
-  } catch {
-    const repaired = candidate
-      .replace(/([{,]\s*)([A-Za-z_$][\w$-]*)\s*:/g, '$1"$2":')
-      .replace(/,\s*([}\]])/g, '$1');
-    return JSON.parse(repaired) as T;
-  }
-}
 
 const DEFAULT_SHORTCUT = 'Ctrl+Shift+Space';
 
@@ -1306,7 +1287,10 @@ export const App: React.FC = () => {
 
       try {
         // 监控只读当前视口，避免每轮滚动聊天窗口、重复编码历史截图。
-        const captures = await invoke<string[]>('capture_feishu_multi_turn_context', { scrollUpSteps: 1 });
+        const captures = await invoke<string[]>('capture_feishu_multi_turn_context', {
+          scrollUpSteps: 1,
+          processName: stateRef.current.lastChatApp || null,
+        });
 
         if (!captures || captures.length === 0 || !mounted) {
           setFeishuCopilotStatus('未找到可读取的聊天窗口');
@@ -1314,8 +1298,6 @@ export const App: React.FC = () => {
         }
 
         const latestShot = captures[captures.length - 1];
-        const hasHistory = captures.length > 1;
-
         const currentEndpoint = endpoint.trim();
         const currentKey = apiKey.trim();
         const currentModel = model.trim();
@@ -1332,7 +1314,7 @@ export const App: React.FC = () => {
 
         // 2. 调用多模态模型判断是否有新问题
         const sysPrompt = buildFeishuCopilotSystemPrompt(activePersonaPrompt);
-        const userPrompt = buildFeishuCopilotUserPrompt(hasHistory);
+        const userPrompt = buildFeishuCopilotUserPrompt();
 
         let rawOutput = '';
         await adapters.llmTransport.streamChat(
@@ -1377,6 +1359,7 @@ export const App: React.FC = () => {
                     await invoke('send_to_feishu_input', {
                       text: replyText,
                       autoSubmit: isAutoPilot,
+                      processName: stateRef.current.lastChatApp || null,
                     });
                   } catch (deliveryError) {
                     feishuLastScreenshotRef.current = '';
@@ -1412,8 +1395,8 @@ export const App: React.FC = () => {
                 }
               } catch (e) {
                 feishuLastScreenshotRef.current = '';
-                console.warn('[Feishu Copilot] parse output error:', e);
-                setFeishuCopilotStatus(`识别结果解析失败：${String(e).slice(0, 60)}`);
+                console.warn('[Feishu Copilot] parse output error:', e, 'rawOutput:', rawOutput);
+                setFeishuCopilotStatus('监控中 · 画面暂未识别到新提问');
               }
             },
             onError: (err) => {
@@ -2258,7 +2241,8 @@ export const App: React.FC = () => {
   const handleReplace = async () => {
     const textToInsert = polishedText || originalText;
     const shouldHide = !stateRef.current.isPinned;
-    const res = await (adapters.textReplacer as any).replaceText(textToInsert, null, shouldHide);
+    const autoSend = stateRef.current.activeStyle === 'reply' || Boolean(stateRef.current.screenReplyAnalysis);
+    const res = await (adapters.textReplacer as any).replaceText(textToInsert, null, shouldHide, autoSend);
     if (res.success) {
       setAttachedFiles([]);
       setClipboardRef(null);
@@ -2447,6 +2431,24 @@ export const App: React.FC = () => {
       window.removeEventListener('blur', onBlur);
     };
   }, [handleReplace, handleStyleChange, closeParallel, isTauri, handleRecapture, handleClose]);
+
+  const handleUpdateFound = useCallback(() => {
+    if (capsuleArmTimerRef.current) clearTimeout(capsuleArmTimerRef.current);
+    if (capsuleFadeTimerRef.current) clearTimeout(capsuleFadeTimerRef.current);
+    capsuleArmTimerRef.current = null;
+    capsuleFadeTimerRef.current = null;
+    capsuleInfoRef.current = null;
+    capsuleActionRef.current = null;
+    stateRef.current.uiMode = 'panel';
+    setUiMode('panel');
+    setCapsule(null);
+    setCapsuleVisible(false);
+    setShowEpoch((n) => n + 1);
+    void invoke('position_window_at_cursor', { isCapsule: false })
+      .then(() => getCurrentWindow().show())
+      .then(() => getCurrentWindow().setFocus())
+      .catch((error) => console.warn('show update prompt failed:', error));
+  }, []);
 
   // 缺陷2 微胶囊:独占整棵渲染树。窗口只有 196×44,若把胶囊塞进面板容器树,
   // 标题栏(shrink-0)先占满高度,胶囊被 overflow-hidden 裁出可视区——
@@ -3062,9 +3064,7 @@ export const App: React.FC = () => {
                   </div>
                 </details>
 
-                <React.Suspense fallback={<div className="h-[58px] animate-pulse rounded-lg border border-white/10 bg-white/5" />}>
-                  <UpdateCheckRow />
-                </React.Suspense>
+                <UpdateCheckRow />
 
                 {/* Error Telemetry / DSN Configuration */}
                 <div className="space-y-1.5">
@@ -3311,6 +3311,10 @@ export const App: React.FC = () => {
               handleStartParallel(experts);
             }}
           />
+        )}
+
+        {isTauri && (
+          <UpdateCheckRow autoCheck prominent onUpdateFound={handleUpdateFound} />
         )}
 
         {/* 缺陷3:贴回失败常驻浮条——给明确的重试/关闭动作,不靠用户眼疾手快 */}
