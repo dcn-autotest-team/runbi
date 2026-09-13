@@ -258,6 +258,7 @@ export const App: React.FC = () => {
   const capsuleTransitionRef = useRef<{ text: string; generation?: number; until: number } | null>(null);
   const capsuleRevisionRef = useRef(0);
   const selectionGenerationRef = useRef(0);
+  const updatePromptShownRef = useRef(false);
 
   // Data Safety & Fault Tolerance State
   const [history, setHistory] = useState<HistoryRecord[]>([]);
@@ -2626,6 +2627,8 @@ export const App: React.FC = () => {
   }, [handleReplace, handleStyleChange, closeParallel, isTauri, handleRecapture, handleClose]);
 
   const handleUpdateFound = useCallback(() => {
+    if (updatePromptShownRef.current) return;
+    updatePromptShownRef.current = true;
     if (capsuleArmTimerRef.current) clearTimeout(capsuleArmTimerRef.current);
     if (capsuleFadeTimerRef.current) clearTimeout(capsuleFadeTimerRef.current);
     capsuleArmTimerRef.current = null;
@@ -2636,7 +2639,6 @@ export const App: React.FC = () => {
     setUiMode('panel');
     setCapsule(null);
     setCapsuleVisible(false);
-    setShowEpoch((n) => n + 1);
     void invoke('position_window_at_cursor', { isCapsule: false })
       .then(() => getCurrentWindow().show())
       .then(() => getCurrentWindow().setFocus())

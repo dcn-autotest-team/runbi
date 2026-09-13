@@ -7,6 +7,11 @@ const eventMocks = vi.hoisted(() => ({
   listen: vi.fn(),
 }));
 
+const updaterMocks = vi.hoisted(() => ({
+  check: vi.fn(),
+  relaunch: vi.fn(),
+}));
+
 vi.mock('@tauri-apps/api/event', () => ({
   listen: eventMocks.listen,
 }));
@@ -16,6 +21,9 @@ vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({
   writeText: vi.fn(async () => undefined),
 }));
 
+vi.mock('@tauri-apps/plugin-updater', () => ({ check: updaterMocks.check }));
+vi.mock('@tauri-apps/plugin-process', () => ({ relaunch: updaterMocks.relaunch }));
+
 import { App } from '../../desktop/src/App';
 
 describe('Desktop selection-to-polish flow', () => {
@@ -24,6 +32,9 @@ describe('Desktop selection-to-polish flow', () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
+    updaterMocks.check.mockReset();
+    updaterMocks.check.mockResolvedValue(null);
+    updaterMocks.relaunch.mockReset();
     eventMocks.listeners.clear();
     eventMocks.listen.mockImplementation(async (event: string, callback: (payload: any) => void) => {
       eventMocks.listeners.set(event, callback);
@@ -31,6 +42,7 @@ describe('Desktop selection-to-polish flow', () => {
     });
 
     (window as any).__TAURI_INTERNALS__ = {
+      metadata: { currentWindow: { label: 'main' } },
       invoke: vi.fn(async (command: string, args?: any) => {
         if (command === 'load_app_config') return {};
         if (command === 'get_global_shortcut') return 'Ctrl+Shift+Space';
@@ -52,6 +64,28 @@ describe('Desktop selection-to-polish flow', () => {
     await act(async () => root.unmount());
     delete (window as any).__TAURI_INTERNALS__;
     vi.useRealTimers();
+  });
+
+  it('shows an available update once without remounting the auto-checker', async () => {
+    updaterMocks.check
+      .mockResolvedValueOnce({
+        version: '1.0.20',
+        body: 'hotfix',
+        downloadAndInstall: vi.fn(),
+      })
+      .mockResolvedValue(null);
+
+    await act(async () => {
+      root.render(<App />);
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const invoke = (window as any).__TAURI_INTERNALS__.invoke;
+    expect(updaterMocks.check).toHaveBeenCalledTimes(1);
+    expect(invoke.mock.calls.filter(([command]: [string]) => command === 'position_window_at_cursor')).toHaveLength(1);
+    expect(host.textContent).toContain('Runbi 1.0.20 可以更新');
   });
 
   it('starts polishing immediately only for a shortcut-originated selection', async () => {

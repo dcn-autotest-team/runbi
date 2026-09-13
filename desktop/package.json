@@ -1,6 +1,6 @@
 {
   "name": "@runbi/desktop",
-  "version": "1.0.19",
+  "version": "1.0.20",
   "description": "Runbi Desktop Client - Raycast-like AI Text Polishing Assistant (Tauri 2.x + React 18)",
   "private": true,
   "type": "module",
