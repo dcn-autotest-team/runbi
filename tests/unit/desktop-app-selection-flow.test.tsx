@@ -31,10 +31,14 @@ describe('Desktop selection-to-polish flow', () => {
     });
 
     (window as any).__TAURI_INTERNALS__ = {
-      invoke: vi.fn(async (command: string) => {
+      invoke: vi.fn(async (command: string, args?: any) => {
         if (command === 'load_app_config') return {};
         if (command === 'get_global_shortcut') return 'Ctrl+Shift+Space';
         if (command === 'is_autostart_enabled') return false;
+        if (command === 'plugin:event|emit_to') {
+          const { event, payload } = args ?? {};
+          eventMocks.listeners.get(event)?.({ payload });
+        }
         return null;
       }),
     };
@@ -133,6 +137,290 @@ describe('Desktop selection-to-polish flow', () => {
     // 面板已展开：翻译语言条可见，mock 翻译结果已流出
     expect(host.querySelector('[data-testid="translate-bar"]')).not.toBeNull();
     expect(host.textContent).toContain('Translated');
+    // 胶囊翻译必须复用与快捷键/顶部翻译入口相同的极简面板，不带润色专属控件。
+    expect(host.querySelector('#style-dropdown-trigger')).toBeNull();
+    expect(host.querySelector('#original-preview')).toBeNull();
+    expect(host.textContent).not.toContain('补充要求');
+  });
+
+  it('does not carry a recoverable draft banner into capsule translation', async () => {
+    const invoke = (window as any).__TAURI_INTERNALS__.invoke;
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'load_app_config') {
+        return {
+          activeDraft: {
+            timestamp: Date.now(),
+            originalText: '上一次未完成的草稿',
+            polishedText: '',
+            activeStyle: 'literary',
+          },
+        };
+      }
+      return null;
+    });
+
+    await act(async () => {
+      root.render(<App />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const onSelection = eventMocks.listeners.get('runbi://captured-selection')!;
+    await act(async () => {
+      onSelection({
+        payload: { text: '只保留翻译界面的新文本', trigger: 'selection', capsule: true },
+      });
+      await Promise.resolve();
+    });
+    await act(async () => {
+      (host.querySelector('button[aria-label="翻译选中文本"]') as HTMLButtonElement).click();
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+
+    expect(host.querySelector('[data-testid="translate-bar"]')).not.toBeNull();
+    expect(host.textContent).not.toContain('发现上次未完成草稿');
+    expect(host.textContent).not.toContain('上一次未完成的草稿');
+  });
+
+  it('native capsule action fallback uses the same translate entry point', async () => {
+    await act(async () => {
+      root.render(<App />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      eventMocks.listeners.get('runbi://captured-selection')!({
+        payload: {
+          text: '原生点击需要翻译的文本',
+          sourceApp: 'notepad.exe',
+          trigger: 'selection',
+          capsule: true,
+          generation: 9,
+        },
+      });
+      await Promise.resolve();
+    });
+
+    const nativeAction = eventMocks.listeners.get('runbi://capsule-action');
+    expect(nativeAction).toBeTypeOf('function');
+    await act(async () => {
+      nativeAction!({ payload: { action: 'translate', generation: 9 } });
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+
+    expect(host.querySelector('[data-testid="translate-bar"]')).not.toBeNull();
+    expect(host.textContent).toContain('Translated');
+  });
+
+  it('keeps the capsule and direct translate entry points on the same minimal panel', async () => {
+    await act(async () => {
+      root.render(<App />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const minimalSignature = () => ({
+      translateBar: host.querySelector('[data-testid="translate-bar"]') !== null,
+      styleDropdown: host.querySelector('#style-dropdown-trigger') !== null,
+      originalPreview: host.querySelector('#original-preview') !== null,
+      instructionInput: Array.from(host.querySelectorAll('input, textarea')).some((node) =>
+        node.getAttribute('placeholder')?.includes('补充要求')
+      ),
+    });
+
+    const onSelection = eventMocks.listeners.get('runbi://captured-selection');
+    await act(async () => {
+      onSelection!({
+        payload: {
+          text: '直接入口的翻译文本',
+          sourceApp: 'notepad.exe',
+          trigger: 'shortcut',
+        },
+      });
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+
+    const directTranslateButton = Array.from(host.querySelectorAll('button[role="tab"]'))
+      .find((button) => button.textContent?.trim() === '翻译') as HTMLButtonElement;
+    expect(directTranslateButton).toBeDefined();
+
+    await act(async () => {
+      directTranslateButton.click();
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+    const directSignature = minimalSignature();
+
+    await act(async () => {
+      onSelection!({
+        payload: {
+          text: '胶囊入口的翻译文本',
+          sourceApp: 'notepad.exe',
+          trigger: 'selection',
+          capsule: true,
+        },
+      });
+      await Promise.resolve();
+    });
+
+    const capsuleTranslateButton = host.querySelector(
+      'button[aria-label="翻译选中文本"]'
+    ) as HTMLButtonElement;
+    expect(capsuleTranslateButton).not.toBeNull();
+    await act(async () => {
+      capsuleTranslateButton.click();
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+
+    expect(minimalSignature()).toEqual(directSignature);
+  });
+
+  it('does not let a late config load replace capsule translation mode', async () => {
+    let resolveConfig!: (config: Record<string, unknown>) => void;
+    const invoke = (window as any).__TAURI_INTERNALS__.invoke;
+    invoke.mockImplementation((command: string) => {
+      if (command === 'load_app_config') {
+        return new Promise((resolve) => { resolveConfig = resolve; });
+      }
+      if (command === 'get_global_shortcut') return Promise.resolve('Ctrl+Shift+Space');
+      return Promise.resolve(null);
+    });
+
+    await act(async () => {
+      root.render(<App />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const onSelection = eventMocks.listeners.get('runbi://captured-selection')!;
+    await act(async () => {
+      onSelection({
+        payload: {
+          text: '启动后立即点击胶囊翻译',
+          sourceApp: 'notepad.exe',
+          trigger: 'selection',
+          capsule: true,
+        },
+      });
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      (host.querySelector('button[aria-label="翻译选中文本"]') as HTMLButtonElement).click();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      resolveConfig({ defaultStyle: 'literary', autoMode: true, translateTarget: 'en' });
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+
+    expect(host.querySelector('[data-testid="translate-bar"]')).not.toBeNull();
+    expect(host.querySelector('#style-dropdown-trigger')).toBeNull();
+  });
+
+  it('keeps capsule AI click and shortcut Ctrl+Q on the exact same reply panel for chat selections', async () => {
+    await act(async () => {
+      root.render(<App />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const replySignature = () => ({
+      activeTab: (Array.from(host.querySelectorAll('button[role="tab"]')).find(b => b.getAttribute('aria-selected') === 'true') as HTMLElement)?.textContent?.trim(),
+      hasInstructionInput: host.querySelector('input[placeholder*="想怎么改"]') !== null,
+      clarifyChips: Array.from(host.querySelectorAll('button')).filter(b => b.textContent?.includes('积极推进') || b.textContent?.includes('严谨对齐') || b.textContent?.includes('委婉缓冲')).length,
+      hasScriptLibraryButton: Array.from(host.querySelectorAll('button')).some(b => b.textContent?.includes('话术模板库')),
+    });
+
+    const onSelection = eventMocks.listeners.get('runbi://captured-selection')!;
+
+    // 1. Shortcut Ctrl+Q path
+    await act(async () => {
+      onSelection({
+        payload: {
+          text: '周五下班前能交付这版方案吗？',
+          sourceApp: 'WeChat.exe',
+          windowTitle: '微信',
+          trigger: 'shortcut',
+        },
+      });
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+    const shortcutSignature = replySignature();
+    expect(shortcutSignature.activeTab).toBe('回复');
+    expect(shortcutSignature.hasInstructionInput).toBe(true);
+    expect(shortcutSignature.clarifyChips).toBeGreaterThanOrEqual(1);
+    expect(shortcutSignature.hasScriptLibraryButton).toBe(true);
+
+    // 2. Selection capsule click path (clicking Sparkles or clicking capsule body)
+    await act(async () => {
+      onSelection({
+        payload: {
+          text: '周五下班前能交付这版方案吗？',
+          sourceApp: 'WeChat.exe',
+          windowTitle: '微信',
+          trigger: 'selection',
+          capsule: true,
+        },
+      });
+      await Promise.resolve();
+    });
+
+    const capsuleSparkleButton = host.querySelector('button[aria-label="润色选中文本"]') as HTMLButtonElement;
+    expect(capsuleSparkleButton).not.toBeNull();
+    await act(async () => {
+      capsuleSparkleButton.click();
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+
+    const capsuleSignature = replySignature();
+    expect(capsuleSignature).toEqual(shortcutSignature);
+  });
+
+  it('clears stale screen-reply context before a capsule translation', async () => {
+    await act(async () => {
+      root.render(<App />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const onSelection = eventMocks.listeners.get('runbi://captured-selection')!;
+    await act(async () => {
+      onSelection({
+        payload: {
+          text: '',
+          sourceApp: 'WeChat.exe',
+          windowTitle: '微信',
+          trigger: 'screen-reply',
+          hasScreenshot: true,
+        },
+      });
+      await vi.advanceTimersByTimeAsync(800);
+    });
+    expect(host.textContent).toContain('已感知聊天上下文');
+
+    await act(async () => {
+      onSelection({
+        payload: {
+          text: '需要翻译的新选区',
+          sourceApp: 'WeChat.exe',
+          windowTitle: '微信',
+          trigger: 'selection',
+          capsule: true,
+          generation: 1,
+        },
+      });
+      await Promise.resolve();
+    });
+    await act(async () => {
+      (host.querySelector('button[aria-label="翻译选中文本"]') as HTMLButtonElement).click();
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+
+    expect(host.querySelector('[data-testid="translate-bar"]')).not.toBeNull();
+    expect(host.textContent).not.toContain('已感知聊天上下文');
   });
 
   it('sends a generated reply instead of only pasting it', async () => {
@@ -160,7 +448,7 @@ describe('Desktop selection-to-polish flow', () => {
     });
 
     const sendButton = Array.from(host.querySelectorAll('button')).find((button) =>
-      button.textContent?.includes('发送至微信')
+      button.textContent?.trim() === '发送' || button.textContent?.includes('发送')
     ) as HTMLButtonElement;
     expect(sendButton).toBeDefined();
 
@@ -199,9 +487,16 @@ describe('Desktop selection-to-polish flow', () => {
     }));
     let finishPosition!: () => void;
     const invoke = (window as any).__TAURI_INTERNALS__.invoke;
-    invoke.mockImplementation((command: string) => command === 'position_window_at_cursor'
-      ? new Promise<void>((resolve) => { finishPosition = resolve; })
-      : Promise.resolve(null));
+    invoke.mockImplementation((command: string, args?: any) => {
+      if (command === 'position_window_at_cursor') {
+        return new Promise<void>((resolve) => { finishPosition = resolve; });
+      }
+      if (command === 'plugin:event|emit_to') {
+        const { event, payload } = args ?? {};
+        eventMocks.listeners.get(event)?.({ payload });
+      }
+      return Promise.resolve(null);
+    });
     const translate = host.querySelector('button[aria-label="翻译选中文本"]') as HTMLButtonElement;
     const polish = host.querySelector('button[aria-label="润色选中文本"]') as HTMLButtonElement;
     await act(async () => {
@@ -259,14 +554,82 @@ describe('Desktop selection-to-polish flow', () => {
     }));
     let finishPosition!: () => void;
     const invoke = (window as any).__TAURI_INTERNALS__.invoke;
-    invoke.mockImplementation((command: string) => command === 'position_window_at_cursor'
-      ? new Promise<void>((resolve) => { finishPosition = resolve; })
-      : Promise.resolve(null));
+    invoke.mockImplementation((command: string, args?: any) => {
+      if (command === 'position_window_at_cursor') {
+        return new Promise<void>((resolve) => { finishPosition = resolve; });
+      }
+      if (command === 'plugin:event|emit_to') {
+        const { event, payload } = args ?? {};
+        eventMocks.listeners.get(event)?.({ payload });
+      }
+      return Promise.resolve(null);
+    });
     await act(async () => (host.querySelector('button[aria-label="翻译选中文本"]') as HTMLButtonElement).click());
     await act(async () => eventMocks.listeners.get('runbi://selection-invalidated')!({ payload: 2 }));
     expect(invoke.mock.calls.some(([command]: [string]) => command === 'hide_capsule_window')).toBe(false);
+    await act(async () => {
+      finishPosition();
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+    expect(host.querySelector('[data-testid="translate-bar"]')).not.toBeNull();
+  });
+
+  it('does not let a late selection event overwrite capsule translation while restoring the panel', async () => {
+    await act(async () => root.render(<App />));
+    const select = eventMocks.listeners.get('runbi://captured-selection')!;
+    await act(async () => select({
+      payload: { text: '胶囊翻译原文', trigger: 'selection', generation: 1 },
+    }));
+
+    let finishPosition!: () => void;
+    const invoke = (window as any).__TAURI_INTERNALS__.invoke;
+    invoke.mockImplementation((command: string) => command === 'position_window_at_cursor'
+      ? new Promise<void>((resolve) => { finishPosition = resolve; })
+      : Promise.resolve(null));
+
+    await act(async () => {
+      (host.querySelector('button[aria-label="翻译选中文本"]') as HTMLButtonElement).click();
+      select({ payload: { text: '迟到的旧选区', trigger: 'shortcut' } });
+    });
+
+    await act(async () => {
+      finishPosition();
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+    expect(host.querySelector('[data-testid="translate-bar"]')).not.toBeNull();
+    expect(host.textContent).toContain('胶囊翻译原文');
+    expect(host.textContent).not.toContain('迟到的旧选区');
+  });
+
+  it('ignores the same selection when its capture arrives after capsule expansion commits', async () => {
+    await act(async () => root.render(<App />));
+    const select = eventMocks.listeners.get('runbi://captured-selection')!;
+    await act(async () => select({
+      payload: { text: '复原后才到达的旧选区', trigger: 'selection', generation: 11 },
+    }));
+
+    let finishPosition!: () => void;
+    const invoke = (window as any).__TAURI_INTERNALS__.invoke;
+    invoke.mockImplementation((command: string) => command === 'position_window_at_cursor'
+      ? new Promise<void>((resolve) => { finishPosition = resolve; })
+      : Promise.resolve(null));
+
+    await act(async () => {
+      (host.querySelector('button[aria-label="翻译选中文本"]') as HTMLButtonElement).click();
+    });
     await act(async () => finishPosition());
     expect(host.querySelector('[data-testid="translate-bar"]')).not.toBeNull();
+
+    await act(async () => select({
+      payload: {
+        text: '复原后才到达的旧选区',
+        trigger: 'selection',
+        capsule: true,
+        generation: 11,
+      },
+    }));
+    expect(host.querySelector('[data-testid="translate-bar"]')).not.toBeNull();
+    expect(host.querySelector('[role="toolbar"]')).toBeNull();
   });
 
   it('keeps a newer capsule when an older native hide completes late', async () => {

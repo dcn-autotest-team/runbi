@@ -2,7 +2,7 @@
 //! Listens for mouse drag-selection or double-click text selection across all desktop applications
 //! (similar to Doubao / Cherry Studio / PopClip / Bob), captures selected text, and pops up Runbi.
 
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicIsize, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicIsize, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
@@ -33,10 +33,279 @@ pub static SELECTION_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 const NO_CAPSULE: u64 = u64::MAX;
 const OUTSIDE_DISMISS_GRACE_MS: u64 = 180;
+const CAPSULE_CLICK_DISMISS_DELAY_MS: u64 = 700;
+const INTERNAL_KEYBOARD_GRACE_ACTIVE_MS: u64 = 500;
+const INTERNAL_KEYBOARD_GRACE_RELEASE_MS: u64 = 220;
 pub static CAPSULE_GENERATION: AtomicU64 = AtomicU64::new(NO_CAPSULE);
+
+#[cfg(windows)]
+static INTERNAL_KEYBOARD_GRACE_UNTIL_MS: AtomicU64 = AtomicU64::new(0);
+#[cfg(windows)]
+static PENDING_SELECTION_CAPTURES: AtomicUsize = AtomicUsize::new(0);
+#[cfg(windows)]
+static CAPSULE_LEFT: AtomicI32 = AtomicI32::new(0);
+#[cfg(windows)]
+static CAPSULE_TOP: AtomicI32 = AtomicI32::new(0);
+#[cfg(windows)]
+static CAPSULE_WIDTH: AtomicI32 = AtomicI32::new(0);
+#[cfg(windows)]
+static CAPSULE_HEIGHT: AtomicI32 = AtomicI32::new(0);
 
 pub fn leave_capsule_mode() {
     CAPSULE_GENERATION.store(NO_CAPSULE, Ordering::SeqCst);
+    clear_capsule_bounds();
+}
+
+#[cfg(windows)]
+pub fn set_capsule_bounds(bounds: Option<(i32, i32, i32, i32)>) {
+    let (left, top, width, height) = bounds.unwrap_or((0, 0, 0, 0));
+    CAPSULE_LEFT.store(left, Ordering::Relaxed);
+    CAPSULE_TOP.store(top, Ordering::Relaxed);
+    CAPSULE_WIDTH.store(width.max(0), Ordering::Relaxed);
+    CAPSULE_HEIGHT.store(height.max(0), Ordering::Relaxed);
+}
+
+#[cfg(not(windows))]
+pub fn set_capsule_bounds(_bounds: Option<(i32, i32, i32, i32)>) {}
+
+#[cfg(windows)]
+fn clear_capsule_bounds() {
+    set_capsule_bounds(None);
+}
+
+#[cfg(not(windows))]
+fn clear_capsule_bounds() {}
+
+#[cfg(windows)]
+unsafe fn current_capsule_bounds() -> Option<(i32, i32, i32, i32)> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowRect;
+
+    let hwnd = RUNBI_WINDOW_HANDLE.load(Ordering::SeqCst)
+        as windows_sys::Win32::Foundation::HWND;
+    if hwnd.is_null() {
+        return None;
+    }
+    let mut rect = std::mem::zeroed::<windows_sys::Win32::Foundation::RECT>();
+    if GetWindowRect(hwnd, &mut rect) == 0 {
+        return None;
+    }
+    let width = rect.right.saturating_sub(rect.left);
+    let height = rect.bottom.saturating_sub(rect.top);
+    (is_capsule_rect(width, height))
+        .then_some((rect.left, rect.top, width, height))
+}
+
+#[cfg(windows)]
+fn is_capsule_rect(width: i32, height: i32) -> bool {
+    // Exclude the 18x18 Tauri helper HWND and the restored panel. The lower
+    // bound also prevents an unrelated tiny child window from becoming an
+    // action target during a capsule click.
+    (100..=500).contains(&width) && (20..=160).contains(&height)
+}
+
+#[cfg(windows)]
+fn stored_capsule_bounds() -> (i32, i32, i32, i32) {
+    (
+        CAPSULE_LEFT.load(Ordering::Relaxed),
+        CAPSULE_TOP.load(Ordering::Relaxed),
+        CAPSULE_WIDTH.load(Ordering::Relaxed),
+        CAPSULE_HEIGHT.load(Ordering::Relaxed),
+    )
+}
+
+#[cfg(windows)]
+fn capsule_bounds_for_pointer() -> (i32, i32, i32, i32) {
+    // The host rect is authoritative after show/activation; the stored rect
+    // is only a fallback for the short interval before Win32 exposes it.
+    unsafe { current_capsule_bounds() }.unwrap_or_else(stored_capsule_bounds)
+}
+
+#[cfg(windows)]
+unsafe fn capsule_bounds_at_point(
+    pt: windows_sys::Win32::Foundation::POINT,
+) -> Option<(i32, i32, i32, i32)> {
+    use windows_sys::Win32::Foundation::{BOOL, LPARAM};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetParent, GetWindow, GetWindowRect, GetWindowThreadProcessId,
+        WindowFromPoint, GW_OWNER,
+    };
+
+    let contains = |rect: &windows_sys::Win32::Foundation::RECT| {
+        pt.x >= rect.left
+            && pt.x < rect.right
+            && pt.y >= rect.top
+            && pt.y < rect.bottom
+    };
+    let as_capsule = |rect: windows_sys::Win32::Foundation::RECT| {
+        let width = rect.right.saturating_sub(rect.left);
+        let height = rect.bottom.saturating_sub(rect.top);
+        (is_capsule_rect(width, height) && contains(&rect))
+            .then_some((rect.left, rect.top, width, height))
+    };
+
+    // The host rectangle is authoritative. The window manager can move or
+    // resize it after the positioning command returns (DPI/frame activation),
+    // so never let an older cached rectangle win a hit test.
+    if let Some((left, top, width, height)) = current_capsule_bounds() {
+        if pt.x >= left
+            && pt.x < left.saturating_add(width)
+            && pt.y >= top
+            && pt.y < top.saturating_add(height)
+        {
+            return Some((left, top, width, height));
+        }
+    }
+
+    // Fallback for the short interval before GetWindowRect exposes the new
+    // visible rectangle.
+    let (stored_left, stored_top, stored_width, stored_height) = stored_capsule_bounds();
+    if is_capsule_rect(stored_width, stored_height)
+        && pt.x >= stored_left
+        && pt.x < stored_left.saturating_add(stored_width)
+        && pt.y >= stored_top
+        && pt.y < stored_top.saturating_add(stored_height)
+    {
+        return Some((stored_left, stored_top, stored_width, stored_height));
+    }
+
+    // WindowFromPoint may return the WebView2 child rather than the Tauri
+    // host. Walk parent/owner links and use the first capsule-sized rectangle
+    // that actually contains the pointer.
+    let mut hwnd = WindowFromPoint(pt);
+    for _ in 0..16 {
+        if hwnd.is_null() {
+            break;
+        }
+        let mut rect = std::mem::zeroed::<windows_sys::Win32::Foundation::RECT>();
+        if GetWindowRect(hwnd, &mut rect) != 0 {
+            if let Some(bounds) = as_capsule(rect) {
+                return Some(bounds);
+            }
+        }
+        let parent = GetParent(hwnd);
+        let owner = GetWindow(hwnd, GW_OWNER);
+        hwnd = if !parent.is_null() {
+            parent
+        } else if !owner.is_null() {
+            owner
+        } else {
+            break;
+        };
+    }
+
+    // A WebView2 resize can briefly leave the hit-test child disconnected from
+    // the host's parent chain. Look for this process's real capsule-sized top-
+    // level window as a last native fallback.
+    struct Hit {
+        point: windows_sys::Win32::Foundation::POINT,
+        bounds: Option<(i32, i32, i32, i32)>,
+    }
+    unsafe extern "system" fn visit(
+        hwnd: windows_sys::Win32::Foundation::HWND,
+        lparam: LPARAM,
+    ) -> BOOL {
+        let hit = &mut *(lparam as *mut Hit);
+        let mut pid = 0;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if pid != std::process::id() {
+            return 1;
+        }
+        let mut rect = std::mem::zeroed::<windows_sys::Win32::Foundation::RECT>();
+        if GetWindowRect(hwnd, &mut rect) == 0 {
+            return 1;
+        }
+        let width = rect.right.saturating_sub(rect.left);
+        let height = rect.bottom.saturating_sub(rect.top);
+        if is_capsule_rect(width, height)
+            && hit.point.x >= rect.left
+            && hit.point.x < rect.right
+            && hit.point.y >= rect.top
+            && hit.point.y < rect.bottom
+        {
+            hit.bounds = Some((rect.left, rect.top, width, height));
+            return 0;
+        }
+        1
+    }
+    let mut hit = Hit {
+        point: pt,
+        bounds: None,
+    };
+    EnumWindows(Some(visit), &mut hit as *mut Hit as LPARAM);
+    hit.bounds
+}
+
+#[cfg(windows)]
+fn point_inside_capsule_bounds(pt: windows_sys::Win32::Foundation::POINT) -> bool {
+    unsafe { capsule_bounds_at_point(pt).is_some() }
+}
+
+#[cfg(windows)]
+fn capsule_action_for_geometry(x: i32, left: i32, width: i32) -> Option<&'static str> {
+    if width <= 0 || x < left || x >= left.saturating_add(width) {
+        return None;
+    }
+    let index = (((i64::from(x) - i64::from(left)) * 5) / i64::from(width)) as usize;
+    Some(match index {
+        0 => "search",
+        1 => "polish",
+        2 => "reply",
+        3 => "translate",
+        4 => "copy",
+        _ => return None,
+    })
+}
+
+#[cfg(windows)]
+fn capsule_action_for_point(pt: windows_sys::Win32::Foundation::POINT) -> Option<&'static str> {
+    let (left, _top, width, _height) = unsafe { capsule_bounds_at_point(pt) }?;
+    capsule_action_for_geometry(pt.x, left, width)
+}
+
+#[cfg(windows)]
+fn emit_capsule_action(action: &'static str, generation: u64) {
+    if let Some((_, app)) = MONITOR_STATE.get() {
+        let app_handle = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            crate::commands::file_log(
+                &app_handle,
+                &format!("native capsule action: action={action} generation={generation}"),
+            );
+            let _ = app_handle.emit(
+                "runbi://capsule-action",
+                serde_json::json!({ "action": action, "generation": generation }),
+            );
+        });
+    }
+}
+
+/// SendInput keyboard notifications can arrive after the caller has already
+/// cleared its internal-action flag. Keep keyboard invalidation suppressed for
+/// that short delivery tail, otherwise simulated Ctrl+C cancels the selection
+/// it was meant to capture.
+pub fn note_internal_keyboard_activity(active: bool) {
+    #[cfg(windows)]
+    {
+        let duration = if active {
+            INTERNAL_KEYBOARD_GRACE_ACTIVE_MS
+        } else {
+            INTERNAL_KEYBOARD_GRACE_RELEASE_MS
+        };
+        let until = current_time_ms().saturating_add(duration);
+        INTERNAL_KEYBOARD_GRACE_UNTIL_MS.fetch_max(until, Ordering::Relaxed);
+    }
+    #[cfg(not(windows))]
+    let _ = active;
+}
+
+#[cfg(windows)]
+struct PendingSelectionCaptureGuard;
+
+#[cfg(windows)]
+impl Drop for PendingSelectionCaptureGuard {
+    fn drop(&mut self) {
+        PENDING_SELECTION_CAPTURES.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 #[cfg(windows)]
@@ -63,6 +332,7 @@ pub fn dismiss_native_capsule(
             CAPSULE_GENERATION.store(generation, Ordering::SeqCst);
             return Err(error.to_string());
         }
+        clear_capsule_bounds();
     }
     Ok(())
 }
@@ -122,6 +392,24 @@ pub fn show_native_capsule(window: &tauri::WebviewWindow, generation: u64) -> Re
         let _ = window.hide();
         let _ = crate::commands::position::restore_panel_window(window);
         return Ok(false);
+    }
+    // The transparent host can receive a final DPI/frame adjustment during
+    // show/unminimize. Refresh the hit rectangle only after that adjustment;
+    // the pre-show geometry is not authoritative for mouse-hook hit testing.
+    if let (Ok(position), Ok(size)) = (window.outer_position(), window.outer_size()) {
+        crate::commands::mouse_hook::set_capsule_bounds(Some((
+            position.x,
+            position.y,
+            size.width as i32,
+            size.height as i32,
+        )));
+        crate::commands::file_log(
+            window.app_handle(),
+            &format!(
+                "capsule bounds shown: actual=({}, {}) size={}x{}",
+                position.x, position.y, size.width, size.height
+            ),
+        );
     }
     crate::commands::file_log(window.app_handle(), &format!("capsule shown: generation={generation}"));
     Ok(true)
@@ -246,6 +534,49 @@ fn outside_dismiss_blocks_capture(dragged: bool, now: u64, until_ms: u64) -> boo
 fn dismissal_suppresses_selection(now: u64, suppress_until_ms: u64) -> bool {
     suppress_until_ms != 0 && now < suppress_until_ms
 }
+
+fn should_defer_capsule_dismissal(capsule_active: bool, outside: bool, dragged: bool) -> bool {
+    capsule_active && outside && !dragged
+}
+
+fn should_invalidate_keyboard(
+    injected: bool,
+    capsule_active: bool,
+    modifier: bool,
+    inside_runbi: bool,
+    internal_action: bool,
+) -> bool {
+    !injected && !capsule_active && !modifier && !inside_runbi && !internal_action
+}
+
+#[cfg(windows)]
+fn schedule_capsule_click_dismissal(generation: u64) {
+    // The low-level hook can misidentify a WebView2 child HWND as external.
+    // Give the DOM pointer/mouse handlers enough time to clear the capsule
+    // generation before treating the release as a real outside click.
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(CAPSULE_CLICK_DISMISS_DELAY_MS));
+        if CAPSULE_GENERATION
+            .compare_exchange(
+                generation,
+                NO_CAPSULE,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_err()
+        {
+            return;
+        }
+        unsafe { hide_runbi_window_now(); }
+        let invalidated_generation = invalidate_selection("outside-pointer-up");
+        OUTSIDE_DISMISS_UNTIL_MS.store(
+            current_time_ms().saturating_add(OUTSIDE_DISMISS_GRACE_MS),
+            Ordering::Relaxed,
+        );
+        OUTSIDE_DISMISS_GENERATION.store(invalidated_generation, Ordering::SeqCst);
+        OUTSIDE_DISMISS_LOCKED.store(true, Ordering::SeqCst);
+    });
+}
 /// 同一选区 2s 内只允许一次 position+emit:钩子/复制/剪贴板三路监听会对同一条
 /// 文本各自开任务,并发 set_size/set_always_on_top 同一窗口曾触发堆破坏
 /// (0xc0000374,WER 8/28 三份 release 报告同码),这里是硬闸。
@@ -345,6 +676,10 @@ fn invalidate_selection(reason: &'static str) -> u64 {
         let started = std::time::Instant::now();
         // Never call blocking window operations from a low-level hook.
         let _ = app.run_on_main_thread(move || {
+                crate::commands::file_log(
+                    &app_handle,
+                    &format!("selection invalidated: reason={reason} generation={generation}"),
+                );
                 let active = CAPSULE_GENERATION.load(Ordering::SeqCst);
                 if active < generation {
                     if let Some(window) = app_handle.get_webview_window("main") {
@@ -390,11 +725,37 @@ unsafe extern "system" fn low_level_keyboard_proc(
         // Ignore injected Ctrl+C and bare modifiers; the source app owns focus
         // while the capsule is visible, so DOM keydown/blur cannot observe these.
         let modifier = matches!(event.vkCode, 0x10..=0x12 | 0x5B..=0x5C | 0xA0..=0xA5);
-        if event.flags & LLKHF_INJECTED == 0
-            && CAPSULE_GENERATION.load(Ordering::SeqCst) == NO_CAPSULE
-            && !modifier
-            && !is_runbi_window(GetForegroundWindow())
-        {
+        let internal_action = MONITOR_STATE
+            .get()
+            .map(|(state, _)| state.is_internal_action.load(Ordering::Relaxed))
+            .unwrap_or(false);
+        let internal_keyboard_grace = {
+            #[cfg(windows)]
+            {
+                current_time_ms() < INTERNAL_KEYBOARD_GRACE_UNTIL_MS.load(Ordering::Relaxed)
+            }
+            #[cfg(not(windows))]
+            {
+                false
+            }
+        };
+        let selection_capture_pending = {
+            #[cfg(windows)]
+            {
+                PENDING_SELECTION_CAPTURES.load(Ordering::Relaxed) != 0
+            }
+            #[cfg(not(windows))]
+            {
+                false
+            }
+        };
+        if should_invalidate_keyboard(
+            event.flags & LLKHF_INJECTED != 0,
+            CAPSULE_GENERATION.load(Ordering::SeqCst) != NO_CAPSULE,
+            modifier,
+            is_runbi_window(GetForegroundWindow()),
+            internal_action || internal_keyboard_grace || selection_capture_pending,
+        ) {
             clear_outside_dismissal();
             invalidate_selection("keyboard");
         }
@@ -423,12 +784,15 @@ unsafe extern "system" fn low_level_mouse_proc(
             if let Some((_, app)) = MONITOR_STATE.get() {
                 let active = CAPSULE_GENERATION.load(Ordering::SeqCst);
                 let injected = hook_struct.flags & LLMHF_INJECTED != 0;
-                let inside = is_runbi_window(WindowFromPoint(pt));
+                let inside = point_inside_capsule_bounds(pt)
+                    || is_runbi_window(WindowFromPoint(pt));
+                let (left, top, width, height) = capsule_bounds_for_pointer();
                 let app_handle = app.clone();
                 // File IO stays off the low-level hook thread.
                 let _ = app.run_on_main_thread(move || {
                     crate::commands::file_log(&app_handle, &format!(
-                        "capsule pointer-down: active={active} inside={inside} injected={injected}"
+                        "capsule pointer-down: active={active} pt=({}, {}) bounds=({}, {}, {}x{}) inside={inside} injected={injected}",
+                        pt.x, pt.y, left, top, width, height
                     ));
                 });
             }
@@ -442,12 +806,15 @@ unsafe extern "system" fn low_level_mouse_proc(
             // the selection, independently of whether its release selects text.
             let capsule_active = CAPSULE_GENERATION.load(Ordering::SeqCst) != NO_CAPSULE;
             let capsule_visible = capsule_active || visible_capsule_window();
+            let capsule_hit = capsule_active && point_inside_capsule_bounds(pt);
             let outside_runbi = if capsule_visible {
                 // WebView2 can deliver the hit to a child HWND while the
                 // capsule geometry belongs to the Tauri host. Treat either
                 // representation as an internal click so copy/action buttons
                 // are not dismissed before their DOM handler runs.
-                !(point_inside_runbi_window(pt) || is_runbi_window(WindowFromPoint(pt)))
+                !(capsule_hit
+                    || point_inside_runbi_window(pt)
+                    || is_runbi_window(WindowFromPoint(pt)))
             } else {
                 !is_runbi_window(WindowFromPoint(pt))
             };
@@ -466,6 +833,9 @@ unsafe extern "system" fn low_level_mouse_proc(
                 }
             }
             if w_param == WM_LBUTTONDOWN as usize {
+                if capsule_hit {
+                    DOWN_STARTED_INSIDE_CAPSULE.store(true, Ordering::Relaxed);
+                }
                 // If the user switched to another app while the Runbi panel stayed
                 // open, the low-level hook still sees that app as foreground before
                 // Windows focuses the clicked Runbi button. Keep paste/send aimed at
@@ -473,7 +843,11 @@ unsafe extern "system" fn low_level_mouse_proc(
                 if !outside_runbi {
                     crate::commands::input::remember_foreground_window();
                 }
-                if capsule_visible && outside_runbi {
+                // Defer dismissal while a capsule is active. The hook sees
+                // mouse-down before the WebView can deliver the button's DOM
+                // click; hiding here can swallow the action on DPI/WebView
+                // combinations where the hit-test briefly misses the host.
+                if capsule_visible && outside_runbi && !capsule_active {
                     // A blank click dismisses the current capsule. Give any
                     // already queued clipboard/UIA capture a short grace
                     // period so it cannot resurrect the same capsule.
@@ -494,7 +868,7 @@ unsafe extern "system" fn low_level_mouse_proc(
                     Ordering::Relaxed,
                 );
             }
-            if outside_runbi {
+            if outside_runbi && !capsule_active {
                 let invalidated_generation = invalidate_selection("outside-pointer-down");
                 if capsule_visible {
                     OUTSIDE_DISMISS_GENERATION.store(invalidated_generation, Ordering::SeqCst);
@@ -505,22 +879,43 @@ unsafe extern "system" fn low_level_mouse_proc(
         // Fallback for environments that deliver the release without the
         // corresponding low-level press: an outside release still closes the
         // visible capsule and must not become a new selection.
-        let inside_runbi_window = point_inside_runbi_window(pt)
+        let inside_runbi_window = point_inside_capsule_bounds(pt)
+            || point_inside_runbi_window(pt)
             || is_runbi_window(WindowFromPoint(pt));
         if w_param == WM_LBUTTONUP as usize
             && CAPSULE_GENERATION.load(Ordering::SeqCst) != NO_CAPSULE
             && !inside_runbi_window
         {
-            CAPSULE_GENERATION.store(NO_CAPSULE, Ordering::SeqCst);
-            OUTSIDE_DISMISS_UNTIL_MS.store(
-                now.saturating_add(OUTSIDE_DISMISS_GRACE_MS),
-                Ordering::Relaxed,
-            );
-            hide_runbi_window_now();
-            let invalidated_generation = invalidate_selection("outside-pointer-up");
-            OUTSIDE_DISMISS_GENERATION.store(invalidated_generation, Ordering::SeqCst);
-            OUTSIDE_DISMISS_LOCKED.store(true, Ordering::SeqCst);
-            DOWN_STARTED_INSIDE_CAPSULE.store(false, Ordering::Relaxed);
+            let active_generation = CAPSULE_GENERATION.load(Ordering::SeqCst);
+            let down_x = LAST_DOWN_X.load(Ordering::Relaxed);
+            let down_y = LAST_DOWN_Y.load(Ordering::Relaxed);
+            let dx = i64::from(pt.x) - i64::from(down_x);
+            let dy = i64::from(pt.y) - i64::from(down_y);
+            let dragged = dx * dx + dy * dy >= 16;
+            if should_defer_capsule_dismissal(true, true, dragged) {
+                // Prevent the ordinary click from becoming a double-click
+                // selection while the delayed dismissal is pending.
+                OUTSIDE_DISMISS_UNTIL_MS.store(
+                    now.saturating_add(OUTSIDE_DISMISS_GRACE_MS),
+                    Ordering::Relaxed,
+                );
+                DISMISS_NEXT_SELECTION_UNTIL_MS.store(
+                    now.saturating_add(500),
+                    Ordering::Relaxed,
+                );
+                schedule_capsule_click_dismissal(active_generation);
+            } else {
+                CAPSULE_GENERATION.store(NO_CAPSULE, Ordering::SeqCst);
+                OUTSIDE_DISMISS_UNTIL_MS.store(
+                    now.saturating_add(OUTSIDE_DISMISS_GRACE_MS),
+                    Ordering::Relaxed,
+                );
+                hide_runbi_window_now();
+                let invalidated_generation = invalidate_selection("outside-pointer-up");
+                OUTSIDE_DISMISS_GENERATION.store(invalidated_generation, Ordering::SeqCst);
+                OUTSIDE_DISMISS_LOCKED.store(true, Ordering::SeqCst);
+                DOWN_STARTED_INSIDE_CAPSULE.store(false, Ordering::Relaxed);
+            }
         }
 
         // Outside clicks dismiss even when generated by accessibility/remote
@@ -586,12 +981,25 @@ unsafe extern "system" fn low_level_mouse_proc(
                 }
             }
             let is_selection_gesture = candidate_selection && !dismiss_suppressed;
+
+            // Do not resize the native window from WM_LBUTTONDOWN: WebView2
+            // still needs that press to finish its click. Emit one native
+            // action after the release instead, using the original button
+            // position so a tiny pointer drift cannot select another action.
+            if started_inside_capsule && !dragged {
+                if let Some(action) = capsule_action_for_point(windows_sys::Win32::Foundation::POINT {
+                    x: down_x,
+                    y: down_y,
+                }) {
+                    emit_capsule_action(action, CAPSULE_GENERATION.load(Ordering::SeqCst));
+                }
+            }
             if let Some((_, app)) = MONITOR_STATE.get() {
                 let app_handle = app.clone();
                 let _ = app.run_on_main_thread(move || {
                     crate::commands::file_log(&app_handle, &format!(
-                        "selection pointer-up: dragged={dragged} suppress={} dismiss_suppressed={dismiss_suppressed} gesture={is_selection_gesture}",
-                        started_inside_capsule
+                        "selection pointer-up: pt=({}, {}) down=({}, {}) dragged={dragged} started_inside_capsule={started_inside_capsule} candidate={candidate_selection} dismiss_suppressed={dismiss_suppressed} gesture={is_selection_gesture}",
+                        pt.x, pt.y, down_x, down_y,
                     ));
                 });
             }
@@ -609,13 +1017,28 @@ unsafe extern "system" fn low_level_mouse_proc(
                         let generation = SELECTION_GENERATION.load(Ordering::SeqCst);
 
                         // Trigger grab asynchronously
+                        #[cfg(windows)]
+                        PENDING_SELECTION_CAPTURES.fetch_add(1, Ordering::Relaxed);
                         tauri::async_runtime::spawn(async move {
+                            #[cfg(windows)]
+                            let _pending_capture = PendingSelectionCaptureGuard;
                             // The low-level hook sees mouse-up before the target control does.
                             // Let it commit the selection before sending Ctrl+C.
                             tokio::time::sleep(Duration::from_millis(30)).await;
                             if generation != SELECTION_GENERATION.load(Ordering::SeqCst)
                                 || !should_handle_selection(&state_clone)
                             {
+                                crate::commands::file_log(
+                                    &app,
+                                    &format!(
+                                        "selection capture canceled before grab: generation={} current={} enabled={} auto_popup={} internal={}",
+                                        generation,
+                                        SELECTION_GENERATION.load(Ordering::SeqCst),
+                                        state_clone.enabled.load(Ordering::Relaxed),
+                                        state_clone.auto_popup.load(Ordering::Relaxed),
+                                        state_clone.is_internal_action.load(Ordering::Relaxed),
+                                    ),
+                                );
                                 return;
                             }
 
@@ -630,6 +1053,10 @@ unsafe extern "system" fn low_level_mouse_proc(
                                             && pt.y >= win_pos.y
                                             && pt.y <= win_pos.y + win_size.height as i32
                                         {
+                                            crate::commands::file_log(
+                                                &app,
+                                                "selection capture skipped: pointer still inside Runbi window",
+                                            );
                                             return; // Clicked inside Runbi UI, don't grab
                                         }
                                     }
@@ -667,11 +1094,23 @@ unsafe extern "system" fn low_level_mouse_proc(
                                     Some(t) => t,
                                     None => {
                                         eprintln!("[Runbi] selection dropped: grab returned none");
+                                        crate::commands::file_log(
+                                            &app,
+                                            "selection dropped: grab returned none",
+                                        );
                                         return;
                                     }
                                 };
 
                             if generation != SELECTION_GENERATION.load(Ordering::SeqCst) {
+                                crate::commands::file_log(
+                                    &app,
+                                    &format!(
+                                        "selection capture canceled after grab: generation={} current={}",
+                                        generation,
+                                        SELECTION_GENERATION.load(Ordering::SeqCst),
+                                    ),
+                                );
                                 return;
                             }
                             if outside_dismiss_blocks_capture(
@@ -695,6 +1134,10 @@ unsafe extern "system" fn low_level_mouse_proc(
                                 eprintln!(
                                     "[Runbi] selection dropped: empty/sensitive/oversize len={}",
                                     trimmed.len()
+                                );
+                                crate::commands::file_log(
+                                    &app,
+                                    &format!("selection dropped: empty/sensitive/oversize len={}", trimmed.len()),
                                 );
                                 return;
                             }
@@ -733,16 +1176,12 @@ unsafe extern "system" fn low_level_mouse_proc(
                                         );
                                         return;
                                     }
-                                    // Serialize show/emit with invalidation delivery on the
-                                    // main thread; an already-cancelled capture must not show.
                                     let _ = app.run_on_main_thread(move || {
                                         if !show_native_capsule(&window, generation)
                                             .unwrap_or(false)
                                         {
                                             return;
                                         }
-                                        // Keep focus and the selection in the source app. The
-                                        // toolbar becomes active only when an action is clicked.
                                         let _ = window.emit(
                                             "runbi://captured-selection",
                                             serde_json::json!({
@@ -757,6 +1196,15 @@ unsafe extern "system" fn low_level_mouse_proc(
                                         );
                                     });
                                 }
+                            } else {
+                                crate::commands::file_log(
+                                    &app,
+                                    &format!(
+                                        "selection popup skipped: should_popup={} text_len={}",
+                                        should_popup,
+                                        trimmed.len(),
+                                    ),
+                                );
                             }
                         });
                     }
@@ -892,6 +1340,54 @@ mod tests {
             assert!(!take_capsule(&active, generation + 1));
             assert!(!take_capsule(&active, NO_CAPSULE));
         }
+    }
+
+    #[test]
+    fn capsule_button_click_is_deferred_but_drag_dismissal_is_immediate() {
+        use super::should_defer_capsule_dismissal;
+
+        assert!(should_defer_capsule_dismissal(true, true, false));
+        assert!(!should_defer_capsule_dismissal(true, true, true));
+        assert!(!should_defer_capsule_dismissal(false, true, false));
+        assert!(!should_defer_capsule_dismissal(true, false, false));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_capsule_action_mapping_matches_left_to_right_buttons() {
+        use super::capsule_action_for_geometry;
+
+        assert_eq!(capsule_action_for_geometry(100, 100, 200), Some("search"));
+        assert_eq!(capsule_action_for_geometry(139, 100, 200), Some("search"));
+        assert_eq!(capsule_action_for_geometry(140, 100, 200), Some("polish"));
+        assert_eq!(capsule_action_for_geometry(179, 100, 200), Some("polish"));
+        assert_eq!(capsule_action_for_geometry(180, 100, 200), Some("reply"));
+        assert_eq!(capsule_action_for_geometry(220, 100, 200), Some("translate"));
+        assert_eq!(capsule_action_for_geometry(259, 100, 200), Some("translate"));
+        assert_eq!(capsule_action_for_geometry(260, 100, 200), Some("copy"));
+        assert_eq!(capsule_action_for_geometry(299, 100, 200), Some("copy"));
+        assert_eq!(capsule_action_for_geometry(300, 100, 0), None);
+        assert_eq!(capsule_action_for_geometry(99, 100, 200), None);
+        assert_eq!(capsule_action_for_geometry(300, 100, 200), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn capsule_rect_filter_excludes_helper_and_restored_panel() {
+        use super::is_capsule_rect;
+
+        assert!(!is_capsule_rect(18, 18));
+        assert!(!is_capsule_rect(560, 520));
+        assert!(is_capsule_rect(235, 53));
+    }
+
+    #[test]
+    fn internal_keyboard_injection_does_not_cancel_selection_capture() {
+        use super::should_invalidate_keyboard;
+
+        assert!(!should_invalidate_keyboard(false, false, false, false, true));
+        assert!(!should_invalidate_keyboard(true, false, false, false, false));
+        assert!(should_invalidate_keyboard(false, false, false, false, false));
     }
 
     #[test]

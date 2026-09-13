@@ -8,9 +8,10 @@ import { describe, it, expect } from 'vitest';
 import { buildBrowserSearchUrl, shouldShowCapsule } from '../../desktop/src/components/SelectionCapsule';
 
 describe('SelectionCapsule routing (微胶囊分流)', () => {
-  it('routes selection and clipboard events to the capsule regardless of advisory flags', () => {
+  it('routes selection and clipboard events to capsule unless capsule is explicitly false', () => {
+    expect(shouldShowCapsule({ trigger: 'selection', capsule: false })).toBe(false);
+    expect(shouldShowCapsule({ trigger: 'clipboard', capsule: false })).toBe(false);
     expect(shouldShowCapsule({ trigger: 'selection', capsule: true })).toBe(true);
-    expect(shouldShowCapsule({ trigger: 'selection', capsule: false })).toBe(true);
     expect(shouldShowCapsule({ trigger: 'selection' })).toBe(true);
     expect(shouldShowCapsule({ trigger: 'clipboard', capsule: true })).toBe(true);
     expect(shouldShowCapsule({ trigger: 'clipboard' })).toBe(true);

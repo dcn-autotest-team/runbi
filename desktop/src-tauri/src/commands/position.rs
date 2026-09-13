@@ -3,22 +3,35 @@
 //! without overflowing outside screen boundaries.
 
 use serde::{Deserialize, Serialize};
-use tauri::{LogicalSize, PhysicalPosition, WebviewWindow};
+use tauri::{LogicalSize, Manager, PhysicalPosition, WebviewWindow};
+
+pub static PANEL_SIZE: std::sync::Mutex<(f64, f64)> = std::sync::Mutex::new((640.0, 580.0));
+
+#[tauri::command]
+pub fn record_panel_size(width: f64, height: f64) {
+    if width >= 480.0 && height >= 420.0 {
+        if let Ok(mut lock) = PANEL_SIZE.lock() {
+            *lock = (width, height);
+        }
+    }
+}
 
 #[cfg(windows)]
 fn set_capsule_no_activate(window: &WebviewWindow, enabled: bool) -> Result<(), String> {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE,
     };
-    const WS_EX_NOACTIVATE: isize = 0x0800_0000;
     const WS_EX_TOOLWINDOW: isize = 0x0000_0080;
     let hwnd = window.hwnd().map_err(|e| e.to_string())?.0;
     unsafe {
         let current = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        // The capsule must remain a real WebView hit target. WS_EX_NOACTIVATE
+        // preserves source-app focus, but on transparent WebView2 windows it
+        // can make the native hit-test and DOM mouse dispatch disagree.
         let next = if enabled {
-            current | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW
+            current | WS_EX_TOOLWINDOW
         } else {
-            current & !WS_EX_NOACTIVATE & !WS_EX_TOOLWINDOW
+            current & !WS_EX_TOOLWINDOW
         };
         if SetWindowLongPtrW(hwnd, GWL_EXSTYLE, next) == 0 && current != 0 {
             return Err("SetWindowLongPtrW(GWL_EXSTYLE) failed".to_string());
@@ -35,12 +48,13 @@ fn set_capsule_no_activate(_window: &WebviewWindow, _enabled: bool) -> Result<()
 /// Roll back a compact resize when an asynchronous capsule capture becomes
 /// stale after positioning but before its native show/emit step.
 pub fn restore_panel_window(window: &WebviewWindow) -> Result<(), String> {
+    let (w, h) = PANEL_SIZE.lock().map(|s| *s).unwrap_or((640.0, 580.0));
     window
         .set_min_size(Some(LogicalSize::new(480.0, 420.0)))
         .map_err(|e| e.to_string())?;
     window.set_resizable(true).map_err(|e| e.to_string())?;
     window
-        .set_size(LogicalSize::new(560.0, 520.0))
+        .set_size(LogicalSize::new(w, h))
         .map_err(|e| e.to_string())?;
     set_capsule_no_activate(window, false)?;
     let _ = window.set_always_on_top(false);
@@ -233,7 +247,7 @@ async fn position_window_at_cursor_locked(
         // 196px 五等宽动作条(搜索/润色/回复/翻译/复制)。
         (196.0, 44.0)
     } else {
-        (560.0, 520.0)
+        PANEL_SIZE.lock().map(|s| *s).unwrap_or((640.0, 580.0))
     };
     // The panel minimum configured at startup used to force the compact capsule
     // back to 480x420, making it look as if the capsule never appeared.
@@ -251,9 +265,8 @@ async fn position_window_at_cursor_locked(
     window
         .set_size(LogicalSize::new(logical_w, logical_h))
         .map_err(|e| e.to_string())?;
-    // Keep the transient capsule from activating the WebView. Without this
-    // style, the first click on another app only transfers focus back to it;
-    // the drag that should start a new selection is lost.
+    // Keep the transient capsule out of the taskbar while allowing its
+    // WebView content to receive real pointer input.
     set_capsule_no_activate(window, is_capsule)?;
 
     let (cursor_x, cursor_y) = cursor.unwrap_or_else(get_global_cursor);
@@ -313,9 +326,41 @@ async fn position_window_at_cursor_locked(
 
     let _ = window.set_position(PhysicalPosition::new(target_x, target_y));
 
+    if is_capsule {
+        // set_position may be adjusted by the window manager (DPI, borders,
+        // work-area constraints). Hit-test against the final physical rect,
+        // not the pre-position estimate.
+        let actual_position = window
+            .outer_position()
+            .map(|position| (position.x, position.y))
+            .unwrap_or((target_x, target_y));
+        let actual_size = window
+            .outer_size()
+            .map(|size| (size.width as i32, size.height as i32))
+            .unwrap_or((win_w, win_h));
+        crate::commands::mouse_hook::set_capsule_bounds(Some((
+            actual_position.0,
+            actual_position.1,
+            actual_size.0,
+            actual_size.1,
+        )));
+        crate::commands::file_log(
+            window.app_handle(),
+            &format!(
+                "capsule bounds: target=({target_x},{target_y}) actual=({},{}) size={}x{}",
+                actual_position.0, actual_position.1, actual_size.0, actual_size.1
+            ),
+        );
+    }
+
     // 胶囊是划词瞬态浮条,必须盖过用户当前应用(PopClip 同款);展开回面板时解除,
     // 让面板遵循普通焦点规则。置顶状态跟随后续 position 调用按模式翻转。
     let _ = window.set_always_on_top(is_capsule);
+
+    if !is_capsule {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
 
     Ok(PositionResult {
         x: target_x,

@@ -220,6 +220,7 @@ pub unsafe fn paste_via_focused_control() -> bool {
 
 /// Sets `is_internal_action` flag across all monitor states and optionally updates recorded texts.
 pub fn set_internal_action(app: &AppHandle, is_internal: bool, updated_text: Option<&str>) {
+    crate::commands::mouse_hook::note_internal_keyboard_activity(is_internal);
     if let Some(state) =
         app.try_state::<crate::commands::clipboard_monitor::ClipboardMonitorState>()
     {

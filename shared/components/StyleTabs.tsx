@@ -21,9 +21,6 @@ export const STYLE_OPTIONS: StyleOption[] = [
   { id: 'business', label: '职场商务', shortLabel: '商务', description: '得体专业、职场沟通' },
   { id: 'literary', label: '文采飞扬', shortLabel: '文采', description: '辞藻优美、生动灵动' },
   { id: 'concise', label: '精简提炼', shortLabel: '精简', description: '言简意赅、去粗取精' },
-  { id: 'native_en', label: '地道英文', shortLabel: '英文', description: '母语级地道表达' },
-  { id: 'reply', label: '智能回复', shortLabel: '回复', description: '针对选中文本撰写得体回复' },
-  { id: 'translate', label: '翻译', shortLabel: '翻译', description: '划词翻译为英文/中文/日文/韩文' },
 ];
 
 export interface StyleTabsProps {
@@ -103,10 +100,10 @@ export const StyleTabs: React.FC<StyleTabsProps> = ({
         aria-haspopup="menu"
         aria-expanded={isOpen}
         aria-controls="runbi-style-menu"
-        title={expert ? `当前专家：${expert.name}，点开可切换或清除` : autoMode ? '智能模式：AI 自动判断风格与行业场景' : '润色方式'}
+        title={autoMode ? '智能模式：AI 自动判断风格与行业场景' : '润色方式'}
         onClick={() => setIsOpen((prev) => !prev)}
         className={`runbi-focus-ring flex h-8 max-w-[220px] cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium transition-all duration-150 ${
-          expert || autoMode
+          autoMode
             ? 'bg-teal-500/15 text-teal-600 border-teal-500/40 shadow-sm dark:text-teal-300'
             : isOpen
               ? 'bg-gray-300/20 text-gray-300 border-gray-400/50 shadow-sm'
@@ -114,11 +111,7 @@ export const StyleTabs: React.FC<StyleTabsProps> = ({
         } ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
       >
         <span className="truncate">
-          {expert
-            ? expert.name
-            : autoMode
-              ? '智能'
-              : currentOption.label}
+          {autoMode ? '智能' : currentOption.label}
         </span>
         <svg
           className={`w-3 h-3 shrink-0 transition-transform duration-150 ${isOpen ? 'rotate-180' : ''}`}
@@ -155,7 +148,7 @@ export const StyleTabs: React.FC<StyleTabsProps> = ({
               setIsOpen(false);
             }}
             className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs transition-colors text-left cursor-pointer ${
-              autoMode && !expert
+              autoMode
                 ? 'bg-gray-300 text-gray-900 font-semibold shadow-xs'
                 : 'text-slate-300 hover:text-white hover:bg-white/10 dark:text-slate-300 dark:hover:text-white dark:hover:bg-slate-800'
             } ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
@@ -163,38 +156,11 @@ export const StyleTabs: React.FC<StyleTabsProps> = ({
             智能模式
           </button>
         )}
-        {(onAutoMode || expert) && (
+        {onAutoMode && (
           <div className="mx-1 my-1 border-t border-slate-200 dark:border-slate-700" role="separator" />
         )}
-        {/* 当前专家（存在时置顶展示，可一键清除） */}
-        {expert && (
-          <>
-            <div className="flex items-center justify-between gap-1 px-2.5 py-1.5 rounded-lg bg-teal-500/10">
-              <span className="truncate text-xs font-semibold text-teal-600 dark:text-teal-300">
-                {expert.name}
-              </span>
-              {onClearExpert && (
-                <button
-                  type="button"
-                  aria-label="清除专家，返回风格模式"
-                  title="清除专家，返回风格模式"
-                  disabled={disabled}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onClearExpert();
-                    setIsOpen(false);
-                  }}
-                  className="shrink-0 rounded px-1 text-xs text-teal-600/70 hover:bg-black/10 hover:text-teal-600 dark:text-teal-300/70 dark:hover:bg-white/10 dark:hover:text-teal-300 cursor-pointer"
-                >
-                  ✕
-                </button>
-              )}
-            </div>
-            <div className="mx-1 my-1 border-t border-slate-200 dark:border-slate-700" role="separator" />
-          </>
-        )}
         {(styles || []).map((opt) => {
-          const isActive = !expert && !autoMode && activeStyle === opt.id;
+          const isActive = !autoMode && activeStyle === opt.id;
           return (
             <button
               key={opt.id}
@@ -218,26 +184,6 @@ export const StyleTabs: React.FC<StyleTabsProps> = ({
             </button>
           );
         })}
-        {onOpenExperts && (
-          <>
-            <div className="mx-1 my-1 border-t border-slate-200 dark:border-slate-700" role="separator" />
-            <button
-              role="menuitem"
-              type="button"
-              disabled={disabled}
-              title="行业专家人格，可选一位应用或多位并行对比"
-              onClick={() => {
-                onOpenExperts();
-                setIsOpen(false);
-              }}
-              className={`w-full flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs transition-colors text-left text-slate-300 hover:text-white hover:bg-white/10 dark:text-slate-300 dark:hover:text-white dark:hover:bg-slate-800 cursor-pointer ${
-                disabled ? 'opacity-50 cursor-not-allowed' : ''
-              }`}
-            >
-              打开专家库…
-            </button>
-          </>
-        )}
       </div>
     </div>
   );

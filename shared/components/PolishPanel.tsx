@@ -1,14 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import type { PolishStyle } from '../types/stream';
 import type { ScreenReplyAnalysis } from '../core/prompts';
-import { INTENT_CHIPS } from '../core/prompts';
 import StyleTabs from './StyleTabs';
 import StreamingView from './StreamingView';
 import DiffViewer from './DiffViewer';
 import ActionBar from './ActionBar';
 import Toast from './Toast';
 import InstructionInput, { type AttachedFileContext, type QuickReplyTag } from './InstructionInput';
-import OriginalPreview from './OriginalPreview';
 import TranslateBar from './TranslateBar';
 import type { TranslateTargetId } from '../core/prompts';
 
@@ -156,38 +154,6 @@ export const PolishPanel: React.FC<PolishPanelProps> = ({
   const [isCollapsed, setIsCollapsed] = useState(defaultCollapsed);
   const [showConvSummary, setShowConvSummary] = useState(false);
 
-  // ── 高频意图芯片（润色模式,可折叠,多选叠加;回复模式沿用 clarify/quickTags 体系） ──
-  const [showIntentChips, setShowIntentChips] = useState(false);
-  const [activeIntentLabels, setActiveIntentLabels] = useState<string[]>([]);
-  const intentChipTags: QuickReplyTag[] = [
-    ...INTENT_CHIPS.map((i) => ({ label: i.label, text: i.instruction })),
-    ...(extraIntentChips ?? []),
-  ];
-  const activeIntentTexts = intentChipTags
-    .filter((t) => activeIntentLabels.includes(t.label))
-    .map((t) => t.text);
-
-  // 换了新原文,上一次的意图选择不再有意义
-  useEffect(() => {
-    setActiveIntentLabels([]);
-  }, [originalText]);
-
-  /** 点选 = 立即按所选意图组合生成;取消选中只摘除,不触发重新生成。 */
-  const toggleIntentChip = (label: string) => {
-    if (isGenerating || !onSendInstruction) return;
-    const isAdd = !activeIntentLabels.includes(label);
-    const next = isAdd
-      ? [...activeIntentLabels, label]
-      : activeIntentLabels.filter((l) => l !== label);
-    setActiveIntentLabels(next);
-    if (!isAdd) return;
-    const combined = intentChipTags
-      .filter((t) => next.includes(t.label))
-      .map((t) => t.text)
-      .join('；');
-    if (combined) onSendInstruction(combined);
-  };
-
   // Keyboard shortcut listener for Attitude/Intent chips (1, 2, 3...)
   useEffect(() => {
     if (!screenReplyAnalysis?.clarify_options || screenReplyAnalysis.clarify_options.length === 0) {
@@ -215,8 +181,7 @@ export const PolishPanel: React.FC<PolishPanelProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [screenReplyAnalysis, onSelectClarifyChip]);
 
-  // In screen-reply mode there is no meaningful original text to diff against — hide the toggle.
-  const diffToggleButton = screenReplyAnalysis ? null : (
+  const diffToggleButton = (
     <button
       id="diff-toggle"
       type="button"
@@ -295,8 +260,7 @@ export const PolishPanel: React.FC<PolishPanelProps> = ({
 
         {/* Header Actions */}
         <div className="flex items-center gap-1.5">
-          {/* Diff Toggle Switch */}
-          {diffToggleButton}
+          {activeStyle !== 'translate' && activeStyle !== 'reply' && diffToggleButton}
 
           {/* Minimize / Collapse Button */}
           <button
@@ -338,17 +302,8 @@ export const PolishPanel: React.FC<PolishPanelProps> = ({
       {/* Main Body */}
       {!isCollapsed && (
         <div className={embedded ? 'flex min-h-0 flex-1 flex-col gap-2.5 px-4 py-3 overflow-y-auto runbi-scrollbar' : 'p-4 flex flex-col gap-3.5'}>
-          {/* Optional Original Preview */}
-          {showOriginalPreview && (
-            <OriginalPreview
-              originalText={originalText}
-              compact={embedded}
-              rightSlot={embedded ? diffToggleButton : undefined}
-            />
-          )}
-
-          {/* 方式选择：仅润色模式显示（回复模式有独立的语气标签体系） */}
-          {!screenReplyAnalysis && activeStyle !== 'reply' && (
+          {/* 方式选择：仅润色模式显示 */}
+          {activeStyle !== 'reply' && activeStyle !== 'translate' && (
             <div className="flex items-center justify-between">
               <span className="text-[11px] font-medium text-slate-400">
                 {expert ? '处理方式 · 专家' : autoMode ? '润色方式 · AI 自动' : '润色方式'}
@@ -366,7 +321,7 @@ export const PolishPanel: React.FC<PolishPanelProps> = ({
             </div>
           )}
 
-          {/* 翻译模式：源→目标语言条（切换目标语言立即重译） */}
+          {/* 翻译模式：源→目标语言条 */}
           {activeStyle === 'translate' && onTranslateTargetChange && (
             <TranslateBar
               target={translateTarget ?? 'en'}
@@ -375,31 +330,34 @@ export const PolishPanel: React.FC<PolishPanelProps> = ({
             />
           )}
 
-          {/* 回复模式一行说明：讲清这个模式在做什么 */}
-          {activeStyle === 'reply' && !screenReplyAnalysis && (
-            <div className="text-[11px] leading-relaxed text-slate-400">
-              回复模式：AI 把上方原文当作对方发来的消息，帮你想一条可直接发送的回复
-            </div>
-          )}
-
-          {/* 话术模板库入口（独立任务：查参考话术，两种模式下都可用） */}
-          {onOpenScriptLibrary && (
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={onOpenScriptLibrary}
-                title="内置电商客服话术模板库，一键套用或参考生成"
-                className="runbi-focus-ring flex h-7 cursor-pointer items-center gap-1 rounded-lg border border-slate-200 px-2 text-[11px] text-slate-500 transition-colors hover:bg-slate-100 dark:border-white/10 dark:text-slate-300 dark:hover:bg-white/10"
-              >
-                话术库
-              </button>
+          {/* 回复模式说明与话术模板库入口 */}
+          {(activeStyle === 'reply' || screenReplyAnalysis) && (
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] leading-relaxed text-slate-400">
+                {screenReplyAnalysis
+                  ? '回复模式：AI 结合上下文构思得体回复'
+                  : '回复模式：AI 针对选中文本构思得体回复'}
+              </span>
+              {onOpenScriptLibrary && (
+                <button
+                  type="button"
+                  onClick={onOpenScriptLibrary}
+                  title="内置话术模板库，一键参考或套用客服/职场常见模板"
+                  className="runbi-focus-ring flex h-7 cursor-pointer items-center gap-1.5 rounded-lg border border-teal-500/30 bg-teal-500/10 px-2.5 text-[11px] font-medium text-teal-300 transition-colors hover:bg-teal-500/20 active:scale-95"
+                >
+                  <svg className="h-3.5 w-3.5 text-teal-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+                    <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+                  </svg>
+                  <span>话术模板库</span>
+                </button>
+              )}
             </div>
           )}
 
           {/* Screen Reply: Context Badge & Collapsible Conversation Summary */}
           {screenReplyAnalysis && (
             <div className="flex flex-col gap-2 p-2.5 rounded-xl bg-slate-50/90 dark:bg-white/[0.04] border border-slate-200/60 dark:border-white/10 text-xs shadow-xs">
-              {/* Clean Top Bar: Context tag & Collapsible toggle */}
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="flex h-2 w-2 relative shrink-0">
@@ -420,36 +378,17 @@ export const PolishPanel: React.FC<PolishPanelProps> = ({
                     </span>
                   )}
                 </div>
-                <div className="flex shrink-0 items-center gap-1.5 ml-2">
-                  {onRecapture && (
-                    <button
-                      type="button"
-                      data-testid="recapture-screenshot"
-                      onClick={onRecapture}
-                      disabled={isRecapturing}
-                      title="重新截取当前聊天窗口 (F9，面板聚焦时按 R)"
-                      className="runbi-focus-ring flex items-center gap-1 rounded-lg border border-slate-200 px-1.5 py-1 text-[11px] text-slate-500 transition-colors hover:bg-slate-100 hover:text-teal-600 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/10 dark:text-slate-400 dark:hover:bg-white/10 dark:hover:text-teal-300"
-                    >
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={`h-3 w-3 ${isRecapturing ? 'animate-spin' : ''}`} aria-hidden="true">
-                        <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z" />
-                        <circle cx="12" cy="13" r="3" />
-                      </svg>
-                      {isRecapturing ? '截屏中…' : '重新截屏'}
-                    </button>
-                  )}
-                  {screenReplyAnalysis.conversation && screenReplyAnalysis.conversation.length > 1 && (
-                    <button
-                      type="button"
-                      onClick={() => setShowConvSummary((prev) => !prev)}
-                      className="text-[11px] text-slate-400 hover:text-teal-600 dark:hover:text-teal-300 cursor-pointer transition-colors"
-                    >
-                      {showConvSummary ? '收起记录 ▴' : `展开记录(${screenReplyAnalysis.conversation.length}) ▾`}
-                    </button>
-                  )}
-                </div>
+                {screenReplyAnalysis.conversation && screenReplyAnalysis.conversation.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowConvSummary((prev) => !prev)}
+                    className="text-[11px] text-slate-400 hover:text-teal-600 dark:hover:text-teal-300 cursor-pointer transition-colors shrink-0 ml-2"
+                  >
+                    {showConvSummary ? '收起记录 ▴' : `展开记录(${screenReplyAnalysis.conversation.length}) ▾`}
+                  </button>
+                )}
               </div>
 
-              {/* Multi-turn conversation history ONLY if multiple turns and expanded */}
               {showConvSummary && screenReplyAnalysis.conversation && screenReplyAnalysis.conversation.length > 1 && (
                 <div className="flex flex-col gap-1.5 pt-1.5 pb-0.5 px-2 max-h-28 overflow-y-auto runbi-scrollbar border-l-2 border-teal-500/40 bg-black/20 rounded-r-lg">
                   {screenReplyAnalysis.conversation.map((msg, idx) => (
@@ -471,9 +410,9 @@ export const PolishPanel: React.FC<PolishPanelProps> = ({
             </div>
           )}
 
-          {/* Content Area (Diff or Plain/Streaming) */}
+          {/* Content Area */}
           <div className={embedded ? 'min-h-0 flex-1' : 'content'}>
-            {isDiffMode ? (
+            {isDiffMode && activeStyle !== 'translate' ? (
               <DiffViewer
                 originalText={originalText}
                 polishedText={polishedText}
@@ -486,77 +425,50 @@ export const PolishPanel: React.FC<PolishPanelProps> = ({
                 totalTokens={totalTokens}
                 error={error}
                 model={embedded ? modelName : undefined}
-                className={embedded ? 'h-full' : ''}
-                onStop={onStop}
-                onRegenerate={onRegenerate}
-              />
-            )}
+                hideStats={embedded || activeStyle === 'translate' || activeStyle === 'reply'}
+              emptyTitle={
+                activeStyle === 'translate'
+                  ? '准备翻译'
+                  : activeStyle === 'reply'
+                  ? '准备生成回复'
+                  : '准备生成润色稿'
+              }
+              emptySubtitle={
+                activeStyle === 'translate'
+                  ? '选择目标语言即可自动翻译'
+                  : activeStyle === 'reply'
+                  ? '选中消息后自动构思得体回复'
+                  : '选择润色方式即可自动润色'
+              }
+              placeholder={
+                activeStyle === 'translate'
+                  ? '正在翻译中...'
+                  : activeStyle === 'reply'
+                  ? '正在构思回复...'
+                  : '润笔沉思中，正在字斟句酌...'
+              }
+              className={embedded ? 'h-full' : ''}
+              onStop={onStop}
+              onRegenerate={onRegenerate}
+            />
+          )}
           </div>
 
-          {/* 高频意图芯片（润色模式专用;默认折叠避免打扰,点选即按意图生成） */}
-          {!screenReplyAnalysis && activeStyle !== 'reply' && onSendInstruction && intentChipTags.length > 0 && (
-            <div className="flex flex-col gap-1">
-              <button
-                type="button"
-                aria-expanded={showIntentChips}
-                onClick={() => setShowIntentChips((p) => !p)}
-                className="self-start flex items-center gap-1 text-[11px] text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 cursor-pointer transition-colors"
-              >
-                高频意图{activeIntentLabels.length > 0 ? ` · 已选 ${activeIntentLabels.length}` : ''}
-                <svg
-                  className={`w-3 h-3 transition-transform ${showIntentChips ? 'rotate-180' : ''}`}
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                >
-                  <polyline points="6 9 12 15 18 9" />
-                </svg>
-              </button>
-              {showIntentChips && (
-                <div className="flex flex-wrap gap-1.5">
-                  {intentChipTags.map((tag) => {
-                    const active = activeIntentLabels.includes(tag.label);
-                    return (
-                      <button
-                        key={tag.label}
-                        type="button"
-                        disabled={isGenerating}
-                        onClick={() => toggleIntentChip(tag.label)}
-                        title={tag.text}
-                        className={`runbi-focus-ring cursor-pointer whitespace-nowrap inline-flex items-center rounded-lg px-2.5 py-1 text-xs font-medium transition-all border shadow-2xs active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 ${
-                          active
-                            ? 'bg-teal-100 dark:bg-teal-500/20 text-teal-700 dark:text-teal-200 border-teal-300 dark:border-teal-500/40'
-                            : 'bg-white/80 dark:bg-white/[0.06] text-slate-700 dark:text-slate-200 hover:bg-teal-50 hover:text-teal-600 dark:hover:bg-teal-500/20 dark:hover:text-teal-200 border-slate-200/60 dark:border-white/10'
-                        }`}
-                      >
-                        {tag.label}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* User Custom Instruction / Dynamic Quick Replies */}
-          {(onSendInstruction || screenReplyAnalysis?.clarify_options?.length) && (
+          {/* 回复模式专用：意图推荐框 (clarify_options) + 用户自定义指令输入 */}
+          {(activeStyle === 'reply' || screenReplyAnalysis) && (
             <InstructionInput
               onSubmit={(instruction, files) => {
-                if (screenReplyAnalysis?.clarify_options?.includes(instruction) && onSelectClarifyChip) {
+                const clarifyTexts = screenReplyAnalysis?.clarify_options || [];
+                if (clarifyTexts.includes(instruction) && onSelectClarifyChip) {
                   onSelectClarifyChip(instruction);
                 } else if (onSendInstruction) {
-                  // 已选意图与手输要求叠加(意图在前),一次生成同时满足
-                  const combined = [...activeIntentTexts, instruction].filter(Boolean).join('；');
-                  onSendInstruction(combined, files);
+                  onSendInstruction(instruction, files);
                 }
               }}
               isGenerating={isGenerating}
-              placeholder={activeStyle === 'reply' ? '想怎么改？点击上方快捷标签或直接输入 (Enter 发送)...' : '补充要求（可选）：语气、格式、重点…回车应用'}
-              showQuickTags={activeStyle === 'reply'}
+              placeholder="想怎么改？点击上方快捷标签或直接输入 (Enter 发送)..."
+              showQuickTags={true}
               quickTags={(() => {
-                // 回复模式：上下文意图 chips（带数字快捷键）+ 行业意图/自定义指令并存
-                // 润色模式：不渲染快捷标签（与"润色方式"下拉职责重复，徒增心智负担）
                 const clarifyTags: QuickReplyTag[] = (screenReplyAnalysis?.clarify_options ?? []).map(
                   (opt, idx) => ({ label: `${idx + 1} ${opt}`, text: opt })
                 );
@@ -571,7 +483,7 @@ export const PolishPanel: React.FC<PolishPanelProps> = ({
             />
           )}
 
-          {/* 广告法极限词警示(贴回前最后关口) */}
+          {/* 广告法极限词警示 */}
           {bannedWords && bannedWords.length > 0 && (
             <div
               role="alert"
@@ -596,7 +508,6 @@ export const PolishPanel: React.FC<PolishPanelProps> = ({
             isGenerating={isGenerating}
             disabled={!polishedText && !isGenerating}
             replaceLabel={replaceLabel || (embedded ? '贴回' : '替换原文')}
-            leftSlot={embedded && !showOriginalPreview ? diffToggleButton : undefined}
           />
         </div>
       )}

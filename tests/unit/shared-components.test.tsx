@@ -81,14 +81,14 @@ describe('Shared UI Components (@runbi/shared/components)', () => {
   });
 
   describe('StyleTabs Component', () => {
-    it('should render all 7 style tabs and trigger style changes', async () => {
+    it('should render all 5 style tabs and trigger style changes', async () => {
       const handleStyleChange = vi.fn();
       await renderElement(
         <StyleTabs activeStyle="polished" onStyleChange={handleStyleChange} />
       );
 
       const tabs = container.querySelectorAll('[role="menuitemradio"]');
-      expect(tabs.length).toBe(8);
+      expect(tabs.length).toBe(5);
 
       const academicBtn = container.querySelector('[data-style="academic"]') as HTMLButtonElement;
       await act(async () => {
@@ -146,6 +146,23 @@ describe('Shared UI Components (@runbi/shared/components)', () => {
       expect(container.textContent).toContain('流式生成测试');
       expect(container.textContent).toContain('1.2s');
       expect(container.textContent).toContain('25 Tokens');
+    });
+
+    it('should hide stats when hideStats is true', async () => {
+      await renderElement(
+        <StreamingView
+          content="翻译结果文本"
+          isGenerating={false}
+          durationMs={800}
+          totalTokens={12}
+          model="qwen3.8-27b"
+          hideStats={true}
+        />
+      );
+
+      expect(container.textContent).toContain('翻译结果文本');
+      expect(container.textContent).not.toContain('Tokens');
+      expect(container.textContent).not.toContain('qwen3.8-27b');
     });
 
     it('should render stop button during generation', async () => {
@@ -341,16 +358,9 @@ describe('Shared UI Components (@runbi/shared/components)', () => {
         closeBtn.click();
       });
       expect(handleClose).toHaveBeenCalledTimes(1);
-
-      // Test diff toggle
-      const diffBtn = container.querySelector('#diff-toggle') as HTMLButtonElement;
-      await act(async () => {
-        diffBtn.click();
-      });
-      expect(handleToggleDiff).toHaveBeenCalledTimes(1);
     });
 
-    it('should show custom quick tags alongside clarify chips and hide recapture UI', async () => {
+    it('should render a clean and minimal interface in reply mode without clutter', async () => {
       const analysis = {
         conversation: [{ sender: 'other' as const, text: '能便宜点吗？' }],
         last_message_from_other: '能便宜点吗？',
@@ -383,15 +393,18 @@ describe('Shared UI Components (@runbi/shared/components)', () => {
       );
 
       const text = container.textContent || '';
-      // clarify chips（数字快捷键）与自定义/行业标签并存（回归：自定义按钮曾不显示）
-      expect(text).toContain('议价让步');
-      expect(text).toContain('催付款');
-      expect(text).toContain('要好评');
-      // 回归：重新抓取按钮已按需求移除
-      expect(text).not.toContain('重新抓取');
+      expect(text).toContain('亲，给你抹个零～');
+      expect(text).toContain('回复模式');
+      // Clutter elements must NOT be present in reply mode
+      expect(container.querySelector('#diff-toggle')).toBeNull();
+      expect(container.querySelector('#original-preview')).toBeNull();
+      expect(text).not.toContain('话术库');
+      expect(text).not.toContain('高频意图');
+      expect(text).not.toContain('补充要求');
+      expect(text).not.toContain('Tokens');
     });
 
-    it('should trigger clarify chip on number key 1 press when screenReplyAnalysis is present', async () => {
+    it('should trigger clarify chip callback on number key 1 press when screenReplyAnalysis is present', async () => {
       const handleClarify = vi.fn();
       const analysis = {
         conversation: [{ sender: 'other' as const, text: '这版周五能给吗？' }],
@@ -420,15 +433,159 @@ describe('Shared UI Components (@runbi/shared/components)', () => {
         />
       );
 
-      expect(container.textContent).toContain('已感知聊天上下文');
-      expect(container.textContent).toContain('这版周五能给吗？');
-      expect(container.textContent).toContain('热情答应');
-
       await act(async () => {
         window.dispatchEvent(new KeyboardEvent('keydown', { key: '1' }));
       });
 
       expect(handleClarify).toHaveBeenCalledWith('热情答应');
+    });
+
+    it('should render recommendation chips and script library button in reply mode', async () => {
+      const handleClarify = vi.fn();
+      const handleOpenLibrary = vi.fn();
+      const analysis = {
+        conversation: [{ sender: 'other' as const, text: '能优惠点吗？' }],
+        last_message_from_other: '能优惠点吗？',
+        clarify_options: ['同意优惠', '委婉拒绝', '申请赠品'],
+        draft_reply: '亲，给您申请了精美礼品一份哦～',
+      };
+
+      await renderElement(
+        <PolishPanel
+          originalText="能优惠点吗？"
+          polishedText="亲，给您申请了精美礼品一份哦～"
+          isGenerating={false}
+          activeStyle="reply"
+          isDiffMode={false}
+          isEditable={true}
+          screenReplyAnalysis={analysis}
+          onSelectClarifyChip={handleClarify}
+          onOpenScriptLibrary={handleOpenLibrary}
+          onClose={vi.fn()}
+          onStyleChange={vi.fn()}
+          onToggleDiff={vi.fn()}
+          onStop={vi.fn()}
+          onRegenerate={vi.fn()}
+          onCopy={vi.fn()}
+          onReplace={vi.fn()}
+        />
+      );
+
+      const text = container.textContent || '';
+      expect(text).toContain('回复模式');
+      expect(text).toContain('话术模板库');
+      expect(text).toContain('同意优惠');
+      expect(text).toContain('委婉拒绝');
+      expect(text).toContain('申请赠品');
+
+      // Clicking script library button triggers callback
+      const libBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+        b.textContent?.includes('话术模板库')
+      );
+      expect(libBtn).toBeTruthy();
+      await act(async () => {
+        libBtn!.click();
+      });
+      expect(handleOpenLibrary).toHaveBeenCalledTimes(1);
+
+      // Clicking recommendation chip triggers callback
+      const chipBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+        b.textContent?.includes('同意优惠')
+      );
+      expect(chipBtn).toBeTruthy();
+      await act(async () => {
+        chipBtn!.click();
+      });
+      expect(handleClarify).toHaveBeenCalledWith('同意优惠');
+    });
+
+    it('should render a clean and minimal interface in translate mode without clutter', async () => {
+      await renderElement(
+        <PolishPanel
+          originalText="Hello world"
+          polishedText="你好世界"
+          isGenerating={false}
+          activeStyle="translate"
+          translateTarget="zh-Hans"
+          onTranslateTargetChange={vi.fn()}
+          isDiffMode={false}
+          isEditable={true}
+          durationMs={200}
+          totalTokens={3}
+          showOriginalPreview={true}
+          replaceLabel="贴回"
+          onClose={vi.fn()}
+          onStyleChange={vi.fn()}
+          onToggleDiff={vi.fn()}
+          onStop={vi.fn()}
+          onRegenerate={vi.fn()}
+          onCopy={vi.fn()}
+          onReplace={vi.fn()}
+          onSendInstruction={vi.fn()}
+          onOpenScriptLibrary={vi.fn()}
+        />
+      );
+
+      const text = container.textContent || '';
+      // Contains translated result and translate bar
+      expect(text).toContain('你好世界');
+      expect(text).toContain('简体中文');
+      expect(text).toContain('贴回');
+
+      // Clutter elements from the 4 red boxes must NOT be present
+      expect(container.querySelector('#diff-toggle')).toBeNull();
+      expect(container.querySelector('#original-preview')).toBeNull();
+      expect(text).not.toContain('原文');
+      expect(text).not.toContain('对比修改');
+      expect(text).not.toContain('润色方式');
+      expect(text).not.toContain('智能模式');
+      expect(text).not.toContain('通用润色');
+      expect(text).not.toContain('话术库');
+      expect(text).not.toContain('高频意图');
+      expect(text).not.toContain('补充要求');
+      expect(text).not.toContain('Tokens');
+    });
+
+    it('embedded Polish mode hides clutter elements (original preview, diff toggle, script library, intent chips, instruction input, stats)', async () => {
+      await renderElement(
+        <PolishPanel
+          embedded
+          originalText="这是待润色的文字"
+          polishedText="这是精炼后的文字"
+          isGenerating={false}
+          activeStyle="polished"
+          isDiffMode={false}
+          isEditable={true}
+          durationMs={200}
+          totalTokens={12}
+          showOriginalPreview={false}
+          replaceLabel="贴回"
+          onClose={vi.fn()}
+          onStyleChange={vi.fn()}
+          onToggleDiff={vi.fn()}
+          onStop={vi.fn()}
+          onRegenerate={vi.fn()}
+          onCopy={vi.fn()}
+          onReplace={vi.fn()}
+          onSendInstruction={vi.fn()}
+          onOpenScriptLibrary={vi.fn()}
+        />
+      );
+
+      const text = container.textContent || '';
+      expect(text).toContain('这是精炼后的文字');
+      expect(text).toContain('贴回');
+      expect(text).toContain('润色方式');
+
+      // Clutter elements from the 4 red boxes must NOT be present in embedded polish mode
+      expect(container.querySelector('#diff-toggle')).toBeNull();
+      expect(container.querySelector('#original-preview')).toBeNull();
+      expect(text).not.toContain('原文 8字');
+      expect(text).not.toContain('对比修改');
+      expect(text).not.toContain('话术库');
+      expect(text).not.toContain('高频意图');
+      expect(text).not.toContain('补充要求');
+      expect(text).not.toContain('Tokens');
     });
   });
 });

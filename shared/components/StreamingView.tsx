@@ -18,6 +18,10 @@ export interface StreamingViewProps {
   placeholder?: string;
   /** Optional model name shown in the meta row (embedded mode). */
   model?: string;
+  /** Hide model/duration/token stats meta row (e.g. in translate mode) */
+  hideStats?: boolean;
+  emptyTitle?: string;
+  emptySubtitle?: string;
 }
 
 export const StreamingView: React.FC<StreamingViewProps> = ({
@@ -31,6 +35,9 @@ export const StreamingView: React.FC<StreamingViewProps> = ({
   className = '',
   placeholder = '润笔沉思中，正在字斟句酌...',
   model,
+  hideStats = false,
+  emptyTitle,
+  emptySubtitle,
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -56,7 +63,7 @@ export const StreamingView: React.FC<StreamingViewProps> = ({
         ref={scrollRef}
         aria-live="polite"
         aria-busy={isGenerating}
-        className="relative min-h-[64px] flex-1 overflow-y-auto rounded-xl border border-slate-200/70 bg-white/50 px-3.5 py-2.5 text-[13px] leading-[1.8] text-slate-800 transition-all runbi-scrollbar dark:border-white/[0.08] dark:bg-black/30 dark:text-slate-100"
+        className="relative min-h-[100px] flex-1 overflow-y-auto rounded-xl border border-slate-200/70 bg-white/50 px-3.5 py-2.5 text-[13px] leading-[1.8] text-slate-800 transition-all runbi-scrollbar dark:border-white/[0.08] dark:bg-black/30 dark:text-slate-100"
       >
         {error ? (
           <div className="flex h-full min-h-[64px] flex-col items-center justify-center gap-2 text-center">
@@ -103,8 +110,8 @@ export const StreamingView: React.FC<StreamingViewProps> = ({
                 <path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3L12 3Z" />
               </svg>
             </div>
-            <p className="text-xs font-medium text-slate-600 dark:text-slate-300">准备生成润色稿</p>
-            <p className="mt-0.5 text-[11px] text-slate-400 dark:text-slate-500">选择润色方式，或在下方补充具体要求</p>
+            <p className="text-xs font-medium text-slate-600 dark:text-slate-300">{emptyTitle || '准备生成润色稿'}</p>
+            <p className="mt-0.5 text-[11px] text-slate-400 dark:text-slate-500">{emptySubtitle || '选择润色方式，或在下方补充具体要求'}</p>
           </div>
         ) : (
           <MarkdownRenderer
@@ -116,32 +123,36 @@ export const StreamingView: React.FC<StreamingViewProps> = ({
       </div>
 
       {/* Real-time stats & stop control */}
-      <div className="flex items-center justify-between px-1 text-[11px] text-slate-400 select-none dark:text-slate-400 font-medium shrink-0 pt-0.5">
-        <div className="flex items-center gap-1.5">
-          {model && (
-            <>
-              <span className="font-medium">{model}</span>
+      {(!hideStats || (isGenerating && onStop)) && (
+        <div className={`flex items-center ${hideStats ? 'justify-end' : 'justify-between'} px-1 text-[11px] text-slate-400 select-none dark:text-slate-400 font-medium shrink-0 pt-0.5`}>
+          {!hideStats && (
+            <div className="flex items-center gap-1.5">
+              {model && (
+                <>
+                  <span className="font-medium">{model}</span>
+                  <span>·</span>
+                </>
+              )}
+              <span>{formattedTime}</span>
               <span>·</span>
-            </>
+              <span>
+                {tokenCountDisplay} Tokens
+              </span>
+            </div>
           )}
-          <span>{formattedTime}</span>
-          <span>·</span>
-          <span>
-            {tokenCountDisplay} Tokens
-          </span>
-        </div>
 
-        {isGenerating && onStop && (
-          <button
-            type="button"
-            onClick={onStop}
-            className="runbi-focus-ring flex items-center gap-1 rounded-lg border border-rose-200 px-2 py-1 text-xs text-rose-600 transition-colors hover:bg-rose-50 cursor-pointer dark:border-rose-800/60 dark:text-rose-400 dark:hover:bg-rose-950/40"
-          >
-            <span className="w-2 h-2 bg-rose-600 dark:bg-rose-400 rounded-sm" />
-            <span>中止生成</span>
-          </button>
-        )}
-      </div>
+          {isGenerating && onStop && (
+            <button
+              type="button"
+              onClick={onStop}
+              className="runbi-focus-ring flex items-center gap-1 rounded-lg border border-rose-200 px-2 py-1 text-xs text-rose-600 transition-colors hover:bg-rose-50 cursor-pointer dark:border-rose-800/60 dark:text-rose-400 dark:hover:bg-rose-950/40"
+            >
+              <span className="w-2 h-2 bg-rose-600 dark:bg-rose-400 rounded-sm" />
+              <span>中止生成</span>
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 };

@@ -81,7 +81,10 @@ interface CapsuleInfo {
   sourceApp?: string;
   windowTitle?: string;
   screenshot: string | null;
+  generation?: number;
 }
+
+type CapsuleAction = 'search' | 'polish' | 'reply' | 'translate' | 'copy';
 
 const PROVIDER_PRESETS: Record<string, { label: string; endpoint: string; model: string }> = {
   deepseek: {
@@ -252,6 +255,7 @@ export const App: React.FC = () => {
   const capsuleFadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const panelBlurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const capsuleActionRef = useRef<'expanding' | 'copying' | null>(null);
+  const capsuleTransitionRef = useRef<{ text: string; generation?: number; until: number } | null>(null);
   const capsuleRevisionRef = useRef(0);
   const selectionGenerationRef = useRef(0);
 
@@ -334,6 +338,12 @@ export const App: React.FC = () => {
   };
 
   const abortControllerRef = useRef<AbortController | null>(null);
+  // A user-selected mode must win over the async persisted-config load. This
+  // matters when the first capsule is clicked immediately after launch.
+  const styleOverrideRef = useRef(false);
+  // Translation is a panel entry, not just another polish style. Keep this
+  // guard synchronous so late selection/config work cannot repaint its UI.
+  const translationPanelRef = useRef(false);
 
   // Refs so global event listeners and background handlers always access latest values.
   const stateRef = useRef({
@@ -366,7 +376,9 @@ export const App: React.FC = () => {
     uiMode: 'panel' as 'panel' | 'capsule',
     armCapsule: (_info: CapsuleInfo) => {},
     hideCapsule: (_immediate?: boolean, _nativeAlreadyHidden?: boolean) => {},
+    handleCapsuleAction: (_action: CapsuleAction) => {},
     handleStartPolish: (_t: string, _s: PolishStyle, _c?: string, _img?: string | null) => {},
+    activateTranslate: (_t: string, _img?: string | null) => {},
     handleStartScreenReplyAnalysis: (_hint?: string) => {},
     handleStartTextReplyAnalysis: (_msg: string) => {},
     handleRecapture: () => {},
@@ -463,6 +475,69 @@ export const App: React.FC = () => {
     else capsuleFadeTimerRef.current = setTimeout(() => void finish(), CAPSULE_FADE_MS);
   }, [isTauri]);
 
+  // All translation entry points share one state transition. Keeping this
+  // here lets capsule clicks use the same minimal panel state as the header
+  // and shortcut paths without routing through another Tauri event.
+  const activateTranslate = useCallback((text: string, screenshot: string | null = null) => {
+    if (!text.trim()) return;
+    invoke('append_log', {
+      msg: `frontend: activate translate len=${text.length} before_ui=${stateRef.current.uiMode} before_style=${stateRef.current.activeStyle}`,
+    }).catch(() => {});
+    styleOverrideRef.current = true;
+    translationPanelRef.current = true;
+    clearCapsuleTimers();
+    capsuleActionRef.current = null;
+    capsuleInfoRef.current = null;
+    stateRef.current.uiMode = 'panel';
+    setUiMode('panel');
+    setCapsule(null);
+    setCapsuleVisible(true);
+    setShowEpoch((n) => n + 1);
+    setShowSettings(false);
+    setShowHistory(false);
+    setShowScriptLibrary(false);
+    setShowExpertPicker(false);
+    setShowParallel(false);
+    setIsDiffMode(false);
+    setPasteFallbackBar(false);
+    setToastVisible(false);
+    // A new translation supersedes any recoverable draft from the previous
+    // session; otherwise the draft banner makes this path non-minimal.
+    setRecoverableDraft(null);
+    adapters.storageProvider.remove('activeDraft').catch(() => {});
+    setOriginalText(text);
+    stateRef.current.originalText = text;
+    stateRef.current.activeExpert = null;
+    setActiveExpert(null);
+    setScreenReplyAnalysis(null);
+    stateRef.current.screenReplyAnalysis = null;
+    setAutoMode(false);
+    stateRef.current.autoMode = false;
+    stateRef.current.activeStyle = 'translate';
+    setActiveStyle('translate');
+    stateRef.current.currentScreenshot = screenshot;
+    setCurrentScreenshot(screenshot);
+    const target = stateRef.current.translateTarget;
+    setTranslateTarget(target);
+    adapters.storageProvider.set('translateTarget', target).catch(() => {});
+    stateRef.current.handleStartPolish(text, 'translate', undefined, screenshot);
+  }, [adapters.storageProvider]);
+
+  // Keep one runtime signature for the two user-visible translation entries.
+  // This is intentionally sampled after React commits so a native capsule
+  // click cannot be mistaken for a successful state update before paint.
+  useEffect(() => {
+    if (!isTauri || uiMode !== 'panel' || activeStyle !== 'translate' || !originalText.trim()) return;
+    const timer = window.setTimeout(() => {
+      const instruction = Array.from(document.querySelectorAll('input, textarea'))
+        .some((node) => node.getAttribute('placeholder')?.includes('补充要求'));
+      invoke('append_log', {
+        msg: `frontend: translate panel committed bar=${Boolean(document.querySelector('[data-testid="translate-bar"]'))} style_dropdown=${Boolean(document.querySelector('#style-dropdown-trigger'))} original_preview=${Boolean(document.querySelector('#original-preview'))} instruction=${instruction}`,
+      }).catch(() => {});
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [activeStyle, isTauri, originalText, uiMode]);
+
   // 划词到达:挂胶囊并启动 1.2s 无人问津淡出计时
   const armCapsule = useCallback((info: CapsuleInfo) => {
     clearCapsuleTimers();
@@ -472,13 +547,14 @@ export const App: React.FC = () => {
     }
     ++capsuleRevisionRef.current;
     capsuleActionRef.current = null;
+    translationPanelRef.current = false;
     capsuleInfoRef.current = info;
     setCapsule(info);
     setCapsuleVisible(true);
     setCapsuleCopied(false);
     // Keep the imperative state mirror in sync before React schedules the
     // render; the deferred blur guard reads this ref while the native capsule
-    // is intentionally shown without activating the WebView.
+    // is intentionally shown above the source app.
     stateRef.current.uiMode = 'capsule';
     setUiMode('capsule');
     capsuleArmTimerRef.current = setTimeout(() => {
@@ -491,15 +567,40 @@ export const App: React.FC = () => {
   const expandCapsule = useCallback(
     async (mode: 'polish' | 'reply' | 'translate') => {
       const info = capsuleInfoRef.current;
+      invoke('append_log', {
+        msg: `frontend: capsule action mode=${mode} info=${Boolean(info)} action=${capsuleActionRef.current ?? 'none'} ui=${stateRef.current.uiMode}`,
+      }).catch(() => {});
       if (!info || capsuleActionRef.current) return;
+      if (mode === 'translate') {
+        // Lock the selected mode before the async native resize. The capsule
+        // stays rendered until resize completes, so this cannot flash the
+        // panel, but a late config/selection render cannot fall back to polish.
+        styleOverrideRef.current = true;
+        translationPanelRef.current = true;
+        stateRef.current.activeStyle = 'translate';
+        setActiveStyle('translate');
+      } else {
+        translationPanelRef.current = false;
+      }
       clearCapsuleTimers();
       capsuleActionRef.current = 'expanding';
+      capsuleTransitionRef.current = {
+        text: info.text,
+        generation: info.generation,
+        until: Date.now() + 750,
+      };
       const revision = ++capsuleRevisionRef.current;
       capsuleInfoRef.current = null;
       setCapsuleVisible(false);
+      invoke('append_log', {
+        msg: `frontend: capsule expand start mode=${mode} revision=${revision} text_len=${info.text.length}`,
+      }).catch(() => {});
       if (isTauri) {
         try {
           await invoke('position_window_at_cursor', { isCapsule: false });
+          invoke('append_log', {
+            msg: `frontend: capsule expand positioned mode=${mode} revision=${revision}`,
+          }).catch(() => {});
         } catch (e) {
           console.warn('expand capsule reposition failed:', e);
           if (revision === capsuleRevisionRef.current) {
@@ -515,30 +616,34 @@ export const App: React.FC = () => {
       // the native window. Never let the old request overwrite the new capsule.
       if (revision !== capsuleRevisionRef.current) return;
       capsuleActionRef.current = null;
-      // Render the full panel only after its native window has expanded. This
-      // avoids a clipped 196x44 panel flash on slower machines.
-      setUiMode('panel');
-      setCapsule(null);
-      setShowEpoch((n) => n + 1); // 重放面板进场动画
-      setCurrentScreenshot(null);
-      stateRef.current.currentScreenshot = null;
-      setScreenReplyAnalysis(null);
-      setOriginalText(info.text);
-      stateRef.current.originalText = info.text;
       if (mode === 'reply') {
+        // The expanded capsule is the same main window as the shortcut panel.
+        setUiMode('panel');
+        setCapsule(null);
+        setShowEpoch((n) => n + 1);
+        setCurrentScreenshot(info.screenshot);
+        stateRef.current.currentScreenshot = info.screenshot;
+        setScreenReplyAnalysis(null);
+        stateRef.current.screenReplyAnalysis = null;
+        setOriginalText(info.text);
+        stateRef.current.originalText = info.text;
         setActiveStyle('reply');
         stateRef.current.activeStyle = 'reply';
         stateRef.current.handleStartTextReplyAnalysis(info.text);
       } else if (mode === 'translate') {
-        // 翻译：固定走 translate 风格，目标语言用当前（持久化的）选择
-        if (stateRef.current.activeExpert) {
-          stateRef.current.activeExpert = null;
-          setActiveExpert(null);
-        }
-        setActiveStyle('translate');
-        stateRef.current.activeStyle = 'translate';
-        stateRef.current.handleStartPolish(info.text, 'translate', undefined, null);
+        // Translation is intentionally routed through the same canonical entry
+        // used by the header and shortcut paths.
+        activateTranslate(info.text, info.screenshot);
       } else if (stateRef.current.autoMode) {
+        setUiMode('panel');
+        setCapsule(null);
+        setShowEpoch((n) => n + 1);
+        setCurrentScreenshot(info.screenshot);
+        stateRef.current.currentScreenshot = info.screenshot;
+        setScreenReplyAnalysis(null);
+        stateRef.current.screenReplyAnalysis = null;
+        setOriginalText(info.text);
+        stateRef.current.originalText = info.text;
         const cls = classifyContext({
           text: info.text,
           sourceApp: info.sourceApp,
@@ -549,12 +654,25 @@ export const App: React.FC = () => {
         if (cls.confidence >= 0.7 && cls.style !== 'polished') {
           showToast(`已智能识别【${STYLE_NAMES[cls.style]}】(${cls.reason})`);
         }
-        stateRef.current.handleStartPolish(info.text, cls.style, undefined, null);
+        if (cls.style === 'reply') {
+          stateRef.current.handleStartTextReplyAnalysis(info.text);
+        } else {
+          stateRef.current.handleStartPolish(info.text, cls.style, undefined, info.screenshot);
+        }
       } else {
-        stateRef.current.handleStartPolish(info.text, stateRef.current.activeStyle, undefined, null);
+        setUiMode('panel');
+        setCapsule(null);
+        setShowEpoch((n) => n + 1);
+        setCurrentScreenshot(info.screenshot);
+        stateRef.current.currentScreenshot = info.screenshot;
+        setScreenReplyAnalysis(null);
+        stateRef.current.screenReplyAnalysis = null;
+        setOriginalText(info.text);
+        stateRef.current.originalText = info.text;
+        stateRef.current.handleStartPolish(info.text, stateRef.current.activeStyle, undefined, info.screenshot);
       }
     },
-    [isTauri, showToast]
+    [activateTranslate, isTauri, showToast]
   );
 
   const handleCapsuleCopy = useCallback(() => {
@@ -606,6 +724,16 @@ export const App: React.FC = () => {
         showToast('无法打开浏览器，请稍后重试', 3000);
       });
   }, [hideCapsule, isTauri, showToast]);
+
+  stateRef.current.handleCapsuleAction = (action: CapsuleAction) => {
+    if (action === 'search') {
+      handleCapsuleSearch();
+    } else if (action === 'copy') {
+      handleCapsuleCopy();
+    } else {
+      void expandCapsule(action);
+    }
+  };
 
   const handleCapsuleHover = useCallback(
     (hovered: boolean) => {
@@ -954,6 +1082,7 @@ export const App: React.FC = () => {
   // Global shortcut and mouse-selection listeners are registered once. Keep the
   // callback they invoke fresh instead of leaving the initial no-op placeholder.
   stateRef.current.handleStartPolish = handleStartPolish;
+  stateRef.current.activateTranslate = activateTranslate;
 
   // Round 1: Vision Screen Understanding (Output JSON)
   const handleStartScreenReplyAnalysis = useCallback(async (existingHint?: string) => {
@@ -1431,6 +1560,7 @@ export const App: React.FC = () => {
   // Load Saved Settings on Mount
   useEffect(() => {
     const loadConfig = async () => {
+      const styleOverrideAtStart = styleOverrideRef.current;
       const config = await adapters.storageProvider.getAll();
       const savedKey = String(config.apiKey || '');
       const savedEndpoint = String(config.endpoint || 'https://api.deepseek.com/v1/chat/completions');
@@ -1458,7 +1588,7 @@ export const App: React.FC = () => {
       if (savedKey) setApiKey(savedKey);
       if (savedEndpoint) setEndpoint(savedEndpoint);
       if (savedModel) setModel(savedModel);
-      if (savedStyle) setActiveStyle(savedStyle);
+      if (!styleOverrideAtStart && !styleOverrideRef.current && savedStyle) setActiveStyle(savedStyle);
       if (savedPersona) setPersona(savedPersona);
       if (savedCustomPersona) setCustomPersonaPrompt(savedCustomPersona);
       if (savedPack) setIndustryPack(savedPack);
@@ -1471,8 +1601,10 @@ export const App: React.FC = () => {
       setSkin(savedSkin);
       // 智能模式默认开启；用户手动选过风格后关闭并记住
       const savedAutoMode = config.autoMode === undefined ? true : Boolean(config.autoMode);
-      setAutoMode(savedAutoMode);
-      stateRef.current.autoMode = savedAutoMode;
+      if (!styleOverrideAtStart && !styleOverrideRef.current) {
+        setAutoMode(savedAutoMode);
+        stateRef.current.autoMode = savedAutoMode;
+      }
       const savedTranslateTarget = String(config.translateTarget || 'en');
       if (TRANSLATE_TARGETS.some((t) => t.id === savedTranslateTarget)) {
         setTranslateTarget(savedTranslateTarget as TranslateTargetId);
@@ -1586,8 +1718,56 @@ export const App: React.FC = () => {
         console.warn('listen selection invalidation failed:', e);
         return undefined;
       }));
+      unlistens.push(listen<{ action?: CapsuleAction; generation?: number }>('runbi://capsule-action', ({ payload }) => {
+        const info = capsuleInfoRef.current;
+        if (stateRef.current.uiMode !== 'capsule' || !info || !payload?.action) return;
+        if (
+          typeof payload.generation === 'number'
+          && typeof info.generation === 'number'
+          && payload.generation !== info.generation
+        ) {
+          return;
+        }
+        invoke('append_log', { msg: `frontend: native capsule action=${payload.action}` }).catch(() => {});
+        stateRef.current.handleCapsuleAction(payload.action);
+      }).catch((e) => {
+        console.warn('listen capsule-action failed:', e);
+        return undefined;
+      }));
       unlistens.push(listen('runbi://captured-selection', (event: any) => {
         const __p = event?.payload || {};
+        const transition = capsuleTransitionRef.current;
+        if (transition) {
+          if (Date.now() >= transition.until) {
+            capsuleTransitionRef.current = null;
+          } else {
+            const sameGeneration = typeof transition.generation === 'number'
+              && typeof __p.generation === 'number'
+              && transition.generation === __p.generation;
+            const sameText = typeof __p.text === 'string' && __p.text === transition.text;
+            if (sameGeneration || sameText) {
+              invoke('append_log', {
+                msg: `frontend: ignored stale selection after capsule action t=${__p.trigger}`,
+              }).catch(() => {});
+              return;
+            }
+            if (
+              typeof transition.generation === 'number'
+              && typeof __p.generation === 'number'
+              && __p.generation > transition.generation
+            ) {
+              capsuleTransitionRef.current = null;
+            }
+          }
+        }
+        // A capsule action owns the text already captured in capsuleInfoRef.
+        // Native window restoration can produce one late selection event from
+        // the click itself; letting it through would route the same action via
+        // the saved polish/auto mode and overwrite the translate panel.
+        if (capsuleActionRef.current === 'expanding') {
+          invoke('append_log', { msg: `frontend: ignored selection during capsule expansion t=${__p.trigger}` }).catch(() => {});
+          return;
+        }
         if (shouldShowCapsule(__p) && typeof __p.generation === 'number') {
           if (__p.generation < selectionGenerationRef.current) return;
           selectionGenerationRef.current = __p.generation;
@@ -1600,6 +1780,7 @@ export const App: React.FC = () => {
           ++capsuleRevisionRef.current;
           capsuleActionRef.current = null;
           capsuleInfoRef.current = null;
+          stateRef.current.uiMode = 'panel';
           setCapsule(null);
           setCapsuleVisible(true);
           setUiMode('panel');
@@ -1674,6 +1855,11 @@ export const App: React.FC = () => {
         } else if (event?.payload?.text) {
           const captured = event.payload.text;
           const screenshot = event.payload.screenshot || null;
+          // A new text selection is never the previous screen-reply session.
+          // Clear that context before handling capsule actions so translation
+          // and text-reply entries cannot inherit the old context UI.
+          setScreenReplyAnalysis(null);
+          stateRef.current.screenReplyAnalysis = null;
           setCurrentScreenshot(screenshot);
           setOriginalText(captured);
           stateRef.current.originalText = captured;
@@ -1689,12 +1875,21 @@ export const App: React.FC = () => {
               sourceApp: event.payload.sourceApp,
               windowTitle: event.payload.windowTitle,
               screenshot,
+              generation: event.payload.generation,
             });
             return;
           }
 
+          const capsuleAction = event?.payload?.capsuleAction;
+          if (capsuleAction === 'reply') {
+            setActiveStyle('reply');
+            stateRef.current.activeStyle = 'reply';
+            stateRef.current.handleStartTextReplyAnalysis(captured);
+          } else if (capsuleAction === 'translate') {
+            // Keep the capsule path identical to the header/shortcut path.
+            stateRef.current.activateTranslate(captured, screenshot);
           // 智能模式：AI 依据文字/窗口自动判断风格与行业；手动模式：沿用用户固定的风格
-          if (stateRef.current.autoMode) {
+          } else if (stateRef.current.autoMode) {
             const cls = classifyContext({
               text: captured,
               sourceApp: event.payload.sourceApp,
@@ -1715,8 +1910,12 @@ export const App: React.FC = () => {
               stateRef.current.handleStartPolish(captured, targetStyle, undefined, screenshot);
             }
           } else {
-            setScreenReplyAnalysis(null);
-            stateRef.current.handleStartPolish(captured, stateRef.current.activeStyle, undefined, screenshot);
+            if (stateRef.current.activeStyle === 'reply') {
+              stateRef.current.handleStartTextReplyAnalysis(captured);
+            } else {
+              setScreenReplyAnalysis(null);
+              stateRef.current.handleStartPolish(captured, stateRef.current.activeStyle, undefined, screenshot);
+            }
           }
         } else if (event?.payload?.trigger === 'shortcut') {
           showToast('未检测到选中文本');
@@ -1734,7 +1933,7 @@ export const App: React.FC = () => {
       // 选区没了(鼠标 hook 检测到胶囊挂载期间的普通单击)→ 收胶囊。
       // 面板态忽略:面板不受选区生命周期约束。
       unlistens.push(listen('runbi://selection-cleared', () => {
-        if (stateRef.current.uiMode === 'capsule') {
+        if (stateRef.current.uiMode === 'capsule' && capsuleActionRef.current !== 'expanding') {
           stateRef.current.hideCapsule();
         }
       }).then((un) => un, (e) => { console.warn('listen selection-cleared failed:', e); return undefined; }));
@@ -1935,6 +2134,7 @@ export const App: React.FC = () => {
 
   // Style Change（点任意风格即退出专家模式与智能模式：风格与专家是同一"方式"槽位，互斥）
   const handleStyleChange = (newStyle: PolishStyle) => {
+    translationPanelRef.current = false;
     if (stateRef.current.activeExpert) {
       stateRef.current.activeExpert = null;
       setActiveExpert(null);
@@ -1949,6 +2149,7 @@ export const App: React.FC = () => {
   // ---- 工作模式：显式可切换的第一层（润色 = 改写我的文字；回复 = 帮我想回复）----
   const handleSwitchToPolish = useCallback(() => {
     if (stateRef.current.activeStyle !== 'reply' && stateRef.current.activeStyle !== 'translate' && !stateRef.current.screenReplyAnalysis) return;
+    translationPanelRef.current = false;
     stateRef.current.activeExpert = null;
     setActiveExpert(null);
     setScreenReplyAnalysis(null);
@@ -1971,6 +2172,7 @@ export const App: React.FC = () => {
 
   const handleSwitchToReply = useCallback(() => {
     if (stateRef.current.activeStyle === 'reply') return;
+    translationPanelRef.current = false;
     setScreenReplyAnalysis(null);
     stateRef.current.activeStyle = 'reply';
     setActiveStyle('reply');
@@ -1980,17 +2182,9 @@ export const App: React.FC = () => {
 
   const handleSwitchToTranslate = useCallback(() => {
     if (stateRef.current.activeStyle === 'translate') return;
-    stateRef.current.activeExpert = null;
-    setActiveExpert(null);
-    setScreenReplyAnalysis(null);
-    stateRef.current.activeStyle = 'translate';
-    setActiveStyle('translate');
     const text = stateRef.current.originalText;
-    const target = stateRef.current.translateTarget;
-    setTranslateTarget(target);
-    adapters.storageProvider.set('translateTarget', target).catch(() => {});
-    if (text.trim()) handleStartPolish(text, 'translate', undefined);
-  }, [handleStartPolish, adapters.storageProvider]);
+    activateTranslate(text, null);
+  }, [activateTranslate]);
 
   // ---- 多专家并行：同一输入并发发给 2-4 位专家，各自独立流式 ----
   const applyParallelWindowSize = useCallback((wide: boolean) => {
@@ -2410,10 +2604,9 @@ export const App: React.FC = () => {
       // 胶囊模式不随失焦隐藏:划词后焦点通常仍留在源应用,胶囊的退场
       // 由悬停离开/空闲淡出/Esc 负责(Raycast 式失焦即隐藏只适用面板)。
       if (panelBlurTimerRef.current) clearTimeout(panelBlurTimerRef.current);
-      // The native capsule deliberately does not activate the WebView. Its
-      // captured-selection event can therefore arrive just after blur; defer
-      // the panel-only hide so that blur cannot hide a newly shown capsule and
-      // leave its native generation active.
+      // The native capsule can activate the WebView when clicked. Its
+      // captured-selection event can still arrive just after blur; defer the
+      // panel-only hide so blur cannot hide a newly shown capsule.
       panelBlurTimerRef.current = setTimeout(() => {
         panelBlurTimerRef.current = null;
         const current = stateRef.current;
@@ -2449,6 +2642,11 @@ export const App: React.FC = () => {
       .then(() => getCurrentWindow().setFocus())
       .catch((error) => console.warn('show update prompt failed:', error));
   }, []);
+
+  // Use the entry guard as the render source for the main panel. This keeps
+  // the visual contract stable even if an older async callback commits one
+  // stale activeStyle value after the translation click.
+  const renderedPanelStyle: PolishStyle = translationPanelRef.current ? 'translate' : activeStyle;
 
   // 缺陷2 微胶囊:独占整棵渲染树。窗口只有 196×44,若把胶囊塞进面板容器树,
   // 标题栏(shrink-0)先占满高度,胶囊被 overflow-hidden 裁出可视区——
@@ -2494,10 +2692,10 @@ export const App: React.FC = () => {
               <button
                 type="button"
                 role="tab"
-                aria-selected={activeStyle !== 'reply' && activeStyle !== 'translate' && !screenReplyAnalysis}
+                aria-selected={renderedPanelStyle !== 'reply' && renderedPanelStyle !== 'translate' && !screenReplyAnalysis}
                 title="润色：改写我自己的文字"                onClick={handleSwitchToPolish}
                 className={`rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors cursor-pointer ${
-                  activeStyle !== 'reply' && activeStyle !== 'translate' && !screenReplyAnalysis
+                  renderedPanelStyle !== 'reply' && renderedPanelStyle !== 'translate' && !screenReplyAnalysis
                     ? 'bg-white/10 text-slate-200'
                     : 'text-slate-500 hover:text-slate-300'
                 }`}
@@ -2507,11 +2705,11 @@ export const App: React.FC = () => {
               <button
                 type="button"
                 role="tab"
-                aria-selected={Boolean(activeStyle === 'reply' || screenReplyAnalysis)}
+                aria-selected={Boolean(renderedPanelStyle === 'reply' || screenReplyAnalysis)}
                 title="回复：把上方文字当作对方消息，帮我想一条回复"
                 onClick={handleSwitchToReply}
                 className={`rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors cursor-pointer ${
-                  activeStyle === 'reply' || screenReplyAnalysis
+                  renderedPanelStyle === 'reply' || screenReplyAnalysis
                     ? 'bg-teal-500/20 text-teal-300 border border-teal-500/30'
                     : 'text-slate-500 hover:text-slate-300'
                 }`}
@@ -2521,11 +2719,11 @@ export const App: React.FC = () => {
               <button
                 type="button"
                 role="tab"
-                aria-selected={activeStyle === 'translate'}
+                aria-selected={renderedPanelStyle === 'translate'}
                 title="翻译：精准双向翻译"
                 onClick={handleSwitchToTranslate}
                 className={`rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors cursor-pointer ${
-                  activeStyle === 'translate'
+                  renderedPanelStyle === 'translate'
                     ? 'bg-teal-500/20 text-teal-300 border border-teal-500/30'
                     : 'text-slate-500 hover:text-slate-300'
                 }`}
@@ -2536,7 +2734,7 @@ export const App: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-1">
-            {lastReplacement && (
+            {lastReplacement && renderedPanelStyle !== 'translate' && (
               <button
                 type="button"
                 onClick={handleRevertReplace}
@@ -2646,7 +2844,7 @@ export const App: React.FC = () => {
         </div>
 
         {/* Draft Auto-Recovery Banner */}
-        {recoverableDraft && !showHistory && !showSettings && (
+        {recoverableDraft && renderedPanelStyle !== 'translate' && !showHistory && !showSettings && (
           <div className="flex shrink-0 items-center justify-between border-b border-teal-500/20 bg-teal-500/10 px-3.5 py-1.5 text-xs text-teal-300">
             <span className="truncate pr-2">
               发现上次未完成草稿（{(recoverableDraft.originalText || recoverableDraft.polishedText || '').slice(0, 16)}...）
@@ -3224,7 +3422,7 @@ export const App: React.FC = () => {
             originalText={originalText}
             polishedText={polishedText}
             isGenerating={isGenerating}
-            activeStyle={activeStyle}
+            activeStyle={renderedPanelStyle}
             isDiffMode={isDiffMode}
             isEditable={true}
             durationMs={durationMs}
@@ -3284,7 +3482,7 @@ export const App: React.FC = () => {
             }}
             onToastDismiss={() => setToastVisible(false)}
             replaceLabel={
-              activeStyle === 'reply' || Boolean(screenReplyAnalysis)
+              renderedPanelStyle === 'reply' || Boolean(screenReplyAnalysis)
                 ? `发送至${getChatAppName(stateRef.current.lastChatApp)}`
                 : '贴回'
             }

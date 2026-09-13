@@ -108,6 +108,21 @@ fn resolve_sentry_dsn() -> Option<String> {
 }
 
 fn main() {
+    #[cfg(windows)]
+    {
+        // Purge stale WebView2 HTTP disk cache and V8 bytecode cache to ensure updated assets load immediately
+        if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+            let default_dir = std::path::PathBuf::from(local_app_data)
+                .join("com.runbi.desktop")
+                .join("EBWebView")
+                .join("Default");
+            let _ = std::fs::remove_dir_all(default_dir.join("Cache"));
+            let _ = std::fs::remove_dir_all(default_dir.join("Code Cache"));
+            let _ = std::fs::remove_dir_all(default_dir.join("GPUCache"));
+            let _ = std::fs::remove_dir_all(default_dir.join("Network"));
+        }
+    }
+
     #[cfg(debug_assertions)]
     let mut spawned_dev_server = ensure_debug_frontend();
 
@@ -131,6 +146,16 @@ fn main() {
                 commands::mouse_hook::clear_outside_dismissal();
                 let _ = window.show();
                 let _ = window.set_focus();
+                let _ = window.emit(
+                    "runbi://captured-selection",
+                    serde_json::json!({
+                        "text": "",
+                        "sourceApp": serde_json::Value::Null,
+                        "windowTitle": serde_json::Value::Null,
+                        "hasScreenshot": false,
+                        "trigger": "shortcut",
+                    }),
+                );
             }
         }))
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -342,6 +367,7 @@ fn main() {
             commands::load_app_config,
             commands::save_app_config,
             commands::set_auto_popup_enabled,
+            commands::position::record_panel_size,
             commands::feishu_copilot::capture_feishu_multi_turn_context,
             commands::feishu_copilot::send_to_feishu_input,
         ])
