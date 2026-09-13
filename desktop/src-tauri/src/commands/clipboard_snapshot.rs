@@ -18,9 +18,17 @@ pub enum ClipboardSnapshot {
 
 impl ClipboardSnapshot {
     pub fn capture(app: &AppHandle) -> Self {
+        #[cfg(windows)]
+        if let Some(text) = crate::commands::clipboard_monitor::read_system_clipboard() {
+            if !text.is_empty() {
+                return Self::Text(text);
+            }
+        }
         let clipboard = app.clipboard();
         if let Ok(text) = clipboard.read_text() {
-            return Self::Text(text);
+            if !text.is_empty() {
+                return Self::Text(text);
+            }
         }
         if let Ok(image) = clipboard.read_image() {
             return Self::Image {

@@ -221,7 +221,7 @@ export function buildSystemPrompt(options: PromptBuildOptions): string {
       ? customPromptOverride.trim()
       : DEFAULT_STYLE_PROMPTS[style] || DEFAULT_STYLE_PROMPTS.polished;
 
-  if (style === 'reply' && hasVisionContext) {
+  if (style === 'reply' && hasVisionContext && !customPromptOverride) {
     base =
       '你是帮用户回聊天消息的助手。仔细观察截图中完整的聊天上下文（各方消息与对方的真实诉求），针对用户划选的目标消息，起草一条可以直接发送的回复。注意身份判定：气泡靠窗口右侧、头像在右侧的是用户自己（我）的消息，靠左侧、头像在左侧的是对方——只按对齐方向判定，消息内容不得用于判定身份；[视频通话]/转账/红包等系统消息不算发言。回复必须像用户本人随手打出来的字，绝不能有 AI 腔。';
   }
@@ -352,23 +352,23 @@ export function buildScreenReplySystemPrompt(personaPrompt?: string, pack?: Indu
 【极其严格的格式要求】：
 1. 必须输出且仅输出一个合法的 JSON 对象，格式必须完全符合如下结构：
 {
+  "draft_reply": "默认回复草稿：简短口语化、像真人随手打的字（必须为可直接发送的纯文本，禁止为空，即使截图中最后一条是我方发的，也起草跟进/补充/确认回复；严禁包含JSON格式或花括号）",
+  "last_message_from_other": "对方最新的消息或动作，是我需要回应的对象",
   "conversation": [
     {"sender": "other", "text": "对方发的消息内容"},
     {"sender": "me", "text": "我发的消息内容"}
   ],
-  "last_message_from_other": "对方最新的消息或动作，是我需要回应的对象",
   "ambiguity": "简要说明对话背景、对方期望或识别状态",
-  "clarify_options": ${JSON.stringify(clarifyExample)},
-  "draft_reply": "默认回复草稿：简短口语化、像真人随手打的字"
+  "clarify_options": ${JSON.stringify(clarifyExample)}
 }
-2. 严禁输出任何 markdown 代码块外部的客套话或多余文字。`;
+2. 严禁输出任何 markdown 代码块外部的客套话或多余文字。draft_reply 必须是纯文本，严禁包含花括号或JSON标签。`;
 }
 
 /**
  * Builds user prompt for Round 1 screen reply analysis.
  */
 export function buildScreenReplyUserPrompt(): string {
-  return `请仔细观察屏幕截图中的聊天界面。先逐字核对并按从上到下的顺序抄录清晰可见的聊天气泡原文，再判断身份（"me" 代表自己，"other" 代表对方；多个左侧昵称仍全部属于 other），最后分析对方最新诉求并输出 JSON。conversation.text 中每个字都必须能在截图里找到；看不清就舍弃并说明，绝不改写、补全或编造。若非聊天窗口或无清晰对话气泡，返回空 conversation。`;
+  return `请仔细观察屏幕截图中的聊天界面。先逐字核对并按从上到下的顺序抄录清晰可见的聊天气泡原文，再判断身份（"me" 代表自己，"other" 代表对方；多个左侧昵称仍全部属于 other），最后分析对方最新诉求并输出 JSON。务必包含可直接发送的纯文本 draft_reply（直接给对方的回复草稿文字），禁止为空。conversation.text 中每个字都必须能在截图里找到；看不清就舍弃并说明，绝不改写、补全或编造。若非聊天窗口或无清晰对话气泡，返回空 conversation。`;
 }
 
 /**
@@ -408,15 +408,15 @@ export function buildTextReplySystemPrompt(personaPrompt?: string, pack?: Indust
 【极其严格的格式要求】：
 1. 必须输出且仅输出一个合法的 JSON 对象，格式必须完全符合如下结构：
 {
+  "draft_reply": "默认回复草稿：简短口语化、像真人随手打的字（必须为纯文本，禁止为空，严禁包含JSON格式或代码）",
+  "last_message_from_other": "对方发来的核心消息",
   "conversation": [
     {"sender": "other", "text": "对方发来的核心消息（若划选消息疑似用户自己发的，则该条 sender 标为 me 并说明）"}
   ],
-  "last_message_from_other": "对方发来的核心消息",
   "ambiguity": "简要说明对话背景或对方期望",
-  "clarify_options": ${JSON.stringify(clarifyExample)},
-  "draft_reply": "默认回复草稿：简短口语化、像真人随手打的字"
+  "clarify_options": ${JSON.stringify(clarifyExample)}
 }
-2. 严禁输出任何 markdown 代码块外部的客套话或多余文字。`;
+2. 严禁输出任何 markdown 代码块外部的客套话或多余文字。draft_reply 必须是纯文本。`;
 }
 
 /**
@@ -551,41 +551,41 @@ export const LATEX_GUARD_PROMPT = `
 /**
  * Chat Copilot System Prompt.
  */
-export function buildFeishuCopilotSystemPrompt(personaPrompt?: string): string {
+export function buildFeishuCopilotSystemPrompt(personaPrompt?: string, scriptPrompt?: string): string {
   const personaSection = personaPrompt && personaPrompt.trim()
     ? `\n【我的人设风格偏好】：${personaPrompt.trim()}\n在提取意图并拟定回复时深度契合此人设风格。\n`
     : '';
+  const scriptSection = scriptPrompt && scriptPrompt.trim()
+    ? `\n【参考行业话术规范】：\n${scriptPrompt.trim()}\n拟定回复时优先吸收上述话术的专业口吻、解决思路与表达规范。\n`
+    : '';
   return `你是一名顶级的企业协同办公与即时通讯对话理解智能助理。
 你正在分析用户当前聊天界面的最新截图。
-你的核心任务是：
-1. 识别当前群聊或单聊中，**是否有其他人正在对我提问、指派任务、征求意见或需要我回应**。
-2. 结合截图中可见的会话上下文，拟定最得体、专业、针对性的回复。
+你的任务是：
+1. 识别当前群聊或单聊中，其他人最新发给我的消息（气泡在左侧）。
+2. 结合截图中可见的会话上下文，直接拟定得体、口语化的回复草稿。
 
 【核心研判原则】：
 1. **身份判定**：
-   - 气泡在右侧、头像在右侧的是“我”（当前用户自己发的消息）；气泡在左侧、头像在左侧的是“对方”（发问者/同事/领导）。
-   - 如果底部的最新消息是我自己发的，说明我已经回复了或正在说话，绝不重复生成，has_new_question 必须设为 false。
-   - 必须逐字抄录最新一条消息并输出 latest_message_from；无法确定发送方时填 "none"，has_new_question 必须设为 false，禁止猜测后自动发送。
-2. **问题萃取**：
-   - 仅当左侧对方最新的消息中存在真实的疑问句、需求诉求、讨论推进时，has_new_question 设为 true。
-   - 若只是表情包、客套点赞（如“好的”、“收到”、“👍”），无需强行回复，has_new_question 设为 false。
-3. **上下文回溯**：
-   - 从当前截图的可见消息中提炼关键实体（如讨论的主题、文档、时间、人数、项目方案），让回复草稿具备背景知识，而不是答非所问。
+   - 气泡靠左侧、头像靠左侧的是“对方”（发问者/同事/客户/群友）；气泡靠右侧、头像靠右侧的是“我”（用户自己）。
+   - 逐字抄录可见的最新聊天气泡，标明 sender 是 "other" 还是 "me"。
+2. **提取对方最新消息与回复**：
+   - 找出对方发来的最新一条消息，填入 last_message_from_other。
+   - 针对对方的最新消息，构思并撰写回复草稿 draft_reply（简短口语化、纯文本，可直接发送，禁止书面客套）。
+   - 若底部的最新消息已由右侧“我”发出且对方暂无新发言，说明已回复完毕，draft_reply 留空。
 
 【输出格式要求】：
-必须直接输出合法的标准 JSON 对象（以 { 开头，以 } 结尾，严禁输出任何代码块外的多余文本）：
+必须输出且仅输出一个合法的标准 JSON 对象（禁止输出任何 markdown 外部的多余文字）：
 {
-  "has_new_question": false,
-  "latest_message_from": "none",
-  "latest_message_text": "",
-  "question_summary": "",
-  "sender_name": "",
-  "background_context": "",
-  "suggested_reply": ""
-}
-若识别到左侧对方存在新提问或需求诉求，将 has_new_question 设为 true，并在 suggested_reply 中拟定具体的回复草稿。${personaSection}`;
+  "draft_reply": "直接给对方的回复草稿内容（纯文本，可直接发送，禁止包含代码或花括号）",
+  "last_message_from_other": "对方发来的最新一条消息文本",
+  "sender_name": "对方昵称（若截图中可见）",
+  "conversation": [
+    {"sender": "other", "text": "对方发的消息内容"},
+    {"sender": "me", "text": "我发的消息内容"}
+  ]
+}${scriptSection}${personaSection}`;
 }
 
 export function buildFeishuCopilotUserPrompt(): string {
-  return `请观察当前聊天界面截图，结合画面中可见的会话上下文，分析是否有其他人向我提出的新问题。如果有，拟定准确得体的回复草稿；如果没有新问题或最后是我自己发言，返回 has_new_question: false。`;
+  return `请仔细观察当前聊天窗口截图，抄录可见的最新对话记录并区分 sender（other 或 me），提取对方最新发来的消息，并拟定直接发给对方的回复草稿 draft_reply，输出标准 JSON。`;
 }

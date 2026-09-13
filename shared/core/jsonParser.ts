@@ -116,3 +116,82 @@ export function parseModelJson<T>(raw: string): T {
 
   throw new Error(`Failed to parse model output as JSON: ${text.slice(0, 80)}`);
 }
+
+/**
+ * Safely extracts a clean, human-readable draft reply from parsed model JSON,
+ * guaranteeing raw JSON or code syntax is never returned to the UI.
+ */
+export function extractCleanDraftReply(
+  parsed: any,
+  conversation?: Array<{ sender: string; text: string }>,
+  targetMsg?: string,
+  fallbackToGuidance: boolean = true
+): string {
+  if (!parsed) return '';
+
+  let candidate: any =
+    parsed.draft_reply ??
+    parsed.suggested_reply ??
+    parsed.reply ??
+    parsed.draft ??
+    parsed.response ??
+    parsed.reply_draft ??
+    parsed.text ??
+    '';
+
+  if (typeof candidate !== 'string') {
+    candidate = String(candidate || '');
+  }
+  candidate = candidate.trim();
+
+  // Strip accidental outer quotes or markdown code blocks
+  candidate = candidate.replace(/^```(?:json|text)?\s*/i, '').replace(/\s*```$/i, '').trim();
+  if ((candidate.startsWith('"') && candidate.endsWith('"')) || (candidate.startsWith("'") && candidate.endsWith("'"))) {
+    candidate = candidate.slice(1, -1).trim();
+  }
+
+  // Detect if candidate is itself a raw JSON string or fragment
+  const isRawJson =
+    (candidate.startsWith('{') && candidate.endsWith('}')) ||
+    candidate.includes('"conversation"') ||
+    candidate.includes('"draft_reply"') ||
+    candidate.includes('"sender":');
+
+  if (isRawJson) {
+    // Attempt regex extraction of any quoted reply value inside it
+    const innerMatch = candidate.match(/"(?:draft_reply|suggested_reply|reply|draft)"\s*:\s*"([^"]+)"/i);
+    if (innerMatch && innerMatch[1]?.trim()) {
+      return innerMatch[1].trim();
+    }
+    candidate = '';
+  }
+
+  if (candidate) {
+    return candidate;
+  }
+
+  if (!fallbackToGuidance) {
+    return '';
+  }
+
+  // Graceful fallback when the model omitted draft_reply (e.g. conversation ended with 'me')
+  const otherMsg = targetMsg || conversation?.filter((c) => c.sender === 'other').slice(-1)[0]?.text;
+  if (otherMsg) {
+    return `已根据对方消息“${otherMsg}”提炼上下文，可点击下方快捷标签或输入具体要求生成回复。`;
+  }
+  return '已感知屏幕对话上下文，点击下方快捷标签或直接输入要求生成回复。';
+}
+
+/**
+ * Detects whether a string is internal prompt guidance or a negative response
+ * (e.g. "已根据对方消息...提炼上下文...", "无需回复", "无新消息"), which must
+ * never be sent to a chat recipient.
+ */
+export function isInternalOrNegativeReply(text?: string | null): boolean {
+  if (!text) return true;
+  const trimmed = text.trim();
+  if (!trimmed) return true;
+  if (/^(无需回复|无新消息|暂无新消息|没有新消息|已回复|无需处理|暂无需要回复)[。！!.]?$/i.test(trimmed)) return true;
+  if (/提炼上下文|快捷标签|生成回复|已感知屏幕对话上下文|无需回复|暂无新消息|点击下方/i.test(trimmed)) return true;
+  return false;
+}

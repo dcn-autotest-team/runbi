@@ -14,6 +14,8 @@ import {
   matchPlatform,
   buildExpertSystemPrompt,
   EXPERT_CATEGORY_ORDER,
+  buildCopilotScriptPrompt,
+  buildFeishuCopilotSystemPrompt,
 } from '@runbi/shared/core';
 import type { ScriptLibraryData, ExpertLibraryData } from '@runbi/shared/types';
 
@@ -94,6 +96,21 @@ describe('Shared Core: Script Library (内置话术库)', () => {
   it('filterTemplates without limit returns all matches (回归:曾默认截断 80 条导致弹窗分页失效)', async () => {
     data ??= await loadScriptLibrary();
     expect(filterTemplates(data, {}).length).toBe(data.items.length);
+  });
+
+  it('buildCopilotScriptPrompt formats matched script templates and auto-matches intent', async () => {
+    data ??= await loadScriptLibrary();
+    const autoPrompt = buildCopilotScriptPrompt(data, 'auto', '发票退换货处理');
+    expect(autoPrompt).toContain('【话术参考');
+    expect(autoPrompt.length).toBeGreaterThan(10);
+
+    const aftersalesPrompt = buildCopilotScriptPrompt(data, 'aftersales');
+    expect(aftersalesPrompt).toContain('【话术参考');
+
+    const copilotSys = buildFeishuCopilotSystemPrompt('热情专业', aftersalesPrompt);
+    expect(copilotSys).toContain('【参考行业话术规范】');
+    expect(copilotSys).toContain('【我的人设风格偏好】');
+    expect(copilotSys).toContain('"draft_reply"');
   });
 });
 

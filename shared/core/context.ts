@@ -45,7 +45,7 @@ export function getChatAppName(sourceApp?: string | null, windowTitle?: string |
   return '聊天';
 }
 
-const CHAT_APP_PATTERN =
+export const CHAT_APP_PATTERN =
   /wechat|weixin|微信|企业微信|dingtalk|钉钉|feishu|lark|飞书|telegram|slack|teams|discord|whatsapp|\bqq|tim\b/i;
 
 const OFFICE_APP_PATTERN =

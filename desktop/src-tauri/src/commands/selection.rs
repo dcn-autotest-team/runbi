@@ -182,6 +182,28 @@ async fn await_uia_selection(
     }
 }
 
+pub fn is_terminal_app(app_name: Option<&str>) -> bool {
+    let app = app_name.unwrap_or_default().to_ascii_lowercase();
+    let terminals = [
+        "windowsterminal",
+        "conhost",
+        "powershell",
+        "pwsh",
+        "cmd",
+        "mintty",
+        "alacritty",
+        "wezterm",
+        "kitty",
+        "tabby",
+        "hyper",
+        "mobaxterm",
+        "putty",
+        "xshell",
+        "securecrt",
+    ];
+    terminals.iter().any(|t| app.contains(t))
+}
+
 /// Robustly captures selected text from the active foreground window via simulated Ctrl+C
 pub async fn grab_selected_text_with_retry(app: &tauri::AppHandle) -> Option<String> {
     use tauri_plugin_clipboard_manager::ClipboardExt;
@@ -192,6 +214,23 @@ pub async fn grab_selected_text_with_retry(app: &tauri::AppHandle) -> Option<Str
     if let Some(text) = await_uia_selection(&mut uia_task, Duration::from_millis(80)).await {
         eprintln!("[Runbi] selection captured via UI Automation");
         return Some(text);
+    }
+
+    let (foreground_app, _) = get_foreground_context();
+    let is_terminal = is_terminal_app(foreground_app.as_deref());
+
+    // In terminal windows (cmd, PowerShell, Windows Terminal, mintty, etc.),
+    // NEVER simulate Ctrl+C because Ctrl+C is SIGINT/CTRL_C_EVENT which terminates
+    // the running process (e.g. dev server, build task, python script).
+    // In terminals, only read via non-invasive UI Automation.
+    if is_terminal {
+        let text = await_uia_selection(&mut uia_task, Duration::from_millis(150)).await;
+        if text.is_some() {
+            eprintln!("[Runbi] terminal selection captured via UI Automation");
+        } else {
+            eprintln!("[Runbi] terminal selection: UIA unavailable, skipping Ctrl+C to protect terminal task");
+        }
+        return text;
     }
 
     let snapshot = crate::commands::clipboard_snapshot::ClipboardSnapshot::capture(app);
@@ -297,12 +336,33 @@ pub async fn get_current_selection(window: WebviewWindow) -> Result<SelectionRes
 
 #[cfg(test)]
 mod tests {
-    use super::is_fresh_clipboard_text;
+    use super::{is_fresh_clipboard_text, is_terminal_app};
 
     #[test]
     fn rejects_stale_clipboard_but_accepts_a_repeated_selection_copy() {
         assert!(!is_fresh_clipboard_text(7, 7, "same text", "same text"));
         assert!(is_fresh_clipboard_text(7, 8, "same text", "same text"));
         assert!(!is_fresh_clipboard_text(7, 8, "old", "  \n"));
+    }
+
+    #[test]
+    fn test_is_terminal_app_identifies_terminals() {
+        assert!(is_terminal_app(Some("WindowsTerminal.exe")));
+        assert!(is_terminal_app(Some("powershell.exe")));
+        assert!(is_terminal_app(Some("pwsh.exe")));
+        assert!(is_terminal_app(Some("cmd.exe")));
+        assert!(is_terminal_app(Some("conhost.exe")));
+        assert!(is_terminal_app(Some("mintty.exe")));
+        assert!(is_terminal_app(Some("alacritty.exe")));
+        assert!(is_terminal_app(Some("wezterm-gui.exe")));
+        assert!(is_terminal_app(Some("putty.exe")));
+        assert!(is_terminal_app(Some("xshell.exe")));
+
+        assert!(!is_terminal_app(Some("chrome.exe")));
+        assert!(!is_terminal_app(Some("msedge.exe")));
+        assert!(!is_terminal_app(Some("Feishu.exe")));
+        assert!(!is_terminal_app(Some("Code.exe")));
+        assert!(!is_terminal_app(Some("notepad.exe")));
+        assert!(!is_terminal_app(None));
     }
 }

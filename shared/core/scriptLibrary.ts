@@ -87,3 +87,53 @@ export function matchPlatform(data: ScriptLibraryData, hintText: string): { slug
   }
   return null;
 }
+
+/**
+ * Builds a compact reference script prompt from the script library for Chat Copilot / Auto Reply.
+ * Supports auto-detection based on hint keywords or specific category filtering.
+ */
+export function buildCopilotScriptPrompt(
+  data: ScriptLibraryData | null | undefined,
+  categoryOrAuto: string = 'auto',
+  queryHint?: string
+): string {
+  if (!data || !data.items || data.items.length === 0) return '';
+
+  const chineseTemplates = data.items.filter(isChineseTemplate);
+  let matched: ScriptTemplate[] = [];
+
+  const category = (categoryOrAuto || 'auto').trim();
+  if (category !== 'auto' && category !== '') {
+    // Specific category selected (e.g. 'aftersales', 'presales', 'general', or specific industry)
+    matched = chineseTemplates.filter(
+      (item) => item.phase === category || item.industry === category || item.platform === category
+    );
+  }
+
+  // If auto or category search returned empty, use keyword search from queryHint
+  if (matched.length === 0 && queryHint && queryHint.trim()) {
+    const q = queryHint.trim().toLowerCase();
+    matched = chineseTemplates.filter((item) =>
+      `${item.sectionTitle} ${item.scenario} ${item.template}`.toLowerCase().includes(q)
+    );
+  }
+
+  // If still no specific match, fallback to general Chinese templates
+  if (matched.length === 0) {
+    matched = chineseTemplates.slice(0, 3);
+  }
+
+  // Pick top 2 most relevant templates and format cleanly
+  const selected = matched.slice(0, 2);
+  const formatted = selected.map((item, idx) => {
+    const cleanTemplate = item.template
+      .replace(/\[([^\]]+)\]/g, '$1')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 120);
+    return `【话术参考 ${idx + 1}·${item.sectionTitle || item.scenario}】：${cleanTemplate}`;
+  });
+
+  return formatted.join('\n');
+}
+

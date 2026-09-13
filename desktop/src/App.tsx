@@ -264,7 +264,7 @@ export const App: React.FC = () => {
   const [history, setHistory] = useState<HistoryRecord[]>([]);
   const [showHistory, setShowHistory] = useState<boolean>(false);
   const [showOnboarding, setShowOnboarding] = useState<boolean>(false);
-  const [settingsTab, setSettingsTab] = useState<'model' | 'desktop' | 'persona'>('model');
+  const [settingsTab, setSettingsTab] = useState<'model' | 'desktop' | 'persona' | 'about'>('model');
   const [recoverableDraft, setRecoverableDraft] = useState<DraftSnapshot | null>(null);
   const [lastReplacement, setLastReplacement] = useState<LastReplacementSnapshot | null>(null);
   const persistedNativeSettingsRef = useRef<{
@@ -2926,6 +2926,17 @@ export const App: React.FC = () => {
                 >
                   人设与高级
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setSettingsTab('about')}
+                  className={`rounded-md px-3 py-1 text-xs font-medium transition-all cursor-pointer ${
+                    settingsTab === 'about'
+                      ? 'bg-teal-500/20 text-teal-300 shadow-sm border border-teal-500/30'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  版本更新
+                </button>
               </div>
 
               <span className="rounded-full border border-teal-400/20 bg-teal-400/10 px-2 py-0.5 text-[10px] font-medium text-teal-300 font-mono">
@@ -3264,8 +3275,6 @@ export const App: React.FC = () => {
                   </div>
                 </details>
 
-                <UpdateCheckRow />
-
                 {/* Error Telemetry / DSN Configuration */}
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between">
@@ -3331,35 +3340,57 @@ export const App: React.FC = () => {
               </div>
             )}
 
+            {settingsTab === 'about' && (
+              <div className="runbi-settings-scroll min-h-0 flex-1 space-y-3 overflow-y-auto p-4 animate-in fade-in duration-150">
+                <UpdateCheckRow
+                  onOpenReleaseHistory={() => {
+                    invoke('open_url', {
+                      url: 'https://github.com/dcn-autotest-team/runbi-updates/releases',
+                    }).catch(() => showToast('未能打开发布记录'));
+                  }}
+                />
+                <p className="px-1 text-[10px] leading-4 text-slate-500">
+                  Runbi 会在启动时静默检查更新；发现新版本后展示版本号、发布日期和更新内容，由你决定何时安装。
+                </p>
+              </div>
+            )}
+
             <div className="flex shrink-0 items-center justify-between border-t border-white/10 bg-black/20 px-4 py-3">
               <div className="flex items-center gap-3">
-                <span className="text-[10px] text-slate-500">Esc 取消</span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowSettings(false);
-                    setShowOnboarding(true);
-                  }}
-                  className="text-[11px] font-medium text-teal-400 hover:text-teal-300 hover:underline cursor-pointer"
-                >
-                  重看新手引导
-                </button>
+                <span className="text-[10px] text-slate-500">
+                  {settingsTab === 'about' ? '稳定通道 · 签名校验' : 'Esc 取消'}
+                </span>
+                {settingsTab !== 'about' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowSettings(false);
+                      setShowOnboarding(true);
+                    }}
+                    className="text-[11px] font-medium text-teal-400 hover:text-teal-300 hover:underline cursor-pointer"
+                  >
+                    重看新手引导
+                  </button>
+                )}
               </div>
               <div className="flex items-center gap-2">
+                {settingsTab !== 'about' && (
+                  <button
+                    type="button"
+                    onClick={() => setShowSettings(false)}
+                    className="runbi-focus-ring rounded-lg px-3 py-2 font-medium text-slate-300 transition-colors hover:bg-white/10 hover:text-white"
+                  >
+                    取消
+                  </button>
+                )}
                 <button
-                  type="button"
-                  onClick={() => setShowSettings(false)}
-                  className="runbi-focus-ring rounded-lg px-3 py-2 font-medium text-slate-300 transition-colors hover:bg-white/10 hover:text-white"
-                >
-                  取消
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSavingSettings}
+                  type={settingsTab === 'about' ? 'button' : 'submit'}
+                  onClick={settingsTab === 'about' ? () => setShowSettings(false) : undefined}
+                  disabled={settingsTab !== 'about' && isSavingSettings}
                   className="runbi-primary-button runbi-focus-ring"
                 >
-                  {isSavingSettings && <RefreshCw className="h-3.5 w-3.5 animate-spin" />}
-                  {isSavingSettings ? '保存中…' : '保存设置'}
+                  {settingsTab !== 'about' && isSavingSettings && <RefreshCw className="h-3.5 w-3.5 animate-spin" />}
+                  {settingsTab === 'about' ? '完成' : isSavingSettings ? '保存中…' : '保存设置'}
                 </button>
               </div>
             </div>

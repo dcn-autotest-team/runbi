@@ -10,6 +10,7 @@ const eventMocks = vi.hoisted(() => ({
 const updaterMocks = vi.hoisted(() => ({
   check: vi.fn(),
   relaunch: vi.fn(),
+  getVersion: vi.fn(),
 }));
 
 vi.mock('@tauri-apps/api/event', () => ({
@@ -23,6 +24,7 @@ vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({
 
 vi.mock('@tauri-apps/plugin-updater', () => ({ check: updaterMocks.check }));
 vi.mock('@tauri-apps/plugin-process', () => ({ relaunch: updaterMocks.relaunch }));
+vi.mock('@tauri-apps/api/app', () => ({ getVersion: updaterMocks.getVersion }));
 
 import { App } from '../../desktop/src/App';
 
@@ -35,6 +37,8 @@ describe('Desktop selection-to-polish flow', () => {
     updaterMocks.check.mockReset();
     updaterMocks.check.mockResolvedValue(null);
     updaterMocks.relaunch.mockReset();
+    updaterMocks.getVersion.mockReset();
+    updaterMocks.getVersion.mockResolvedValue('1.0.21');
     eventMocks.listeners.clear();
     eventMocks.listen.mockImplementation(async (event: string, callback: (payload: any) => void) => {
       eventMocks.listeners.set(event, callback);
@@ -69,7 +73,8 @@ describe('Desktop selection-to-polish flow', () => {
   it('shows an available update once without remounting the auto-checker', async () => {
     updaterMocks.check
       .mockResolvedValueOnce({
-        version: '1.0.20',
+        currentVersion: '1.0.21',
+        version: '1.0.22',
         body: 'hotfix',
         downloadAndInstall: vi.fn(),
       })
@@ -85,7 +90,35 @@ describe('Desktop selection-to-polish flow', () => {
     const invoke = (window as any).__TAURI_INTERNALS__.invoke;
     expect(updaterMocks.check).toHaveBeenCalledTimes(1);
     expect(invoke.mock.calls.filter(([command]: [string]) => command === 'position_window_at_cursor')).toHaveLength(1);
-    expect(host.textContent).toContain('Runbi 1.0.20 可以更新');
+    expect(host.textContent).toContain('Runbi 1.0.22 可以更新');
+  });
+
+  it('exposes the installed version from a dedicated settings tab', async () => {
+    await act(async () => {
+      root.render(<App />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      eventMocks.listeners.get('runbi://open-settings')?.({ payload: null });
+      await Promise.resolve();
+    });
+
+    const versionTab = Array.from(host.querySelectorAll('button')).find(
+      (button) => button.textContent?.trim() === '版本更新',
+    ) as HTMLButtonElement;
+    expect(versionTab).not.toBeNull();
+
+    await act(async () => {
+      versionTab.click();
+      await Promise.resolve();
+    });
+
+    expect(host.textContent).toContain('当前版本 v1.0.21');
+    expect(host.textContent).toContain('查看发布记录');
+    expect(host.textContent).toContain('完成');
+    expect(host.textContent).not.toContain('保存设置');
   });
 
   it('starts polishing immediately only for a shortcut-originated selection', async () => {

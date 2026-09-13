@@ -194,9 +194,9 @@ pub(crate) unsafe fn find_window_by_process(
 }
 
 #[cfg(windows)]
-pub(crate) unsafe fn capture_hwnd_to_jpeg(
+pub(crate) unsafe fn capture_hwnd_pixels(
     hwnd: windows_sys::Win32::Foundation::HWND,
-) -> Result<String, String> {
+) -> Result<(i32, i32, Vec<u8>), String> {
     use windows_sys::Win32::Foundation::{BOOL, HWND, RECT};
     use windows_sys::Win32::Graphics::Gdi::{
         BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC,
@@ -310,16 +310,24 @@ pub(crate) unsafe fn capture_hwnd_to_jpeg(
             return Err("Failed to read captured pixels".to_string());
         }
 
-        let data_url = encode_bgra_to_jpeg(width, height, buffer)?;
-        // Keep the screenshot Rust-side: large base64 payloads get silently
-        // dropped crossing the IPC bridge (WebView2 postMessage), so the
-        // frontend only ever receives a hasScreenshot flag and the LLM call
-        // pulls the image from here via use_last_screenshot.
-        if let Ok(mut slot) = LAST_SCREENSHOT.lock() {
-            *slot = Some(data_url.clone());
-        }
-        Ok(data_url)
+        Ok((width, height, buffer))
     }
+}
+
+#[cfg(windows)]
+pub(crate) unsafe fn capture_hwnd_to_jpeg(
+    hwnd: windows_sys::Win32::Foundation::HWND,
+) -> Result<String, String> {
+    let (width, height, buffer) = capture_hwnd_pixels(hwnd)?;
+    let data_url = encode_bgra_to_jpeg(width, height, buffer)?;
+    // Keep the screenshot Rust-side: large base64 payloads get silently
+    // dropped crossing the IPC bridge (WebView2 postMessage), so the
+    // frontend only ever receives a hasScreenshot flag and the LLM call
+    // pulls the image from here via use_last_screenshot.
+    if let Ok(mut slot) = LAST_SCREENSHOT.lock() {
+        *slot = Some(data_url.clone());
+    }
+    Ok(data_url)
 }
 
 /// Last captured screenshot, kept in Rust memory (never crosses IPC whole).

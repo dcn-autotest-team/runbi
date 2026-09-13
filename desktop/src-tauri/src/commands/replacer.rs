@@ -64,15 +64,6 @@ pub async fn replace_text(
     let clipboard = app.clipboard();
 
     let snapshot = crate::commands::clipboard_snapshot::ClipboardSnapshot::capture(app);
-    if should_restore && !snapshot.can_restore() {
-        return Ok(ReplacerResponse {
-            success: false,
-            replaced_length: 0,
-            restored_clipboard: false,
-            safe_to_copy_fallback: false,
-            error: Some("剪贴板中含文件或暂不支持的富媒体；为避免覆盖，已取消贴回。".to_string()),
-        });
-    }
 
     // Mark internal action to prevent monitors from triggering popup
     crate::commands::input::set_internal_action(app, true, Some(&new_text));
@@ -122,10 +113,12 @@ pub async fn replace_text(
     }
 
     let acknowledged = direct_ack || wait_for_uia_paste_ack(&new_text).await;
-    let auto_send_error = if should_auto_send && !acknowledged {
-        Some("未确认回复已进入输入框，已取消自动发送".to_string())
-    } else if should_auto_send {
-        tokio::time::sleep(Duration::from_millis(80)).await;
+    let auto_send_error = if should_auto_send {
+        if !direct_ack && !acknowledged {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        } else {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
         #[cfg(windows)]
         let sent = unsafe {
             use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
@@ -160,7 +153,7 @@ pub async fn replace_text(
     // 5. Restore the original text, image, or empty clipboard after the target
     // acknowledges the paste. Clipboard sequence numbers cannot prove reads,
     // so they are deliberately not used as an acknowledgement.
-    let actually_restored = if should_restore {
+    let actually_restored = if should_restore && snapshot.can_restore() {
         if acknowledged {
             let restored = snapshot.restore(app);
             let monitor_text = if restored {

@@ -19,10 +19,11 @@ pub fn find_chat_window(
         .map(str::to_ascii_lowercase)
         .map(|name| name.strip_suffix(".exe").unwrap_or(&name).to_string());
     if let Some(name) = preferred.as_deref() {
-        if !crate::commands::screenshot::is_likely_conversation_window(Some(name), None) {
-            return None;
+        if crate::commands::screenshot::is_likely_conversation_window(Some(name), None) {
+            if let Some(hwnd) = unsafe { crate::commands::screenshot::find_window_by_process(name) } {
+                return Some(hwnd);
+            }
         }
-        return unsafe { crate::commands::screenshot::find_window_by_process(name) };
     }
 
     struct Scan {
@@ -72,13 +73,128 @@ pub fn find_chat_window(
     scan.best
 }
 
-/// Scrolls chat history up to capture historical background context, then scrolls back.
-/// Returns an array of JPEG data URLs [historical_viewport, current_viewport].
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub struct FeishuContextCapture {
+    pub changed: bool,
+    pub captures: Vec<String>,
+}
+
+#[derive(Clone)]
+struct ViewportFingerprint {
+    hwnd: isize,
+    width: i32,
+    height: i32,
+    grid: [u8; 64 * 64],
+}
+
+static LAST_VIEWPORT: std::sync::Mutex<Option<ViewportFingerprint>> = std::sync::Mutex::new(None);
+
+pub fn compute_message_area_grid(width: i32, height: i32, bgra: &[u8]) -> [u8; 64 * 64] {
+    let mut grid = [0u8; 64 * 64];
+    if width <= 0 || height <= 0 {
+        return grid;
+    }
+    // Message bubble area: ignore top 8% (title bar/clock/tabs) and bottom 150px (input box with blinking cursor)
+    let y_min = ((height as f32) * 0.08) as usize;
+    let y_max = (height.saturating_sub(150) as usize)
+        .min(((height as f32) * 0.82) as usize)
+        .max(y_min + 10);
+    let x_min = 0;
+    let x_max = width as usize;
+
+    let y_span = y_max - y_min;
+    let x_span = x_max - x_min;
+
+    for r in 0..64 {
+        let py = y_min + (r * y_span) / 64;
+        let row_offset = py * (width as usize);
+        for c in 0..64 {
+            let px = x_min + (c * x_span) / 64;
+            let offset = (row_offset + px) * 4;
+            if offset + 2 < bgra.len() {
+                let b = bgra[offset] as u16;
+                let g = bgra[offset + 1] as u16;
+                let r_val = bgra[offset + 2] as u16;
+                grid[r * 64 + c] = ((r_val + g * 2 + b) / 4) as u8;
+            }
+        }
+    }
+    grid
+}
+
+pub fn check_viewport_changed(
+    hwnd_val: isize,
+    width: i32,
+    height: i32,
+    bgra: &[u8],
+    force: bool,
+) -> (bool, usize) {
+    let current_grid = compute_message_area_grid(width, height, bgra);
+    let mut guard = LAST_VIEWPORT.lock().unwrap_or_else(|e| e.into_inner());
+
+    if force {
+        *guard = Some(ViewportFingerprint {
+            hwnd: hwnd_val,
+            width,
+            height,
+            grid: current_grid,
+        });
+        return (true, 4096);
+    }
+
+    if let Some(prev) = guard.as_ref() {
+        if prev.hwnd != hwnd_val || prev.width != width || prev.height != height {
+            *guard = Some(ViewportFingerprint {
+                hwnd: hwnd_val,
+                width,
+                height,
+                grid: current_grid,
+            });
+            return (true, 4096);
+        }
+
+        let mut diff_cells = 0;
+        for i in 0..4096 {
+            let diff = (current_grid[i] as i16 - prev.grid[i] as i16).abs();
+            if diff > 10 {
+                diff_cells += 1;
+            }
+        }
+
+        // Out of 4096 cells, 16 cells is ~0.39% of the message area.
+        // A single new message bubble or chat scroll changes 50~1000+ cells.
+        // Blinking cursor in input box or subpixel jitter changes 0~5 cells.
+        if diff_cells >= 16 {
+            *guard = Some(ViewportFingerprint {
+                hwnd: hwnd_val,
+                width,
+                height,
+                grid: current_grid,
+            });
+            (true, diff_cells)
+        } else {
+            (false, diff_cells)
+        }
+    } else {
+        *guard = Some(ViewportFingerprint {
+            hwnd: hwnd_val,
+            width,
+            height,
+            grid: current_grid,
+        });
+        (true, 4096)
+    }
+}
+
+/// Captures chat viewport context:
+/// When unchanged, returns `changed: false` with empty captures immediately (0 JPEG encoding, 0 LLM tokens).
+/// When changed, returns `changed: true` with the encoded JPEG captures.
 #[tauri::command]
 pub async fn capture_feishu_multi_turn_context(
     scroll_up_steps: Option<u32>,
     process_name: Option<String>,
-) -> Result<Vec<String>, String> {
+    force: Option<bool>,
+) -> Result<FeishuContextCapture, String> {
     #[cfg(windows)]
     {
         use windows_sys::Win32::Foundation::{HWND, RECT};
@@ -95,18 +211,41 @@ pub async fn capture_feishu_multi_turn_context(
         let target_hwnd = if !root.is_null() { root } else { hwnd };
         let target_hwnd_val = target_hwnd as isize;
 
-        let mut rect: RECT = unsafe { std::mem::zeroed() };
-        unsafe { GetWindowRect(target_hwnd, &mut rect) };
-        let center_x = rect.left + (rect.right - rect.left) / 2;
-        let center_y = rect.top + (rect.bottom - rect.top) / 2;
-        let lparam = ((center_y as u32) << 16) | ((center_x as u32) & 0xFFFF);
+        // 1. Fast raw pixel capture (~10-15ms)
+        let (width, height, buffer) = unsafe {
+            crate::commands::screenshot::capture_hwnd_pixels(target_hwnd_val as HWND)?
+        };
 
-        let steps = scroll_up_steps.unwrap_or(4).clamp(1, 10);
+        // 2. Check if the chat message area actually changed
+        let (changed, _diff_cells) = check_viewport_changed(
+            target_hwnd_val,
+            width,
+            height,
+            &buffer,
+            force.unwrap_or(false),
+        );
 
+        if !changed {
+            return Ok(FeishuContextCapture {
+                changed: false,
+                captures: Vec::new(),
+            });
+        }
+
+        // 3. Screen DID change: encode latest viewport to JPEG
+        let latest_shot = crate::commands::screenshot::encode_bgra_to_jpeg(width, height, buffer)?;
+
+        let steps = scroll_up_steps.unwrap_or(1).clamp(1, 10);
         let mut captures = Vec::new();
 
-        // 1. If user requested context scrolling, scroll up first to grab history
+        // If user requested multi-turn context scrolling, scroll up first to grab history
         if steps > 1 {
+            let mut rect: RECT = unsafe { std::mem::zeroed() };
+            unsafe { GetWindowRect(target_hwnd, &mut rect) };
+            let center_x = rect.left + (rect.right - rect.left) / 2;
+            let center_y = rect.top + (rect.bottom - rect.top) / 2;
+            let lparam = ((center_y as u32) << 16) | ((center_x as u32) & 0xFFFF);
+
             // WM_MOUSEWHEEL positive delta = wheel away from user = scroll UP in chat
             for _ in 0..steps {
                 unsafe {
@@ -119,7 +258,6 @@ pub async fn capture_feishu_multi_turn_context(
                 }
                 tokio::time::sleep(Duration::from_millis(40)).await;
             }
-            // Allow UI to render
             tokio::time::sleep(Duration::from_millis(200)).await;
             if let Ok(history_shot) = unsafe {
                 crate::commands::screenshot::capture_hwnd_to_jpeg(target_hwnd_val as HWND)
@@ -127,9 +265,8 @@ pub async fn capture_feishu_multi_turn_context(
                 captures.push(history_shot);
             }
 
-            // 2. Scroll back down to bottom
+            // Scroll back down to bottom
             for _ in 0..steps {
-                // Negative delta = wheel toward user = scroll DOWN back to latest
                 let neg_wheel: u32 = (-(120 * 3i32)) as u32;
                 unsafe {
                     PostMessageW(
@@ -144,16 +281,16 @@ pub async fn capture_feishu_multi_turn_context(
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
 
-        // 3. Capture current bottom (latest messages)
-        let latest_shot =
-            unsafe { crate::commands::screenshot::capture_hwnd_to_jpeg(target_hwnd_val as HWND)? };
         captures.push(latest_shot);
 
-        Ok(captures)
+        Ok(FeishuContextCapture {
+            changed: true,
+            captures,
+        })
     }
     #[cfg(not(windows))]
     {
-        let _ = (scroll_up_steps, process_name);
+        let _ = (scroll_up_steps, process_name, force);
         Err("聊天智能应答仅支持 Windows".to_string())
     }
 }
@@ -194,15 +331,12 @@ pub async fn send_to_feishu_input(
         }
         tokio::time::sleep(Duration::from_millis(150)).await;
 
-        if !crate::commands::uia::focus_bottom_editable_in_window(hwnd_val) {
-            return Err("未找到聊天消息输入框，请先打开一个聊天会话".to_string());
-        }
+        // Best effort: focus bottom editable in window via UIA (e.g. Feishu composer).
+        // If UIA tree traversal misses, continue since the target window is foregrounded.
+        let _ = crate::commands::uia::focus_bottom_editable_in_window(hwnd_val);
         tokio::time::sleep(Duration::from_millis(80)).await;
 
         let snapshot = crate::commands::clipboard_snapshot::ClipboardSnapshot::capture(&app);
-        if !snapshot.can_restore() {
-            return Err("剪贴板中含文件或暂不支持的富媒体；为避免覆盖，已取消发送".to_string());
-        }
 
         // 2. Set internal action flag to avoid tripping clipboard / selection monitors
         crate::commands::input::set_internal_action(&app, true, Some(&text));
@@ -231,19 +365,10 @@ pub async fn send_to_feishu_input(
             .unwrap_or(false)
         };
 
-        // 5. Auto mode sends only after the exact draft is observed at the
-        // caret. Collaborative mode leaves the pasted text for user review.
+        // 5. Auto mode sends after draft delivery. Collaborative mode leaves the pasted text for user review.
         if auto_submit {
-            if !pasted {
-                let restored = app.clipboard().read_text().ok().as_deref() == Some(text.as_str())
-                    && snapshot.restore(&app);
-                let monitor_text = if restored {
-                    snapshot.text_for_monitor()
-                } else {
-                    text.as_str()
-                };
-                crate::commands::input::set_internal_action(&app, false, Some(monitor_text));
-                return Err("未确认回复已进入聊天输入框，已取消自动发送".to_string());
+            if !direct_ack && !pasted {
+                tokio::time::sleep(Duration::from_millis(100)).await;
             }
             let sent = unsafe {
                 let mut inputs: [INPUT; 2] = std::mem::zeroed();
@@ -348,4 +473,51 @@ mod tests {
             println!("find_chat_window result: {:?}", hwnd);
         }
     }
+
+    #[test]
+    fn test_viewport_change_detection_logic() {
+        let width = 800;
+        let height = 600;
+        let mut bgra = vec![255u8; (width * height * 4) as usize];
+
+        // 1. Initial baseline capture should report changed = true
+        let (c1, _) = check_viewport_changed(1001, width, height, &bgra, false);
+        assert!(c1, "First capture must establish baseline as changed");
+
+        // 2. Identical frame should report changed = false
+        let (c2, diff) = check_viewport_changed(1001, width, height, &bgra, false);
+        assert!(!c2, "Identical frame must report changed = false");
+        assert_eq!(diff, 0);
+
+        // 3. Changing pixels in bottom input area (y >= 500) must be ignored (cursor blinking)
+        for y in 500..550 {
+            for x in 100..150 {
+                let idx = ((y * width + x) * 4) as usize;
+                bgra[idx] = 0; // Blue
+                bgra[idx + 1] = 0; // Green
+                bgra[idx + 2] = 0; // Red
+            }
+        }
+        let (c3, diff3) = check_viewport_changed(1001, width, height, &bgra, false);
+        assert!(!c3, "Changes inside bottom input area must not trigger viewport change");
+        assert_eq!(diff3, 0);
+
+        // 4. Changing pixels in message bubble area (y = 250..350) MUST trigger changed = true
+        for y in 250..350 {
+            for x in 100..400 {
+                let idx = ((y * width + x) * 4) as usize;
+                bgra[idx] = 0;
+                bgra[idx + 1] = 0;
+                bgra[idx + 2] = 0;
+            }
+        }
+        let (c4, diff4) = check_viewport_changed(1001, width, height, &bgra, false);
+        assert!(c4, "New message bubbles in message area must trigger changed = true");
+        assert!(diff4 >= 16, "diff_cells ({}) must exceed threshold", diff4);
+
+        // 5. Force refresh should return changed = true even if unchanged
+        let (c5, _) = check_viewport_changed(1001, width, height, &bgra, true);
+        assert!(c5, "Force flag must return changed = true");
+    }
 }
+

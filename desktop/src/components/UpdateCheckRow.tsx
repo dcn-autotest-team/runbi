@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
+import { getVersion } from '@tauri-apps/api/app';
 import { check, type Update } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
-import { RefreshCw } from './Icons';
+import { Check, RefreshCw, RunbiLogo } from './Icons';
 
 export function formatUpdateError(error: unknown): string {
   const message = String(error).replace(/\s+/g, ' ').trim();
@@ -18,24 +19,46 @@ export function formatUpdateError(error: unknown): string {
   return `检查失败：${message.slice(0, 90)}`;
 }
 
-/**
- * Settings row: check GitHub Releases for app updates via tauri-plugin-updater.
- * Fails gracefully (inline note) when offline / endpoint not published yet.
- */
+export function formatUpdateDate(date?: string): string {
+  if (!date) return '';
+  const parsed = new Date(date);
+  if (Number.isNaN(parsed.getTime())) return date;
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  }).format(parsed);
+}
+
 interface UpdateCheckRowProps {
   autoCheck?: boolean;
   prominent?: boolean;
   onUpdateFound?: () => void;
+  onOpenReleaseHistory?: () => void;
 }
 
 export function UpdateCheckRow({
   autoCheck = false,
   prominent = false,
   onUpdateFound,
+  onOpenReleaseHistory,
 }: UpdateCheckRowProps) {
   const [phase, setPhase] = useState<'idle' | 'checking' | 'downloading' | 'done'>('idle');
   const [note, setNote] = useState('');
   const [update, setUpdate] = useState<Update | null>(null);
+  const [currentVersion, setCurrentVersion] = useState('');
+
+  useEffect(() => {
+    let mounted = true;
+    getVersion()
+      .then((version) => {
+        if (mounted && version) setCurrentVersion(version);
+      })
+      .catch(() => {});
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const onCheck = useCallback(async () => {
     setPhase('checking');
@@ -50,7 +73,7 @@ export function UpdateCheckRow({
       } else {
         setUpdate(null);
         setPhase('done');
-        setNote('已是最新版本');
+        setNote('当前已是最新版本');
       }
     } catch (e) {
       setPhase('done');
@@ -65,7 +88,7 @@ export function UpdateCheckRow({
   const onInstall = async () => {
     if (!update) return;
     setPhase('downloading');
-    setNote('下载中…');
+    setNote('正在安全下载并验证更新…');
     try {
       await update.downloadAndInstall();
       setNote('安装完成，正在重启…');
@@ -79,6 +102,8 @@ export function UpdateCheckRow({
   };
 
   const busy = phase === 'checking' || phase === 'downloading';
+  const installedVersion = currentVersion || update?.currentVersion || '读取中…';
+  const releaseDate = formatUpdateDate(update?.date);
 
   if (prominent) {
     if (!update) return null;
@@ -88,44 +113,59 @@ export function UpdateCheckRow({
           role="dialog"
           aria-modal="true"
           aria-labelledby="runbi-update-title"
-          className="w-full max-w-sm rounded-2xl border border-teal-300/30 bg-slate-950 p-5 shadow-2xl"
+          className="w-full max-w-sm overflow-hidden rounded-2xl border border-white/15 bg-slate-950 shadow-2xl"
         >
-          <p className="text-[11px] font-medium text-teal-300">发现新版本</p>
-          <h2 id="runbi-update-title" className="mt-1 text-lg font-semibold text-white">
-            Runbi {update.version} 可以更新
-          </h2>
-          <p className="mt-2 text-xs leading-5 text-slate-400">
-            建议立即更新，以获得最新功能和问题修复。
-          </p>
-          {update.body && (
-            <p className="mt-3 max-h-24 overflow-auto whitespace-pre-wrap rounded-lg bg-white/5 p-2.5 text-[11px] leading-5 text-slate-300">
-              {update.body}
+          <div className="border-b border-white/10 bg-gradient-to-br from-teal-400/10 via-transparent to-transparent p-5">
+            <div className="flex items-center gap-2 text-[11px] font-medium text-teal-300">
+              <span className="flex h-6 w-6 items-center justify-center rounded-lg border border-teal-300/20 bg-teal-300/10">
+                <RunbiLogo className="h-3.5 w-3.5" />
+              </span>
+              软件更新 · v{installedVersion} → v{update.version}
+            </div>
+            <h2 id="runbi-update-title" className="mt-3 text-lg font-semibold text-white">
+              Runbi {update.version} 可以更新
+            </h2>
+            <p className="mt-1 text-xs leading-5 text-slate-400">
+              {releaseDate ? `${releaseDate} 发布 · ` : ''}稳定版本
             </p>
-          )}
-          {note && phase === 'downloading' && (
-            <p className="mt-3 text-[11px] text-teal-300">{note}</p>
-          )}
-          {note.startsWith('安装失败') && (
-            <p role="alert" className="mt-3 text-[11px] text-rose-300">{note}</p>
-          )}
-          <div className="mt-5 flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={() => setUpdate(null)}
-              disabled={busy}
-              className="runbi-focus-ring rounded-lg px-3 py-2 text-xs text-slate-300 hover:bg-white/10 disabled:opacity-50"
-            >
-              稍后提醒
-            </button>
-            <button
-              type="button"
-              onClick={onInstall}
-              disabled={busy}
-              className="runbi-focus-ring flex items-center gap-1.5 rounded-lg runbi-accent-bg px-4 py-2 text-xs font-medium disabled:opacity-60"
-            >
-              {phase === 'downloading' && <RefreshCw className="h-3.5 w-3.5 animate-spin" />}
-              {phase === 'downloading' ? '正在更新…' : '立即更新'}
-            </button>
+          </div>
+
+          <div className="p-5">
+            {update.body ? (
+              <div>
+                <p className="text-[11px] font-medium text-slate-300">本次更新</p>
+                <div className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap rounded-xl border border-white/10 bg-white/[0.035] p-3 text-[11px] leading-5 text-slate-300">
+                  {update.body}
+                </div>
+              </div>
+            ) : (
+              <p className="text-xs leading-5 text-slate-400">包含最新功能、体验改进和问题修复。</p>
+            )}
+            {note && phase === 'downloading' && (
+              <p role="status" className="mt-3 text-[11px] text-teal-300">{note}</p>
+            )}
+            {note.startsWith('安装失败') && (
+              <p role="alert" className="mt-3 text-[11px] text-rose-300">{note}</p>
+            )}
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setUpdate(null)}
+                disabled={busy}
+                className="runbi-focus-ring rounded-lg px-3 py-2 text-xs text-slate-300 transition-colors hover:bg-white/10 disabled:opacity-50"
+              >
+                稍后提醒
+              </button>
+              <button
+                type="button"
+                onClick={onInstall}
+                disabled={busy}
+                className="runbi-primary-button runbi-focus-ring px-4 text-xs"
+              >
+                {phase === 'downloading' && <RefreshCw className="h-3.5 w-3.5 animate-spin" />}
+                {phase === 'downloading' ? '正在更新…' : '更新并重启'}
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -133,35 +173,81 @@ export function UpdateCheckRow({
   }
 
   return (
-    <div className="mt-1 rounded-lg border border-white/10 bg-white/5 px-3 py-2.5">
-      <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-xs font-medium text-white">软件更新</p>
-          <p className="mt-0.5 text-[10px] leading-4 text-slate-400">
-            通过 GitHub Releases 检查新版本并自动安装。
-          </p>
+    <section aria-labelledby="runbi-version-title" className="overflow-hidden rounded-2xl border border-white/10 bg-black/20">
+      <div className="flex items-start justify-between gap-4 border-b border-white/10 bg-gradient-to-br from-teal-400/[0.08] via-transparent to-transparent p-4">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.06] text-slate-100 shadow-sm">
+            <RunbiLogo className="h-6 w-6" />
+          </span>
+          <div className="min-w-0">
+            <h2 id="runbi-version-title" className="text-sm font-semibold text-white">Runbi Desktop</h2>
+            <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px]">
+              <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 font-mono text-slate-300">
+                当前版本 v{installedVersion}
+              </span>
+              <span className="rounded-full border border-teal-400/20 bg-teal-400/10 px-2 py-0.5 text-teal-300">
+                稳定版
+              </span>
+            </div>
+          </div>
         </div>
-        {update && phase === 'done' ? (
-          <button
-            type="button"
-            onClick={onInstall}
-            className="runbi-focus-ring shrink-0 rounded-lg runbi-accent-bg px-3 py-1.5 text-[11px] font-medium transition-opacity hover:opacity-90"
-          >
-            安装 {update.version}
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={onCheck}
-            disabled={busy}
-            className="runbi-focus-ring flex shrink-0 items-center gap-1.5 rounded-lg border border-white/15 px-3 py-1.5 text-[11px] font-medium text-slate-200 transition-colors hover:bg-white/10 disabled:opacity-60"
-          >
-            {busy && <RefreshCw className="h-3 w-3 animate-spin" />}
-            {phase === 'checking' ? '检查中…' : phase === 'downloading' ? '下载中…' : '检查更新'}
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={update && phase === 'done' ? onInstall : onCheck}
+          disabled={busy}
+          className={`${update && phase === 'done' ? 'runbi-primary-button' : 'runbi-secondary-button'} runbi-focus-ring shrink-0 px-3 text-[11px]`}
+        >
+          {busy && <RefreshCw className="h-3.5 w-3.5 animate-spin" />}
+          {phase === 'checking'
+            ? '正在检查…'
+            : phase === 'downloading'
+              ? '正在更新…'
+              : update
+                ? `更新到 v${update.version}`
+                : '检查更新'}
+        </button>
       </div>
-      {note && <p className="mt-1.5 text-[10px] leading-4 text-slate-400">{note}</p>}
-    </div>
+
+      <div className="space-y-3 p-4">
+        <div className="flex items-start gap-2 text-[11px] leading-5 text-slate-400">
+          {phase === 'done' && !update && !note.startsWith('检查失败') ? (
+            <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-teal-300" />
+          ) : (
+            <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-slate-500" />
+          )}
+          <span role={note.startsWith('检查失败') ? 'alert' : 'status'}>
+            {note || '点击检查更新，获取最新稳定版本和完整更新说明。'}
+          </span>
+        </div>
+
+        {update && (
+          <div className="rounded-xl border border-teal-300/20 bg-teal-300/[0.05] p-3">
+            <div className="flex items-baseline justify-between gap-3">
+              <p className="text-xs font-semibold text-white">v{update.version}</p>
+              {releaseDate && <time className="text-[10px] text-slate-500">{releaseDate}</time>}
+            </div>
+            <p className="mt-0.5 text-[10px] text-teal-300">可用的新版本</p>
+            {update.body && (
+              <div className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap border-t border-white/10 pt-2 text-[11px] leading-5 text-slate-300">
+                {update.body}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="flex items-center justify-between gap-3 border-t border-white/[0.07] pt-3 text-[10px] text-slate-500">
+          <span>更新包会在安装前验证数字签名</span>
+          {onOpenReleaseHistory && (
+            <button
+              type="button"
+              onClick={onOpenReleaseHistory}
+              className="runbi-focus-ring shrink-0 rounded px-1.5 py-1 font-medium text-teal-400 transition-colors hover:bg-teal-400/10 hover:text-teal-300"
+            >
+              查看发布记录
+            </button>
+          )}
+        </div>
+      </div>
+    </section>
   );
 }
