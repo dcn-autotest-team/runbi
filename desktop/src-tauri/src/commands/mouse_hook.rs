@@ -237,7 +237,22 @@ unsafe fn capsule_bounds_at_point(
 
 #[cfg(windows)]
 fn point_inside_capsule_bounds(pt: windows_sys::Win32::Foundation::POINT) -> bool {
-    unsafe { capsule_bounds_at_point(pt).is_some() }
+    if unsafe { capsule_bounds_at_point(pt) }.is_some() {
+        return true;
+    }
+    point_near_capsule_bounds(pt, 160)
+}
+
+#[cfg(windows)]
+fn point_near_capsule_bounds(pt: windows_sys::Win32::Foundation::POINT, margin: i32) -> bool {
+    let (left, top, width, height) = capsule_bounds_for_pointer();
+    if width <= 0 || height <= 0 {
+        return false;
+    }
+    pt.x >= left - margin
+        && pt.x < left + width + margin
+        && pt.y >= top - margin
+        && pt.y < top + height + margin
 }
 
 #[cfg(windows)]
@@ -258,7 +273,25 @@ fn capsule_action_for_geometry(x: i32, left: i32, width: i32) -> Option<&'static
 
 #[cfg(windows)]
 fn capsule_action_for_point(pt: windows_sys::Win32::Foundation::POINT) -> Option<&'static str> {
-    let (left, _top, width, _height) = unsafe { capsule_bounds_at_point(pt) }?;
+    let (left, _top, width, _height) = match unsafe { capsule_bounds_at_point(pt) } {
+        Some(bounds) => bounds,
+        None => {
+            let bounds = capsule_bounds_for_pointer();
+            let (left, top, width, height) = bounds;
+            if width <= 0 || height <= 0 {
+                return None;
+            }
+            const NEAR_MARGIN: i32 = 160;
+            if pt.x < left - NEAR_MARGIN
+                || pt.x >= left + width + NEAR_MARGIN
+                || pt.y < top - NEAR_MARGIN
+                || pt.y >= top + height + NEAR_MARGIN
+            {
+                return None;
+            }
+            bounds
+        }
+    };
     capsule_action_for_geometry(pt.x, left, width)
 }
 

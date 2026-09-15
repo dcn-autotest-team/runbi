@@ -488,7 +488,7 @@ export const App: React.FC = () => {
   ) => {
     if (!text.trim()) return;
     invoke('append_log', {
-      msg: `frontend: activate translate len=${text.length} before_ui=${stateRef.current.uiMode} before_style=${stateRef.current.activeStyle}`,
+      msg: `frontend: activate translate len=${text.length} head=${text.slice(0, 20)} before_ui=${stateRef.current.uiMode} before_style=${stateRef.current.activeStyle} override=${targetOverride ?? "none"}`,
     }).catch(() => {});
     styleOverrideRef.current = true;
     translationPanelRef.current = true;
@@ -535,6 +535,7 @@ export const App: React.FC = () => {
     } else if (targetOverride === 'en' && autoTarget === 'zh-Hans') {
       target = 'zh-Hans';
     }
+    invoke('append_log', { msg: `frontend: activate target resolved=${target} auto=${autoTarget} override=${targetOverride ?? "none"}` }).catch(() => {});
     stateRef.current.translateTarget = target;
     setTranslateTarget(target);
     adapters.storageProvider.set('translateTarget', target).catch(() => {});
@@ -586,7 +587,7 @@ export const App: React.FC = () => {
     async (mode: 'polish' | 'reply' | 'translate') => {
       const info = capsuleInfoRef.current;
       invoke('append_log', {
-        msg: `frontend: capsule action mode=${mode} info=${Boolean(info)} action=${capsuleActionRef.current ?? 'none'} ui=${stateRef.current.uiMode}`,
+        msg: `frontend: capsule action mode=${mode} info=${Boolean(info)} ts=${info ? info.ts : "-"} head=${info ? info.text.slice(0, 20) : "-"} action=${capsuleActionRef.current ?? 'none'} ui=${stateRef.current.uiMode}`,
       }).catch(() => {});
       if (!info || capsuleActionRef.current) return;
       if (mode === 'translate') {
@@ -1752,7 +1753,14 @@ export const App: React.FC = () => {
         if (generation <= selectionGenerationRef.current) return;
         selectionGenerationRef.current = generation;
         // The ref is cleared synchronously on expansion, before its IPC await.
-        if (capsuleInfoRef.current || capsuleFadeTimerRef.current) stateRef.current.hideCapsule(true, true);
+        if (capsuleInfoRef.current || capsuleFadeTimerRef.current) {
+          stateRef.current.hideCapsule(true, true);
+        } else if (stateRef.current.uiMode === "panel" && stateRef.current.activeStyle === "translate") {
+          invoke('append_log', { msg: "frontend: stale translate panel reset on invalidation" }).catch(() => {});
+          setPolishedText("");
+          setOriginalText("");
+          stateRef.current.originalText = "";
+        }
       }).catch((e) => {
         console.warn('listen selection invalidation failed:', e);
         return undefined;

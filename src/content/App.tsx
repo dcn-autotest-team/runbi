@@ -73,8 +73,8 @@ export const App: React.FC<AppProps> = ({
 
   // Stream & Polishing States
   const [activeStyle, setActiveStyle] = useState<PolishStyle>('polished');
-  const [translateTarget, setTranslateTarget] = useState<TranslateTargetId>('en');
-  const translateTargetRef = useRef<TranslateTargetId>('en');
+  const [translateTarget, setTranslateTarget] = useState<TranslateTargetId | null>(null);
+  const translateTargetRef = useRef<TranslateTargetId | null>(null);
   const [currentInstruction, setCurrentInstruction] = useState<string>('');
   const [polishedText, setPolishedText] = useState<string>('');
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
@@ -158,7 +158,7 @@ export const App: React.FC<AppProps> = ({
         }
 
         const autoTarget = resolveTranslateTarget(text);
-        let effectiveTranslateTarget = targetOverride || autoTarget;
+        let effectiveTranslateTarget = targetOverride ?? autoTarget;
         if (targetOverride === 'zh-Hans' && autoTarget === 'en') {
           effectiveTranslateTarget = 'en';
         } else if (targetOverride === 'en' && autoTarget === 'zh-Hans') {
@@ -474,7 +474,7 @@ export const App: React.FC<AppProps> = ({
       modelName={modelName}
       toastMessage={toastMessage}
       toastVisible={toastVisible}
-      translateTarget={translateTarget}
+      translateTarget={translateTarget ?? undefined}
       onTranslateTargetChange={handleTranslateTargetChange}
       onClose={handleDismiss}
       onStyleChange={handleStyleChange}
