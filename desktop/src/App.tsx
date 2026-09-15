@@ -1019,41 +1019,78 @@ export const App: React.FC = () => {
     };
 
     const runStream = async (config: StreamConfig): Promise<void> => {
-      await adapters.llmTransport.streamChat(
-        { text, config },
-        {
-          onChunk: (delta) => {
-            if (currentSignal.aborted) return;
-            setPolishedText((prev) => prev + delta);
-          },
-          onDone: (duration, tokens) => {
-            if (currentSignal.aborted) return;
-            setIsGenerating(false);
-            setDurationMs(duration);
-            setTotalTokens(tokens);
-            if (abortControllerRef.current === abortController) {
-              abortControllerRef.current = null;
-            }
-            setPolishedText((finalText) => {
-              if (finalText && finalText.trim()) {
-                addHistoryRecord({
-                  // refine 路径传入的 text 是整段 prompt,历史"原文"要显示真实对话原文
-                  originalText: historyOriginalText?.trim() || text,
-                  polishedText: finalText.trim(),
-                  style,
-                  instruction: customInstruction,
-                  model: config.model,
-                  tokens,
-                  durationMs: duration,
-                });
-                // 缺陷8 LaTeX 保护后校验:公式/命令被改动时明确提醒,不静默吞掉
-                const latexLost = findLatexViolations(text, finalText);
-                if (latexLost.length) {
-                  showToast(`⚠ ${latexLost.length} 处 LaTeX 标记疑似被改动：${latexLost.slice(0, 2).join(' ')}`, 4000);
-                }
+      // Coalesce SSE deltas into one state update per animation frame. React's
+      // setPolishedText per chunk would re-render the panel (plus Markdown +
+      // diff work) hundreds of times per stream; the batched flush keeps the
+      // visuals identical while cutting render work by an order of magnitude.
+      let pendingDelta = '';
+      let flushTimer: number | null = null;
+      const flushPending = (force = false) => {
+        if (flushTimer !== null) {
+          clearTimeout(flushTimer);
+          flushTimer = null;
+        }
+        if (!pendingDelta) return;
+        if (currentSignal.aborted) {
+          pendingDelta = '';
+          return;
+        }
+        if (force) {
+          const all = pendingDelta;
+          pendingDelta = '';
+          setPolishedText((prev) => prev + all);
+          return;
+        }
+        flushTimer = setTimeout(() => {
+          flushTimer = null;
+          if (currentSignal.aborted) {
+            pendingDelta = '';
+            return;
+          }
+          const batched = pendingDelta;
+          pendingDelta = '';
+          setPolishedText((prev) => prev + batched);
+        }, 16) as unknown as number;
+      };
+      try {
+        await adapters.llmTransport.streamChat(
+          { text, config },
+          {
+            onChunk: (delta) => {
+              if (currentSignal.aborted) return;
+              pendingDelta += delta;
+              flushPending();
+            },
+            onDone: (duration, tokens) => {
+              // Never drop the trailing tail: commit it before final state.
+              flushPending(true);
+              if (currentSignal.aborted) return;
+              setIsGenerating(false);
+              setDurationMs(duration);
+              setTotalTokens(tokens);
+              if (abortControllerRef.current === abortController) {
+                abortControllerRef.current = null;
               }
-              return finalText;
-            });
+              setPolishedText((finalText) => {
+                if (finalText && finalText.trim()) {
+                  addHistoryRecord({
+                    // refine 路径传入的 text 是整段 prompt,历史"原文"要显示真实对话原文
+                    originalText: historyOriginalText?.trim() || text,
+                    polishedText: finalText.trim(),
+                    style,
+                    instruction: customInstruction,
+                    model: config.model,
+                    tokens,
+                    durationMs: duration,
+                  });
+                  // 缺陷8 LaTeX 保护后校验:公式/命令被改动时明确提醒,不静默吞掉
+                  const latexLost = findLatexViolations(text, finalText);
+                  if (latexLost.length) {
+                    showToast(`⚠ ${latexLost.length} 处 LaTeX 标记疑似被改动：${latexLost.slice(0, 2).join(' ')}`, 4000);
+                  }
+                }
+                return finalText;
+              });
             // 缺陷1:试用通道按次记账(优先服务端 tokens,缺失则本地保守估算)
             if (usedTrial) {
               const used = tokens > 0 ? tokens : estimateTokens(`${text}`);
@@ -1067,6 +1104,13 @@ export const App: React.FC = () => {
             }
           },
           onError: async (err) => {
+            // A failed attempt must not leak its partial text into the retry
+            // that follows (trial/vision fallbacks re-enter this stream).
+            pendingDelta = '';
+            if (flushTimer !== null) {
+              clearTimeout(flushTimer);
+              flushTimer = null;
+            }
             if (currentSignal.aborted) return;
             // 缺陷1:官方试用通道不可用时,静默回落 Mock 演示,不把错误甩给新用户
             if (usedTrial) {
@@ -1095,6 +1139,7 @@ export const App: React.FC = () => {
             }
           },
           onAbort: () => {
+            flushPending(true);
             if (currentSignal.aborted && abortControllerRef.current === abortController) {
               setIsGenerating(false);
               abortControllerRef.current = null;
@@ -1103,6 +1148,10 @@ export const App: React.FC = () => {
         },
         currentSignal
       );
+      } finally {
+        // A stream that ended early (abort/error) must not leave a timer behind.
+        flushPending(true);
+      }
     };
 
     try {
@@ -1755,7 +1804,7 @@ export const App: React.FC = () => {
         // The ref is cleared synchronously on expansion, before its IPC await.
         if (capsuleInfoRef.current || capsuleFadeTimerRef.current) {
           stateRef.current.hideCapsule(true, true);
-        } else if (stateRef.current.uiMode === "panel" && stateRef.current.activeStyle === "translate") {
+        } else if (!stateRef.current.isGenerating && stateRef.current.uiMode === "panel" && stateRef.current.activeStyle === "translate") {
           invoke('append_log', { msg: "frontend: stale translate panel reset on invalidation" }).catch(() => {});
           setPolishedText("");
           setOriginalText("");
@@ -2329,25 +2378,59 @@ export const App: React.FC = () => {
         packPrompt: stateRef.current.activePackPrompt || undefined,
       };
 
-      picked.forEach((expert, i) => {
+      picked.forEach(async (expert, i) => {
         const session = sessions[i];
         const controller = new AbortController();
         parallelControllersRef.current.set(session.id, controller);
         const signal = controller.signal;
         let acc = '';
+        // Same frame-batched flush as the main panel: a parallel expert stream
+        // emits hundreds of deltas and must not patch state per chunk.
+        let pendingDelta = '';
+        let flushTimer: number | null = null;
         const patch = (p: Partial<ParallelSession>) =>
           setParallelSessions((prev) => prev.map((s) => (s.id === session.id ? { ...s, ...p } : s)));
-
-        adapters.llmTransport
+        const flushPending = (force = false) => {
+          if (flushTimer !== null) {
+            clearTimeout(flushTimer);
+            flushTimer = null;
+          }
+          if (!pendingDelta) return;
+          if (signal.aborted) {
+            pendingDelta = '';
+            return;
+          }
+          if (force) {
+            const all = pendingDelta;
+            pendingDelta = '';
+            acc += all;
+            patch({ text: acc });
+            return;
+          }
+          flushTimer = setTimeout(() => {
+            flushTimer = null;
+            if (signal.aborted) {
+              pendingDelta = '';
+              return;
+            }
+            const batched = pendingDelta;
+            pendingDelta = '';
+            acc += batched;
+            patch({ text: acc });
+          }, 16) as unknown as number;
+        };
+        try {
+          await adapters.llmTransport
           .streamChat(
             { text, config: { ...baseConfig, customPrompt: buildExpertSystemPrompt(expert) } },
             {
               onChunk: (delta) => {
                 if (signal.aborted) return;
-                acc += delta;
-                patch({ text: acc });
+                pendingDelta += delta;
+                flushPending();
               },
               onDone: (duration, tokens) => {
+                flushPending(true);
                 if (signal.aborted) return;
                 parallelControllersRef.current.delete(session.id);
                 patch({ status: 'done', durationMs: duration, totalTokens: tokens });
@@ -2364,11 +2447,17 @@ export const App: React.FC = () => {
                 }
               },
               onError: (err) => {
+                pendingDelta = '';
+                if (flushTimer !== null) {
+                  clearTimeout(flushTimer);
+                  flushTimer = null;
+                }
                 if (signal.aborted) return;
                 parallelControllersRef.current.delete(session.id);
                 patch({ status: 'error', error: err });
               },
               onAbort: () => {
+                flushPending(true);
                 parallelControllersRef.current.delete(session.id);
                 patch({ status: 'done' });
               },
@@ -2380,6 +2469,10 @@ export const App: React.FC = () => {
             parallelControllersRef.current.delete(session.id);
             patch({ status: 'error', error: String((e as Error)?.message || e) });
           });
+        } finally {
+          // A stream that ended early (abort/error) must not leave a timer behind.
+          flushPending(true);
+        }
       });
     },
     [adapters, apiKey, endpoint, model, showToast, stopAllParallel, applyParallelWindowSize, addHistoryRecord]

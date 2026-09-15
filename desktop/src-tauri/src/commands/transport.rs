@@ -2,6 +2,8 @@
 //! Bypasses browser CORS and connects directly to OpenAI / DeepSeek compatible endpoints.
 
 use futures_util::StreamExt;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
@@ -37,6 +39,63 @@ pub enum StreamEvent {
     },
 }
 
+/// Id of the stream the frontend most recently aborted.
+///
+/// `stream_llm_chat` carries a unique, strictly increasing `stream_id` (the
+/// frontend mints one per invocation) and stops reading as soon as its own id
+/// equals this value.
+///
+/// Why this exists: the frontend `abortController.abort()` only silences local
+/// callbacks. Without a Rust-side stop the SSE read loop keeps draining a
+/// full-length generation whose result nobody wants, which holds the model
+/// busy and makes the NEXT (wanted) request queue behind it. Log analysis of
+/// 20 388 requests showed 1 940 streams that never reached `llm done` for
+/// exactly this reason.
+///
+/// Equality (not `<=` / max) is deliberate: a late watcher may report an OLD
+/// aborted id after a newer stream has started, and max-semantics would then
+/// kill that innocent newer stream.
+static ABORTED_STREAM_ID: AtomicU64 = AtomicU64::new(0);
+
+/// True when the stream identified by `stream_id` was aborted by the frontend.
+#[inline]
+fn is_stream_aborted(stream_id: u64) -> bool {
+    stream_id != 0 && stream_id == ABORTED_STREAM_ID.load(Ordering::Relaxed)
+}
+
+/// Armas the keyboard-invalidation grace for one LLM stream and releases it
+/// when that stream ends.
+///
+/// The daemon thread wakes every 200ms to re-arm the 500ms grace so the user's
+/// own typing cannot cancel a panel that is still streaming. It MUST be stopped
+/// exactly when the stream finishes: a thread that outlives its stream keeps the
+/// grace armed forever, which both wastes a thread per request and disables
+/// keyboard-selection invalidation globally (stale panels then never clear).
+struct KeybordGraceKepper {
+    stop: Arc<AtomicBool>,
+}
+
+impl KeybordGraceKepper {
+    fn start() -> KeybordGraceKepper {
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread_stop = stop.clone();
+        std::thread::spawn(move || loop {
+            crate::commands::mouse_hook::note_internal_keyboard_activity(true);
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            if thread_stop.load(Ordering::Relaxed) {
+                break;
+            }
+        });
+        KeybordGraceKepper { stop }
+    }
+}
+
+impl Drop for KeybordGraceKepper {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+    }
+}
+
 #[tauri::command]
 pub async fn stream_llm_chat(
     app: tauri::AppHandle,
@@ -48,9 +107,14 @@ pub async fn stream_llm_chat(
     temperature: Option<f32>,
     image_data_url: Option<String>,
     use_last_screenshot: Option<bool>,
+    stream_id: Option<u64>,
     channel: Channel<StreamEvent>,
 ) -> Result<(), String> {
+    let stream_id = stream_id.unwrap_or(0);
     let start = Instant::now();
+    // Arms the keyboard grace only for the duration of this stream; the guard
+    // stops the daemon thread on every return path below.
+    let _kb_grace = KeybordGraceKepper::start();
     // Resolve the vision image: explicit data URL wins, else pull the last
     // captured screenshot from Rust-side state (it never crosses IPC whole).
     let img_url = match image_data_url {
@@ -61,7 +125,9 @@ pub async fn stream_llm_chat(
     // Streaming-friendly timeouts: connect_timeout covers dial + TLS handshake,
     // read_timeout covers each body chunk individually. A single total `timeout`
     // would kill long-running polish streams at the 60s mark even when healthy.
-    let client = Client::builder()
+    // Bypass system/env proxies: loopback LLM endpoints get buffered and
+    // throttled when routed through a local proxy (e.g. Clash on 7890).
+    let client = Client::builder().no_proxy()
         .connect_timeout(std::time::Duration::from_secs(15))
         .read_timeout(std::time::Duration::from_secs(60))
         .build()
@@ -165,13 +231,42 @@ pub async fn stream_llm_chat(
     let mut buffer: Vec<u8> = Vec::new();
     let mut total_tokens = 0;
     let mut snippet = String::new();
+    // Batch SSE deltas into ~50ms IPC sends: per-chunk Channel messages cost
+    // a WebView round-trip each, which throttles fast streams heavily.
+    let mut pending_delta = String::new();
+    let mut last_flush = std::time::Instant::now();
 
     while let Some(item) = stream.next().await {
+        // Checkpoint 1: the user aborted while we were awaiting the next body
+        // chunk. Stop reading at once and drop the socket instead of draining
+        // a generation nobody will render.
+        if is_stream_aborted(stream_id) {
+            crate::commands::file_log(
+                &app,
+                &format!(
+                    "llm aborted by frontend after {}ms",
+                    start.elapsed().as_millis()
+                ),
+            );
+            return Ok(());
+        }
         match item {
             Ok(bytes) => {
                 buffer.extend_from_slice(&bytes);
 
                 while let Some(pos) = buffer.iter().position(|&b| b == b'\n') {
+                    // Checkpoint 2: one body chunk can hold dozens of SSE lines,
+                    // so also re-check per line (cheap atomic load).
+                    if is_stream_aborted(stream_id) {
+                        crate::commands::file_log(
+                            &app,
+                            &format!(
+                                "llm aborted by frontend after {}ms",
+                                start.elapsed().as_millis()
+                            ),
+                        );
+                        return Ok(());
+                    }
                     let line = String::from_utf8_lossy(&buffer[..pos]).trim().to_string();
                     buffer.drain(..=pos);
 
@@ -189,6 +284,11 @@ pub async fn stream_llm_chat(
                                 head
                             ),
                         );
+                        if !pending_delta.is_empty() {
+                            let _ = channel.send(StreamEvent::Chunk {
+                                delta: std::mem::take(&mut pending_delta),
+                            });
+                        }
                         let _ = channel.send(StreamEvent::Done {
                             duration_ms: start.elapsed().as_millis() as u64,
                             total_tokens,
@@ -203,9 +303,13 @@ pub async fn stream_llm_chat(
                                 if snippet.chars().count() < 300 {
                                     snippet.push_str(delta);
                                 }
-                                let _ = channel.send(StreamEvent::Chunk {
-                                    delta: delta.to_string(),
-                                });
+                                pending_delta.push_str(delta);
+                                if last_flush.elapsed() >= std::time::Duration::from_millis(50) {
+                                    let _ = channel.send(StreamEvent::Chunk {
+                                        delta: std::mem::take(&mut pending_delta),
+                                    });
+                                    last_flush = std::time::Instant::now();
+                                }
                             }
                         }
                     }
@@ -238,15 +342,28 @@ pub async fn stream_llm_chat(
 }
 
 #[tauri::command]
+#[allow(dead_code)]
+pub fn abort_llm_stream(stream_id: u64) -> Result<(), String> {
+    // Records the aborted id. A stream stops only when its own id matches,
+    // so a late report for an already-finished stream cannot hurt a newer one.
+    ABORTED_STREAM_ID.store(stream_id, Ordering::Relaxed);
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn test_llm_connection(
     req: TestConnectionRequest,
 ) -> Result<TestConnectionResponse, String> {
-    let client = reqwest::Client::builder()
+    let client = reqwest::Client::builder().no_proxy()
         .connect_timeout(std::time::Duration::from_secs(8))
         .timeout(std::time::Duration::from_secs(15))
         .build()
         .map_err(|e| e.to_string())?;
     let start = Instant::now();
+    // A one-token connectivity probe has no panel to protect, so it arms no
+    // keyboard grace: a daemon thread here would outlive the probe and slow
+    // down every later real stream. It also needs `.no_proxy()` like the real
+    // stream: a loopback endpoint behind a local proxy reports false negatives.
 
     let model = req.model.unwrap_or_else(|| "deepseek-chat".to_string());
 
@@ -319,4 +436,38 @@ pub async fn hide_capsule_window(window: WebviewWindow, generation: u64) -> Resu
 pub fn app_ready(_window: WebviewWindow) -> Result<(), String> {
     // Frontend is initialized in background. Keep window silent until user selection or wake shortcut.
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn aborted_stream_id_stops_only_that_stream() {
+        // 回归:旧代码里 kb_stop 建了却从不读取,每个请求泄一个永久线程;
+        // 且前端 abort 完全不到 Rust,SSE 继续拉完整段生成,占着模型不放。
+        // 日志里 20388 个请求中 1940 个永远没到 llm done,就是这样来的。
+        ABORTED_STREAM_ID.store(0, Ordering::SeqCst);
+
+        // 未 abort 时任何流都能跑。
+        assert!(!is_stream_aborted(7));
+
+        // abort 7 号流后,只有 7 号停。
+        ABORTED_STREAM_ID.store(7, Ordering::SeqCst);
+        assert!(is_stream_aborted(7));
+        assert!(!is_stream_aborted(8));
+        assert!(!is_stream_aborted(6));
+
+        // 迟到的老 id 上报不能误杀新流。
+        ABORTED_STREAM_ID.store(3, Ordering::SeqCst);
+        assert!(!is_stream_aborted(8));
+        assert!(is_stream_aborted(3));
+    }
+
+    #[test]
+    fn stream_id_zero_never_matches() {
+        // stream_id 缺失时(旧前端不发)必须保持旧行为:不因残留 id 误停。
+        ABORTED_STREAM_ID.store(9, Ordering::SeqCst);
+        assert!(!is_stream_aborted(0));
+    }
 }

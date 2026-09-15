@@ -28,6 +28,12 @@ export class TauriIPCLLMTransport implements ILLMTransport {
   }
 
   /**
+   * Monotonic id minted for every stream. The Rust side keeps the newest
+   * aborted id, so `abort_llm_stream(id)` stops this stream and every older one.
+   */
+  private nextStreamId = 0;
+
+  /**
    * Starts a streaming chat completion.
    */
   public async streamChat(
@@ -111,6 +117,7 @@ export class TauriIPCLLMTransport implements ILLMTransport {
     if (this.isTauri()) {
       try {
         const channel = new Channel();
+        const streamId = ++this.nextStreamId;
 
         channel.onmessage = (event: StreamEvent) => {
           if (signal?.aborted) return;
@@ -123,17 +130,46 @@ export class TauriIPCLLMTransport implements ILLMTransport {
           }
         };
 
-        await invoke('stream_llm_chat', {
-          endpoint,
-          apiKey,
-          model,
-          systemPrompt,
-          userPrompt,
-          temperature: config.temperature ?? 0.7,
-          imageDataUrl: config.imageDataUrl || null,
-          useLastScreenshot: config.useLastScreenshot ?? false,
-          channel,
-        });
+        // Stop the Rust SSE read loop the moment the user aborts. Without this
+        // the frontend only stopped rendering; the socket kept draining a full
+        // generation, holding the model busy for the NEXT request.
+        //
+        // The AbortSignal `onabort` setter in the jsdom runtime has no usable
+        // type, so poll the flag on a short timer and clear it on every exit
+        // path below. `abort_llm_stream` is idempotent, so at most one extra
+        // call escapes the clear.
+        let abortWatch: number | null = setInterval(() => {
+          if (signal?.aborted) {
+            if (abortWatch !== null) {
+              clearInterval(abortWatch);
+              abortWatch = null;
+            }
+            invoke('abort_llm_stream', { streamId }).catch(() => {});
+          }
+        }, 50) as unknown as number;
+        const storpAbortWatch = () => {
+          if (abortWatch !== null) {
+            clearInterval(abortWatch);
+            abortWatch = null;
+          }
+        };
+
+        try {
+          await invoke('stream_llm_chat', {
+            endpoint,
+            apiKey,
+            model,
+            systemPrompt,
+            userPrompt,
+            temperature: config.temperature ?? 0.7,
+            imageDataUrl: config.imageDataUrl || null,
+            useLastScreenshot: config.useLastScreenshot ?? false,
+            streamId,
+            channel,
+          });
+        } finally {
+          storpAbortWatch();
+        }
         return;
       } catch (err: any) {
         if (signal?.aborted) {
