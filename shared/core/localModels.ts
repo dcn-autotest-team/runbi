@@ -30,6 +30,40 @@ function parseNameList(json: unknown, key: string, idField: string): string[] {
     .filter(Boolean);
 }
 
+export const SENSEAUDIO_BASE_URL = 'https://api.senseaudio.cn/v1';
+
+/**
+ * 从 SenseAudio OpenAI 兼容端点 GET /models 拉取可用模型 id 列表。
+ * apiKey 为空时返回错误信息（不发起请求）；HTTP 非 2xx 与网络错误都折叠进 error 字段。
+ * fetchImpl 参数供测试注入，不传则用宿主 fetch。
+ */
+export async function fetchSenseAudioModels(
+  fetchImpl: typeof fetch = (...args) => fetch(...args),
+  baseUrl: string = SENSEAUDIO_BASE_URL,
+  apiKey?: string,
+  timeoutMs = 8000
+): Promise<{ models: string[]; error?: string }> {
+  const key = apiKey?.trim();
+  if (!key) return { models: [], error: '未配置 API Key；请先在上方填写，或检查环境变量 SENSEAUDIO_API_KEY。' };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetchImpl(`${baseUrl.replace(/\/+$/, '')}/models`, {
+      headers: { Authorization: `Bearer ${key}` },
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      return { models: [], error: `HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ''}` };
+    }
+    return { models: parseNameList(await res.json(), 'data', 'id') };
+  } catch (e) {
+    const msg = e instanceof Error && e.name === 'AbortError' ? '请求超时' : String((e as Error)?.message ?? e);
+    return { models: [], error: msg };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export const LOCAL_PROBE_TARGETS: ProbeTarget[] = [
   {
     providerId: 'ollama',
