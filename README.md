@@ -34,6 +34,7 @@
 | **03. 原型设计与 UI 规范** | [`docs/03_PROTOTYPE_AND_UI_SPEC.md`](docs/03_PROTOTYPE_AND_UI_SPEC.md) | 交互流程、Shadow DOM / 悬浮窗设计、Design Tokens |
 | **04. 视觉与 Logo 资产规范** | [`docs/04_DESIGN_ASSETS_SPEC.md`](docs/04_DESIGN_ASSETS_SPEC.md) | 品牌 Logo、应用图标、配色方案规范 |
 | **05. 桌面端极简架构设计与交接** | [`docs/05_DESKTOP_MINIMAL_HANDOFF.md`](docs/05_DESKTOP_MINIMAL_HANDOFF.md) | 底层 Win32 钩子、Rust IPC 与平台适配器实现细节 |
+| **📕 Agent 教训录 (2026-09-15)** | [`docs/agent-lessons-2026-09-15.md`](docs/agent-lessons-2026-09-15.md) | **接手前必读**：LLM 响应慢的报因排查、Rust/TypeScript 方言语法、构建与日志排查手册、遗留未修项 |
 
 ---
 

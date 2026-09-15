@@ -28,8 +28,9 @@ export class TauriIPCLLMTransport implements ILLMTransport {
   }
 
   /**
-   * Monotonic id minted for every stream. The Rust side keeps the newest
-   * aborted id, so `abort_llm_stream(id)` stops this stream and every older one.
+   * Monotonic id minted for every stream. The Rust side stops only the stream
+   * whose id matches exactly, so a late report for an already-finished stream
+   * can never kill a newer one.
    */
   private nextStreamId = 0;
 
