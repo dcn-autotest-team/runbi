@@ -6,7 +6,7 @@
  */
 import React, { useEffect, useState } from 'react';
 import type { AppSettings, GlossaryRule } from '@runbi/shared/types';
-import { probeLocalModels, type LocalModelProbeResult } from '@runbi/shared/core';
+import { probeLocalModels, fetchSenseAudioModels, type LocalModelProbeResult } from '@runbi/shared/core';
 import { RefreshCw } from './Icons';
 
 export interface AdvancedSettingsProps {
@@ -39,6 +39,29 @@ export const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({ settings, on
   const [probing, setProbing] = useState<boolean>(false);
   // 每个端点的模型下拉选中值（key = baseUrl）。
   const [pickedModel, setPickedModel] = useState<Record<string, string>>({});
+  // SenseAudio 云端模型列表：null = 尚未拉取。
+  const [senseAudioModels, setSenseAudioModels] = useState<string[] | null>(null);
+  const [senseAudioError, setSenseAudioError] = useState<string>('');
+  const [senseAudioLoading, setSenseAudioLoading] = useState(false);
+  const [senseAudioPicked, setSenseAudioPicked] = useState('');
+
+  const fetchSenseAudio = () => {
+    setSenseAudioLoading(true);
+    setSenseAudioError('');
+    // 自带 8s 超时且错误折叠进返回值，无需在卸载时取消。
+    fetchSenseAudioModels(undefined, undefined, settings.apiKey ?? settings.senseAudioApiKey)
+      .then(({ models, error }) => {
+        if (error) {
+          setSenseAudioModels(null);
+          setSenseAudioError(error);
+        } else {
+          setSenseAudioModels(models);
+          // 自动选取默认模型：默认选中第一个。
+          setSenseAudioPicked((prev) => (models.includes(prev) ? prev : models[0] ?? ''));
+        }
+      })
+      .finally(() => setSenseAudioLoading(false));
+  };
 
   const runProbe = () => {
     setProbing(true);
@@ -185,7 +208,68 @@ export const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({ settings, on
         )}
       </section>
 
-      {/* ── 区块 3：本地模型 · 零配置探测 ── */}
+      {/* ── 区块 3：SenseAudio 云端模型 · /v1/models 自动获取 ── */}
+      <section className="runbi-settings-card space-y-1.5 px-3 py-2.5">
+        <div className="flex items-center justify-between gap-2">
+          <span className="min-w-0">
+            <span className="block text-[11px] font-medium text-slate-300">SenseAudio 云端模型</span>
+            <span className="mt-0.5 block text-[10px] leading-relaxed text-slate-500">
+              自动获取可用模型列表，默认选中第一个。
+            </span>
+          </span>
+          <button
+            type="button"
+            onClick={fetchSenseAudio}
+            disabled={senseAudioLoading}
+            aria-label="获取模型列表"
+            className="runbi-secondary-button runbi-focus-ring shrink-0 cursor-pointer px-2.5 py-1 text-[11px]"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${senseAudioLoading ? 'animate-spin' : ''}`} />
+            {senseAudioLoading ? '获取中' : '获取模型列表'}
+          </button>
+        </div>
+
+        {senseAudioError ? (
+          <p role="alert" className="text-[10px] leading-relaxed text-rose-300">
+            获取模型列表失败：{senseAudioError}
+          </p>
+        ) : senseAudioModels && senseAudioModels.length > 0 ? (
+          <div className="flex items-center gap-1.5">
+            <select
+              aria-label="SenseAudio 模型选择"
+              value={senseAudioPicked}
+              onChange={(e) => setSenseAudioPicked(e.target.value)}
+              className="runbi-form-control min-w-0 flex-1 cursor-pointer font-mono text-[11px]"
+            >
+              {senseAudioModels.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() =>
+                onPatch({
+                  baseUrl: 'https://api.senseaudio.cn/v1/chat/completions',
+                  model: senseAudioPicked,
+                })
+              }
+              className="runbi-focus-ring shrink-0 rounded-lg border border-teal-500/40 bg-teal-500/20 px-2.5 py-1 text-[11px] font-medium text-teal-300 hover:bg-teal-500/25 transition-colors cursor-pointer"
+            >
+              一键使用
+            </button>
+          </div>
+        ) : (
+          <p className="text-[10px] leading-relaxed text-slate-500">
+            {senseAudioLoading
+              ? '正在从 https://api.senseaudio.cn/v1/models 拉取…'
+              : '点击「获取模型列表」自动获取可用模型；选择后保存即可在润色时使用所选模型。'}
+          </p>
+        )}
+      </section>
+
+      {/* ── 区块 4：本地模型 · 零配置探测 ── */}
       <section className="runbi-settings-card space-y-1.5 px-3 py-2.5">
         <div className="flex items-center justify-between gap-2">
           <span className="min-w-0">

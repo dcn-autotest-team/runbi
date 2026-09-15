@@ -183,3 +183,68 @@ describe('Desktop AdvancedSettings Component', () => {
     expect(findButton(container, '一键使用')).toBeUndefined();
   });
 });
+
+describe('AdvancedSettings SenseAudio model picker', () => {
+  let container: HTMLDivElement;
+  let root: ReturnType<typeof createRoot> | null = null;
+
+  const renderComponent = async (props: { settings?: AppSettings; onPatch: (patch: Partial<AppSettings>) => void }) => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => {
+      root!.render(<AdvancedSettings settings={props.settings ?? {}} onPatch={props.onPatch} />);
+    });
+  };
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    if (root) {
+      act(() => root!.unmount());
+      root = null;
+    }
+    document.body.innerHTML = '';
+  });
+
+  it('fetches models, auto-picks the first and applies selection via onPatch', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      ({ ok: true, status: 200, json: async () => ({ object: 'list', data: [{ id: 'senseaudio-s2' }, { id: 'senseaudio-vl' }] }) }) as unknown as Response
+    ));
+    const onPatch = vi.fn((_patch: Partial<AppSettings>) => undefined);
+    await renderComponent({ settings: { apiKey: 'sk-test' }, onPatch });
+
+    const fetchBtn = findButton(container, '获取模型列表');
+    expect(fetchBtn).toBeDefined();
+    await act(async () => {
+      fetchBtn!.click();
+    });
+    const select = container.querySelector('select[aria-label="SenseAudio 模型选择"]') as HTMLSelectElement;
+    expect(select).toBeDefined();
+    expect(select.options.length).toBe(2);
+    // 自动选取默认模型：默认选中第一个
+    expect(select.value).toBe('senseaudio-s2');
+
+    await act(async () => {
+      findButton(container, '一键使用')!.click();
+    });
+    expect(onPatch).toHaveBeenCalledWith({
+      baseUrl: 'https://api.senseaudio.cn/v1/chat/completions',
+      model: 'senseaudio-s2',
+    });
+  });
+
+  it('shows the failure path with the HTTP error the user sees', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      ({ ok: false, status: 401, statusText: 'Unauthorized' } as unknown as Response)
+    ));
+    const onPatch = vi.fn((_patch: Partial<AppSettings>) => undefined);
+    await renderComponent({ settings: { apiKey: 'bad' }, onPatch });
+
+    await act(async () => {
+      findButton(container, '获取模型列表')!.click();
+    });
+    const alert = container.querySelector('p[role="alert"]');
+    expect(alert?.textContent).toContain('HTTP 401');
+    expect(container.querySelector('select[aria-label="SenseAudio 模型选择"]')).toBeNull();
+  });
+});

@@ -16,6 +16,11 @@ export interface AppSettings {
   apiKey?: string;
 
   /**
+   * SenseAudio 通道的 API Key（与环境变量 SENSEAUDIO_API_KEY 同义；未单独设置时回退 apiKey）。
+   */
+  senseAudioApiKey?: string;
+
+  /**
    * Base URL for OpenAI/DeepSeek-compatible endpoint.
    */
   baseUrl?: string;
