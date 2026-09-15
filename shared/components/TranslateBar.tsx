@@ -5,12 +5,13 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
-import { TRANSLATE_TARGETS, type TranslateTargetId } from '../core/prompts';
+import { TRANSLATE_TARGETS, resolveTranslateTarget, type TranslateTargetId } from '../core/prompts';
 
 export interface TranslateBarProps {
   target: TranslateTargetId;
   onTargetChange: (id: TranslateTargetId) => void;
   disabled?: boolean;
+  originalText?: string;
 }
 
 /** 20×14 简笔旗帜：够识别即可，不追求精确国徽细节。 */
@@ -42,6 +43,13 @@ const Flag: React.FC<{ id: string; className?: string }> = ({ id, className = 'h
           <circle cx="10" cy="7" r="3.4" fill="#BC002D" />
         </svg>
       );
+    case 'auto':
+      return (
+        <svg viewBox="0 0 20 14" className={common} aria-hidden="true">
+          <rect width="20" height="14" fill="#0d9488" rx="2" />
+          <path d="M4.5 7h11M12.5 4.5L15 7l-2.5 2.5M7.5 9.5L5 7l2.5-2.5" stroke="#fff" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
     case 'ko':
       return (
         <svg viewBox="0 0 20 14" className={common} aria-hidden="true">
@@ -64,7 +72,7 @@ const Flag: React.FC<{ id: string; className?: string }> = ({ id, className = 'h
   }
 };
 
-export const TranslateBar: React.FC<TranslateBarProps> = ({ target, onTargetChange, disabled = false }) => {
+export const TranslateBar: React.FC<TranslateBarProps> = ({ target, onTargetChange, disabled = false, originalText }) => {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -84,7 +92,17 @@ export const TranslateBar: React.FC<TranslateBarProps> = ({ target, onTargetChan
     };
   }, [isOpen]);
 
-  const current = TRANSLATE_TARGETS.find((t) => t.id === target) ?? TRANSLATE_TARGETS[0];
+  let resolvedTarget = target;
+  if (originalText && originalText.trim()) {
+    const autoTarget = resolveTranslateTarget(originalText);
+    if (target === 'zh-Hans' && autoTarget === 'en') {
+      resolvedTarget = 'en';
+    } else if (target === 'en' && autoTarget === 'zh-Hans') {
+      resolvedTarget = 'zh-Hans';
+    }
+  }
+
+  const current = TRANSLATE_TARGETS.find((t) => t.id === resolvedTarget) ?? TRANSLATE_TARGETS[0];
 
   return (
     <div className="flex items-center gap-2" data-testid="translate-bar">
@@ -133,7 +151,7 @@ export const TranslateBar: React.FC<TranslateBarProps> = ({ target, onTargetChan
           }`}
         >
           {TRANSLATE_TARGETS.map((opt) => {
-            const active = opt.id === target;
+            const active = opt.id === resolvedTarget;
             return (
               <button
                 key={opt.id}

@@ -47,10 +47,10 @@ describe('用户旅程 1: 首次安装 → 配置模型', () => {
 });
 
 describe('用户旅程 2: 划词润色(记事本/网页场景)', () => {
-  it('长中文段落 → 智能识别为精简提炼,纯英文 → 地道英文', () => {
+  it('长中文段落 → 智能识别为精简提炼,纯英文 → 翻译', () => {
     const longZh = '这段话'.repeat(200);
     expect(classifyContext({ text: longZh }).style).toBe('concise');
-    expect(classifyContext({ text: 'This is a pure English paragraph for testing translation style detection, over twenty letters.' }).style).toBe('native_en');
+    expect(classifyContext({ text: 'This is a pure English paragraph for testing translation style detection, over twenty letters.' }).style).toBe('translate');
   });
 
   it('7 种润色风格都有 system prompt / 快捷键 / 温度,键位不冲突', () => {

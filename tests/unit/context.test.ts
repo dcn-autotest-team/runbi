@@ -33,17 +33,29 @@ describe('Context Auto-Sense Classifier', () => {
     expect(c.mode).toBe('reply');
   });
 
-  it('mixed Chinese with technical tokens is NOT sent to the English translator', () => {
+  it('mixed Chinese with technical tokens is NOT sent to the translator', () => {
     const mixed = '唤醒键已经是 Ctrl+2（配置里两个文件都是）——如果按习惯按 Ctrl+Shift+Space，永远没反应。模型 qwen3.8-27b 跑在 deepseek-v4-flash-0731 上。';
     const c = classifyContext({ text: mixed });
-    expect(c.style).not.toBe('native_en');
+    expect(c.style).not.toBe('translate');
   });
 
-  it('near-pure English still maps to native_en', () => {
+  it('near-pure English maps to translate mode', () => {
     const c = classifyContext({
       text: 'The quick brown fox jumps over the lazy dog again and again without any stop.',
     });
-    expect(c.style).toBe('native_en');
+    expect(c.style).toBe('translate');
+    expect(c.reason).toContain('自动翻译为中文');
+  });
+
+  it('short foreign phrases and single words map to translate mode', () => {
+    expect(classifyContext({ text: 'Hello world' }).style).toBe('translate');
+    expect(classifyContext({ text: 'Cancel subscription' }).style).toBe('translate');
+    expect(classifyContext({ text: 'こんにちは世界' }).style).toBe('translate');
+  });
+
+  it('text containing translation instructions maps to translate mode', () => {
+    expect(classifyContext({ text: '把这段文字翻译一下：今日天气晴好' }).style).toBe('translate');
+    expect(classifyContext({ text: '请帮我中译英' }).style).toBe('translate');
   });
 
   it('chat app beats mixed-text heuristics', () => {

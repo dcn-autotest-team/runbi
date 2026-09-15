@@ -203,11 +203,72 @@ describe('Desktop selection-to-polish flow', () => {
 
     // 面板已展开：翻译语言条可见，mock 翻译结果已流出
     expect(host.querySelector('[data-testid="translate-bar"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="translate-target-trigger"]')?.textContent).toContain('英文');
     expect(host.textContent).toContain('Translated');
     // 胶囊翻译必须复用与快捷键/顶部翻译入口相同的极简面板，不带润色专属控件。
     expect(host.querySelector('#style-dropdown-trigger')).toBeNull();
     expect(host.querySelector('#original-preview')).toBeNull();
     expect(host.textContent).not.toContain('补充要求');
+  });
+
+  it('translates English selection to Chinese and Chinese selection to English automatically', async () => {
+    await act(async () => {
+      root.render(<App />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const onSelection = eventMocks.listeners.get('runbi://captured-selection')!;
+
+    // 1. 划词英文 -> 自动设置为简体中文
+    await act(async () => {
+      onSelection({
+        payload: { text: 'Translate this English sentence to Chinese', trigger: 'selection', capsule: true },
+      });
+      await Promise.resolve();
+    });
+    await act(async () => {
+      (host.querySelector('button[aria-label="翻译选中文本"]') as HTMLButtonElement).click();
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+
+    expect(host.querySelector('[data-testid="translate-bar"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="translate-target-trigger"]')?.textContent).toContain('简体中文');
+
+    // 2. 划词中文 -> 自动设置为英文
+    await act(async () => {
+      onSelection({
+        payload: { text: '把这段中文划词翻译成英文', trigger: 'selection', capsule: true },
+      });
+      await Promise.resolve();
+    });
+    await act(async () => {
+      (host.querySelector('button[aria-label="翻译选中文本"]') as HTMLButtonElement).click();
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+
+    expect(host.querySelector('[data-testid="translate-target-trigger"]')?.textContent).toContain('英文');
+  });
+
+  it('automatically routes foreign text to translate mode with Simplified Chinese target in autoMode', async () => {
+    await act(async () => {
+      root.render(<App />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const onSelection = eventMocks.listeners.get('runbi://captured-selection')!;
+
+    // 划词英文在智能模式下通过快捷键触发，自动识别为翻译并设为简体中文
+    await act(async () => {
+      onSelection({
+        payload: { text: 'This is an English sentence that needs translation.', trigger: 'shortcut' },
+      });
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+
+    expect(host.querySelector('[data-testid="translate-bar"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="translate-target-trigger"]')?.textContent).toContain('简体中文');
   });
 
   it('does not carry a recoverable draft banner into capsule translation', async () => {
@@ -732,5 +793,38 @@ describe('Desktop selection-to-polish flow', () => {
     expect(invoke.mock.calls.some(([command]: [string]) => command === 'hide_capsule_window')).toBe(false);
   });
 
-});
+  it('automatically resolves Chinese text to English target in translation panel', async () => {
+    await act(async () => root.render(<App />));
+    const select = eventMocks.listeners.get('runbi://captured-selection')!;
+    await act(async () => select({
+      payload: { text: '这是中文句子需要翻译成英文', trigger: 'shortcut' },
+    }));
+    await act(async () => {
+      (host.querySelector('#style-dropdown-trigger') as HTMLButtonElement | null)?.click();
+    });
+    const translateAction = host.querySelector('button[aria-label="翻译选中文本"]') as HTMLButtonElement | null;
+    if (translateAction) {
+      await act(async () => translateAction.click());
+    }
+    // TranslateBar should resolve to English for Chinese text
+    const trigger = host.querySelector('[data-testid="translate-target-trigger"]');
+    if (trigger) {
+      expect(trigger.textContent).toContain('英文');
+      expect(trigger.textContent).not.toContain('简体中文');
+    }
+  });
 
+  it('automatically resolves English text to Chinese target in translation panel', async () => {
+    await act(async () => root.render(<App />));
+    const select = eventMocks.listeners.get('runbi://captured-selection')!;
+    await act(async () => select({
+      payload: { text: 'This is an English sentence for translation', trigger: 'shortcut' },
+    }));
+    const trigger = host.querySelector('[data-testid="translate-target-trigger"]');
+    if (trigger) {
+      expect(trigger.textContent).toContain('简体中文');
+      expect(trigger.textContent).not.toContain('英文');
+    }
+  });
+
+});

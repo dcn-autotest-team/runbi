@@ -17,6 +17,7 @@ import type {
 } from '@runbi/shared/adapters';
 import { calculateCapsulePosition, calculatePanelPosition } from '@runbi/shared/core/position';
 import { PolishPanel } from '@runbi/shared/components/PolishPanel';
+import { buildTranslateSystemPrompt, resolveTranslateTarget, type TranslateTargetId } from '@runbi/shared/core/prompts';
 import { TriggerCapsule } from '../components/TriggerCapsule';
 import { HOST_ELEMENT_ID } from './shadowRoot';
 import {
@@ -72,6 +73,8 @@ export const App: React.FC<AppProps> = ({
 
   // Stream & Polishing States
   const [activeStyle, setActiveStyle] = useState<PolishStyle>('polished');
+  const [translateTarget, setTranslateTarget] = useState<TranslateTargetId>('en');
+  const translateTargetRef = useRef<TranslateTargetId>('en');
   const [currentInstruction, setCurrentInstruction] = useState<string>('');
   const [polishedText, setPolishedText] = useState<string>('');
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
@@ -130,7 +133,7 @@ export const App: React.FC<AppProps> = ({
 
   // Start or restart stream generation for current selection and style
   const startStream = useCallback(
-    async (text: string, style: PolishStyle, userInstruction?: string) => {
+    async (text: string, style: PolishStyle, userInstruction?: string, targetOverride?: TranslateTargetId) => {
       cleanupStream();
 
       setPolishedText('');
@@ -154,7 +157,23 @@ export const App: React.FC<AppProps> = ({
           setModelName(storedModel);
         }
 
-        const promptOverride = storedCustomPrompts?.[style] || storedCustomPrompt;
+        const autoTarget = resolveTranslateTarget(text);
+        let effectiveTranslateTarget = targetOverride || autoTarget;
+        if (targetOverride === 'zh-Hans' && autoTarget === 'en') {
+          effectiveTranslateTarget = 'en';
+        } else if (targetOverride === 'en' && autoTarget === 'zh-Hans') {
+          effectiveTranslateTarget = 'zh-Hans';
+        }
+        if (style === 'translate') {
+          if (effectiveTranslateTarget !== translateTargetRef.current) {
+            setTranslateTarget(effectiveTranslateTarget);
+            translateTargetRef.current = effectiveTranslateTarget;
+          }
+        }
+
+        const promptOverride = style === 'translate'
+          ? buildTranslateSystemPrompt(effectiveTranslateTarget, text)
+          : (storedCustomPrompts?.[style] || storedCustomPrompt);
 
         const config: StreamConfig = {
           apiKey: storedApiKey || undefined,
@@ -237,10 +256,23 @@ export const App: React.FC<AppProps> = ({
       setActiveStyle(style);
       setCurrentInstruction('');
       if (selection) {
-        startStream(selection.text, style);
+        const target = style === 'translate' ? resolveTranslateTarget(selection.text) : undefined;
+        startStream(selection.text, style, undefined, target);
       }
     },
     [selection, startStream]
+  );
+
+  // Translate target language change
+  const handleTranslateTargetChange = useCallback(
+    (id: TranslateTargetId) => {
+      setTranslateTarget(id);
+      translateTargetRef.current = id;
+      if (activeStyle === 'translate' && selection) {
+        startStream(selection.text, 'translate', currentInstruction, id);
+      }
+    },
+    [activeStyle, selection, currentInstruction, startStream]
   );
 
   // Natural language instruction submission
@@ -442,6 +474,8 @@ export const App: React.FC<AppProps> = ({
       modelName={modelName}
       toastMessage={toastMessage}
       toastVisible={toastVisible}
+      translateTarget={translateTarget}
+      onTranslateTargetChange={handleTranslateTargetChange}
       onClose={handleDismiss}
       onStyleChange={handleStyleChange}
       onToggleDiff={handleToggleDiff}

@@ -20,7 +20,7 @@ impl Default for SelectionMonitorState {
     fn default() -> Self {
         Self {
             enabled: Arc::new(AtomicBool::new(true)),
-            auto_popup: Arc::new(AtomicBool::new(false)),
+            auto_popup: Arc::new(AtomicBool::new(true)),
             is_internal_action: Arc::new(AtomicBool::new(false)),
             last_selected_text: Arc::new(Mutex::new(String::new())),
         }
@@ -1289,6 +1289,12 @@ pub fn set_auto_popup_enabled(
     enabled: bool,
 ) -> Result<bool, String> {
     state.auto_popup.store(enabled, Ordering::SeqCst);
+    if let Some((_, app)) = MONITOR_STATE.get() {
+        let app_handle = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            crate::commands::file_log(&app_handle, &format!("set_auto_popup_enabled: {enabled}"));
+        });
+    }
     Ok(enabled)
 }
 
@@ -1393,6 +1399,9 @@ mod tests {
     #[test]
     fn automatic_selection_popup_is_opt_in_and_obeys_internal_guard() {
         let state = SelectionMonitorState::default();
+        assert!(should_handle_selection(&state));
+
+        state.auto_popup.store(false, Ordering::Relaxed);
         assert!(!should_handle_selection(&state));
 
         state.auto_popup.store(true, Ordering::Relaxed);

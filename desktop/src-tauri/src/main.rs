@@ -283,17 +283,40 @@ fn main() {
 
             // Start Global Mouse Drag-Selection Monitor (Doubao / Cherry Studio style)
             let selection_state = commands::mouse_hook::SelectionMonitorState::default();
+            if let Ok(cfg) = commands::config::load_app_config(app.handle().clone()) {
+                let auto_popup = cfg
+                    .get("autoCopyPopup")
+                    .or_else(|| cfg.get("runbi:autoCopyPopup"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+                selection_state.auto_popup.store(auto_popup, std::sync::atomic::Ordering::SeqCst);
+            }
             app.manage(selection_state.clone());
             #[cfg(windows)]
             if let Some(window) = app.get_webview_window("main") {
-                if let Ok(hwnd) = window.hwnd() {
-                    commands::mouse_hook::set_runbi_window_handle(hwnd.0 as isize);
-                    commands::file_log(
-                        app.handle(),
-                        &format!("runbi host hwnd=0x{:X}", hwnd.0 as usize),
-                    );
+                match window.hwnd() {
+                    Ok(hwnd) => {
+                        commands::mouse_hook::set_runbi_window_handle(hwnd.0 as isize);
+                        commands::file_log(
+                            app.handle(),
+                            &format!("runbi host hwnd=0x{:X}", hwnd.0 as usize),
+                        );
+                    }
+                    Err(e) => {
+                        commands::file_log(
+                            app.handle(),
+                            &format!("runbi host hwnd error: {e}"),
+                        );
+                    }
                 }
+            } else {
+                commands::file_log(app.handle(), "runbi host get_webview_window('main') is None");
             }
+            let initial_auto_popup = selection_state.auto_popup.load(std::sync::atomic::Ordering::SeqCst);
+            commands::file_log(
+                app.handle(),
+                &format!("mouse selection monitor starting: auto_popup={initial_auto_popup}"),
+            );
             commands::mouse_hook::start_mouse_selection_monitor(app.handle(), selection_state);
 
             // Register the wake shortcut (persisted value, or the default)

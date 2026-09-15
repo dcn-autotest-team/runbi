@@ -25,6 +25,7 @@ import {
   extractLatexTokens,
   findLatexViolations,
   buildTranslateSystemPrompt,
+  resolveTranslateTarget,
   TRANSLATE_TARGETS,
 } from '@runbi/shared/core/prompts';
 import type { PolishStyle } from '@runbi/shared/types/stream';
@@ -387,6 +388,65 @@ describe('Personal Moat Prompt Builders (词库/文风样本/宿主适配/LaTeX 
       // guardrails appended via buildSystemPrompt keep output clean
       const withGuardrails = buildSystemPrompt({ style: 'translate', customPromptOverride: buildTranslateSystemPrompt('en') });
       expect(withGuardrails).toContain('严禁包含任何前缀或后缀客套话');
+    });
+
+    it('resolveTranslateTarget correctly detects Chinese to English and English to Chinese', () => {
+      // 划词为中文 -> 翻译为英文 ('en')
+      expect(resolveTranslateTarget('你好世界')).toBe('en');
+      expect(resolveTranslateTarget('这是一个测试')).toBe('en');
+      expect(resolveTranslateTarget('在 React 项目中如何使用 Tailwind CSS？')).toBe('en');
+      expect(resolveTranslateTarget('字里行间，笔墨生香')).toBe('en');
+      expect(resolveTranslateTarget('繁體中文測試')).toBe('en');
+
+      // 划词为英文 -> 翻译为简体中文 ('zh-Hans')
+      expect(resolveTranslateTarget('Hello world')).toBe('zh-Hans');
+      expect(resolveTranslateTarget('Runbi is an AI text polishing tool.')).toBe('zh-Hans');
+      expect(resolveTranslateTarget('Fix the translation logic bug')).toBe('zh-Hans');
+      expect(resolveTranslateTarget('OK')).toBe('zh-Hans');
+
+      // 英文句子夹带个别中文专名 -> 仍以英文为主，翻译为简体中文
+      expect(resolveTranslateTarget('The concept of "guanxi" (关系) is essential in Chinese culture.')).toBe('zh-Hans');
+
+      // 日韩文外文 -> 翻译为简体中文
+      expect(resolveTranslateTarget('こんにちは、世界')).toBe('zh-Hans');
+      expect(resolveTranslateTarget('안녕하세요')).toBe('zh-Hans');
+
+      // 空白/无文本兜底
+      expect(resolveTranslateTarget('')).toBe('en');
+      expect(resolveTranslateTarget('   ')).toBe('en');
+    });
+
+    it('buildTranslateSystemPrompt resolves target language automatically when omitted or auto', () => {
+      const promptZh = buildTranslateSystemPrompt(undefined, '你好，请帮我翻译这段话');
+      expect(promptZh).toContain('英文');
+
+      const promptEn = buildTranslateSystemPrompt(undefined, 'Please help me translate this sentence.');
+      expect(promptEn).toContain('简体中文');
+    });
+
+    it('buildTranslateSystemPrompt resolves conflicting targets automatically (English text with en target -> zh-Hans)', () => {
+      // Even if targetId was passed as 'en' (e.g. from previous Chinese translation session), English text resolves to '简体中文'
+      const promptEn = buildTranslateSystemPrompt('en', 'real WebView direct entry');
+      expect(promptEn).toContain('简体中文');
+      expect(promptEn).not.toContain('【英文】');
+
+      // Even if targetId was passed as 'zh-Hans', Chinese text resolves to '英文'
+      const promptZh = buildTranslateSystemPrompt('zh-Hans', '现有的翻译逻辑不正确');
+      expect(promptZh).toContain('英文');
+      expect(promptZh).not.toContain('【简体中文】');
+
+      // Explicit third language remains unchanged
+      const promptJa = buildTranslateSystemPrompt('ja', 'real WebView direct entry');
+      expect(promptJa).toContain('日文');
+    });
+
+    it('buildSystemPrompt for translate style does not append polish-specific guardrails', () => {
+      const prompt = buildSystemPrompt({
+        style: 'translate',
+        customPromptOverride: buildTranslateSystemPrompt(undefined, 'real WebView direct entry'),
+      });
+      expect(prompt).not.toContain('直接输出润色后的终稿内容');
+      expect(prompt).toContain('必须输出【简体中文】译文');
     });
   });
 });

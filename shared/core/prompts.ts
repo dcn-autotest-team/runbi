@@ -34,11 +34,11 @@ export const DEFAULT_STYLE_PROMPTS: Record<PolishStyle, string> = {
   concise:
     '你是一名文字润色专家。你的唯一职责是对用户的文本进行精简提炼，剔除冗词废话，字数缩减30%~50%，直奔主题。',
   native_en:
-    '你是一名文字润色与翻译专家。若原文为中文则意译为地道母语级英文；若原文为英文则地道化俚语与语法，表达纯正典雅。',
+    '你是一名专业翻译与地道表达专家。若原文为中文则精确意译为地道母语级英文；若原文为英文或其他外文则精确翻译为地道流利的简体中文。严禁原样照抄原文，直接输出译文。',
   reply:
     '你是帮用户在微信、企业微信、钉钉等聊天软件里回消息的助手。根据对方消息起草一条可以直接发送的回复，必须像用户本人平时打字的样子，绝不能有 AI 腔、客服腔。',
   translate:
-    '你是一名专业翻译。把用户发来的内容忠实翻译成目标语言，译文自然地道，不增不减、不加解释。',
+    '你是一名专业双向翻译引擎。若划词文本为中文则精确翻译为英文；若划词文本为英文或其他外文则精确翻译为简体中文。直接输出目标语言译文，严禁原样照抄原文，严禁任何解释说明。',
 };
 
 /**
@@ -153,13 +153,75 @@ export function translateTargetLabel(id: string): string {
 }
 
 /**
- * 翻译模式系统提示词：经 customPromptOverride 注入，目标语言逐次替换。
+ * 智能判定划词翻译目标语言：
+ * 若划词内容为中文，则翻译为英文 ('en')；
+ * 若划词内容为英文（或其他非中文），则翻译为简体中文 ('zh-Hans')。
  */
-export function buildTranslateSystemPrompt(targetId: string): string {
-  return `你是一名专业翻译。把用户发来的全部内容忠实地翻译成【${translateTargetLabel(targetId)}】，只输出译文本体：
-1. 信达雅：语义不增不减，不解释、不注音、不复述原文。
-2. 专有名词、代码、命令、网址、数学公式保持原样。
-3. 术语在全文中保持一致译法。`;
+export function resolveTranslateTarget(text: string): TranslateTargetId {
+  const trimmed = (text || '').trim();
+  if (!trimmed) return 'en';
+
+  // 若含日文假名或韩文谚文，视为外文 -> 翻译为中文
+  if (/[\u3040-\u30ff\uac00-\ud7af]/.test(trimmed)) {
+    return 'zh-Hans';
+  }
+
+  const cjkMatches = trimmed.match(/[\u4e00-\u9fa5]/g);
+  const foreignMatches = trimmed.match(/[a-zA-Z\u00C0-\u024F\u0400-\u04FF]/g);
+  const cjkCount = cjkMatches ? cjkMatches.length : 0;
+  const foreignCount = foreignMatches ? foreignMatches.length : 0;
+
+  // 纯外文/西文字符且无中文 -> 译为中文
+  if (cjkCount === 0 && foreignCount > 0) {
+    return 'zh-Hans';
+  }
+
+  // 含有中文
+  if (cjkCount > 0) {
+    const total = cjkCount + foreignCount;
+    // 若中文字符极少而外文极多（例如英文长篇引用个别中文专名词），视为外文 -> 译为中文
+    if (foreignCount >= 20 && cjkCount / total < 0.15) {
+      return 'zh-Hans';
+    }
+    // 正常中文文本（包括中英混排、含技术词汇/代码）-> 译为英文
+    return 'en';
+  }
+
+  // 纯符号或数字等兜底
+  return 'en';
+}
+
+/**
+ * 翻译模式系统提示词：经 customPromptOverride 注入，目标语言逐次替换。
+ * 具备双向互译冲突保护：
+ * 当待译文本为外文而 target 为 'en' 时，自动纠偏为 'zh-Hans'；
+ * 当待译文本为中文而 target 为 'zh-Hans' 时，自动纠偏为 'en'。
+ */
+export function buildTranslateSystemPrompt(targetId?: string, text?: string): string {
+  let resolvedTarget: TranslateTargetId = 'en';
+  if (text && text.trim()) {
+    const autoTarget = resolveTranslateTarget(text);
+    if (!targetId || targetId === 'auto') {
+      resolvedTarget = autoTarget;
+    } else if (targetId === 'en' && autoTarget === 'zh-Hans') {
+      resolvedTarget = 'zh-Hans';
+    } else if (targetId === 'zh-Hans' && autoTarget === 'en') {
+      resolvedTarget = 'en';
+    } else {
+      resolvedTarget = targetId as TranslateTargetId;
+    }
+  } else if (targetId && targetId !== 'auto') {
+    resolvedTarget = targetId as TranslateTargetId;
+  }
+
+  const targetLabel = translateTargetLabel(resolvedTarget);
+
+  return `你是一名专业双向翻译引擎。把用户发来的全部内容忠实地翻译成【${targetLabel}】，只输出译文本体：
+1. 必须输出【${targetLabel}】译文，严禁原样照抄原文，严禁包含任何前缀或后缀客套话、解释、拼音或注音。
+2. 即使原文是短语、单词或单句，也必须准确翻译为对应的【${targetLabel}】地道含义。
+3. 专有名词和术语采用业界通用地道译法，网址、代码块语法保留。
+4. 保持原文的段落排版格式与换行符，严禁添加引号包裹。
+5. 结果直接可供用户替换原文使用。`;
 }
 
 /**
@@ -257,6 +319,10 @@ export function buildSystemPrompt(options: PromptBuildOptions): string {
 
   if (userInstruction && userInstruction.trim()) {
     base += `\n用户提出了特定的回复与处理要求：“${userInstruction.trim()}”。请在生成时重点满足该要求。`;
+  }
+
+  if (style === 'translate') {
+    return base.trim();
   }
 
   return `${base}\n${SYSTEM_GUARDRAILS}`.trim();

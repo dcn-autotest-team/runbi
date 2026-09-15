@@ -325,6 +325,7 @@ export const PolishPanel: React.FC<PolishPanelProps> = ({
           {activeStyle === 'translate' && onTranslateTargetChange && (
             <TranslateBar
               target={translateTarget ?? 'en'}
+              originalText={originalText}
               onTargetChange={onTranslateTargetChange}
               disabled={isGenerating}
             />

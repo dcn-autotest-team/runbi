@@ -278,12 +278,16 @@ export const OptionsApp: React.FC<OptionsAppProps> = ({
           setIsSaved(true);
           setToastMessage('✓ 配置已成功保存！');
           setTimeout(() => {
+            if (typeof window === 'undefined') return;
             setIsSaved(false);
             setToastMessage(null);
           }, 2500);
         } catch (err: any) {
           setToastMessage(`保存失败: ${err?.message || '未知错误'}`);
-          setTimeout(() => setToastMessage(null), 3000);
+          setTimeout(() => {
+            if (typeof window === 'undefined') return;
+            setToastMessage(null);
+          }, 3000);
         }
       }, [provider, baseUrl, apiKey, model, triggerMode, blacklistText, customPrompts, storage, telemetryEnabled, telemetryDsn]);
 
@@ -292,7 +296,10 @@ export const OptionsApp: React.FC<OptionsAppProps> = ({
     const msg = feedbackText.trim();
     if (!msg) {
       setToastMessage('请先输入反馈内容');
-      setTimeout(() => setToastMessage(null), 2500);
+      setTimeout(() => {
+        if (typeof window === 'undefined') return;
+        setToastMessage(null);
+      }, 2500);
       return;
     }
     if (feedbackSending) return;
@@ -315,7 +322,10 @@ export const OptionsApp: React.FC<OptionsAppProps> = ({
       setToastMessage(`反馈提交失败：${err?.message || '未知错误'}`);
     } finally {
       setFeedbackSending(false);
-      setTimeout(() => setToastMessage(null), 4500);
+      setTimeout(() => {
+        if (typeof window === 'undefined') return;
+        setToastMessage(null);
+      }, 4500);
     }
   }, [feedbackText, feedbackSending]);
 
@@ -327,7 +337,10 @@ export const OptionsApp: React.FC<OptionsAppProps> = ({
       return next;
     });
     setToastMessage(`已恢复【${STYLE_NAMES[activePromptStyle]}】默认 Prompt`);
-    setTimeout(() => setToastMessage(null), 2000);
+    setTimeout(() => {
+      if (typeof window === 'undefined') return;
+      setToastMessage(null);
+    }, 2000);
   }, [activePromptStyle]);
 
   // Current prompt text for active style tab

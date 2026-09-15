@@ -37,6 +37,7 @@ import {
   buildFeishuCopilotUserPrompt,
   buildExpertSystemPrompt,
   buildTranslateSystemPrompt,
+  resolveTranslateTarget,
   findBannedWords,
   buildGlossaryPrompt,
   buildStyleSamplesPrompt,
@@ -165,7 +166,7 @@ export const App: React.FC = () => {
   const [endpoint, setEndpoint] = useState<string>('https://api.deepseek.com/v1/chat/completions');
   const [model, setModel] = useState<string>('deepseek-chat');
   const [wakeShortcut, setWakeShortcut] = useState<string>(DEFAULT_SHORTCUT);
-  const [autoCopyPopup, setAutoCopyPopup] = useState<boolean>(false);
+  const [autoCopyPopup, setAutoCopyPopup] = useState<boolean>(true);
   const [clipboardTriggerEnabled, setClipboardTriggerEnabled] = useState<boolean>(false);
   const [autostart, setAutostart] = useState<boolean>(false);
   const [readChatScreenshot, setReadChatScreenshot] = useState<boolean>(true);
@@ -379,7 +380,7 @@ export const App: React.FC = () => {
     hideCapsule: (_immediate?: boolean, _nativeAlreadyHidden?: boolean) => {},
     handleCapsuleAction: (_action: CapsuleAction) => {},
     handleStartPolish: (_t: string, _s: PolishStyle, _c?: string, _img?: string | null) => {},
-    activateTranslate: (_t: string, _img?: string | null) => {},
+    activateTranslate: (_t: string, _img?: string | null, _target?: TranslateTargetId, _preserveAutoMode?: boolean) => {},
     handleStartScreenReplyAnalysis: (_hint?: string) => {},
     handleStartTextReplyAnalysis: (_msg: string) => {},
     handleRecapture: () => {},
@@ -479,7 +480,12 @@ export const App: React.FC = () => {
   // All translation entry points share one state transition. Keeping this
   // here lets capsule clicks use the same minimal panel state as the header
   // and shortcut paths without routing through another Tauri event.
-  const activateTranslate = useCallback((text: string, screenshot: string | null = null) => {
+  const activateTranslate = useCallback((
+    text: string,
+    screenshot: string | null = null,
+    targetOverride?: TranslateTargetId,
+    preserveAutoMode = false
+  ) => {
     if (!text.trim()) return;
     invoke('append_log', {
       msg: `frontend: activate translate len=${text.length} before_ui=${stateRef.current.uiMode} before_style=${stateRef.current.activeStyle}`,
@@ -508,17 +514,28 @@ export const App: React.FC = () => {
     adapters.storageProvider.remove('activeDraft').catch(() => {});
     setOriginalText(text);
     stateRef.current.originalText = text;
+    setPolishedText('');
+    setError(null);
     stateRef.current.activeExpert = null;
     setActiveExpert(null);
     setScreenReplyAnalysis(null);
     stateRef.current.screenReplyAnalysis = null;
-    setAutoMode(false);
-    stateRef.current.autoMode = false;
+    if (!preserveAutoMode) {
+      setAutoMode(false);
+      stateRef.current.autoMode = false;
+    }
     stateRef.current.activeStyle = 'translate';
     setActiveStyle('translate');
     stateRef.current.currentScreenshot = screenshot;
     setCurrentScreenshot(screenshot);
-    const target = stateRef.current.translateTarget;
+    const autoTarget = resolveTranslateTarget(text);
+    let target = targetOverride || autoTarget;
+    if (targetOverride === 'zh-Hans' && autoTarget === 'en') {
+      target = 'en';
+    } else if (targetOverride === 'en' && autoTarget === 'zh-Hans') {
+      target = 'zh-Hans';
+    }
+    stateRef.current.translateTarget = target;
     setTranslateTarget(target);
     adapters.storageProvider.set('translateTarget', target).catch(() => {});
     stateRef.current.handleStartPolish(text, 'translate', undefined, screenshot);
@@ -631,7 +648,7 @@ export const App: React.FC = () => {
         setActiveStyle('reply');
         stateRef.current.activeStyle = 'reply';
         stateRef.current.handleStartTextReplyAnalysis(info.text);
-      } else if (mode === 'translate') {
+      } else if (mode === 'translate' || stateRef.current.activeStyle === 'translate') {
         // Translation is intentionally routed through the same canonical entry
         // used by the header and shortcut paths.
         activateTranslate(info.text, info.screenshot);
@@ -657,6 +674,8 @@ export const App: React.FC = () => {
         }
         if (cls.style === 'reply') {
           stateRef.current.handleStartTextReplyAnalysis(info.text);
+        } else if (cls.style === 'translate') {
+          stateRef.current.activateTranslate(info.text, info.screenshot, undefined, true);
         } else {
           stateRef.current.handleStartPolish(info.text, cls.style, undefined, info.screenshot);
         }
@@ -956,6 +975,24 @@ export const App: React.FC = () => {
     const trialLeft = trialRemainingTokens(trialTokensUsedRef.current);
     const usedTrial = !currentApiKey && trialLeft > 0 && Boolean(TRIAL_PROXY_BASE_URL);
 
+    if (style === 'translate') {
+      const autoTarget = resolveTranslateTarget(text);
+      const currentTarget = stateRef.current.translateTarget;
+      let syncTarget = currentTarget;
+      if (!currentTarget) {
+        syncTarget = autoTarget;
+      } else if (currentTarget === 'en' && autoTarget === 'zh-Hans') {
+        syncTarget = 'zh-Hans';
+      } else if (currentTarget === 'zh-Hans' && autoTarget === 'en') {
+        syncTarget = 'en';
+      }
+      if (syncTarget !== currentTarget) {
+        stateRef.current.translateTarget = syncTarget;
+        setTranslateTarget(syncTarget);
+        adapters.storageProvider.set('translateTarget', syncTarget).catch(() => {});
+      }
+    }
+
     const streamConfig: StreamConfig = {
       style,
       userInstruction: customInstruction,
@@ -968,7 +1005,7 @@ export const App: React.FC = () => {
       latexGuard: hasLatexMarkers(text),
       // 翻译模式：目标语言逐次注入系统提示词（专家提示词与翻译互斥，翻译优先）
       customPrompt: style === 'translate'
-        ? buildTranslateSystemPrompt(stateRef.current.translateTarget)
+        ? buildTranslateSystemPrompt(stateRef.current.translateTarget, text)
         : stateRef.current.activeExpert
           ? buildExpertSystemPrompt(stateRef.current.activeExpert)
           : undefined,
@@ -1567,7 +1604,7 @@ export const App: React.FC = () => {
       const savedEndpoint = String(config.endpoint || 'https://api.deepseek.com/v1/chat/completions');
       const savedModel = String(config.model || 'deepseek-chat');
       const savedStyle = (config.defaultStyle || 'academic') as PolishStyle;
-      const savedAutoPopup = Boolean(config.autoCopyPopup ?? false);
+      const savedAutoPopup = Boolean(config.autoCopyPopup ?? true);
       const savedClipboardTrigger = Boolean(config.clipboardTriggerEnabled ?? false);
       const savedReadScreenshot = Boolean(config.readChatScreenshot ?? true);
       const savedWakeShortcut = String(config.wakeShortcut || DEFAULT_SHORTCUT);
@@ -1609,6 +1646,7 @@ export const App: React.FC = () => {
       const savedTranslateTarget = String(config.translateTarget || 'en');
       if (TRANSLATE_TARGETS.some((t) => t.id === savedTranslateTarget)) {
         setTranslateTarget(savedTranslateTarget as TranslateTargetId);
+        stateRef.current.translateTarget = savedTranslateTarget as TranslateTargetId;
       }
       if (savedDsn) setGlitchtipDsn(savedDsn);
       if (config.feishuCopilotEnabled !== undefined) {
@@ -1870,6 +1908,9 @@ export const App: React.FC = () => {
           // arm the capsule. Shortcut-originated events continue below and may
           // open the full panel directly.
           if (shouldShowCapsule(event?.payload)) {
+            const autoTarget = resolveTranslateTarget(captured);
+            setTranslateTarget(autoTarget);
+            stateRef.current.translateTarget = autoTarget;
             stateRef.current.armCapsule({
               ts: Date.now(),
               text: captured,
@@ -1891,28 +1932,36 @@ export const App: React.FC = () => {
             stateRef.current.activateTranslate(captured, screenshot);
           // 智能模式：AI 依据文字/窗口自动判断风格与行业；手动模式：沿用用户固定的风格
           } else if (stateRef.current.autoMode) {
-            const cls = classifyContext({
-              text: captured,
-              sourceApp: event.payload.sourceApp,
-              windowTitle: event.payload.windowTitle,
-            });
-            const targetStyle = cls.style;
-            stateRef.current.activeStyle = targetStyle;
-            setActiveStyle(targetStyle);
-
-            if (cls.confidence >= 0.7 && targetStyle !== 'polished') {
-              showToast(`已智能识别【${STYLE_NAMES[targetStyle]}】(${cls.reason})`);
-            }
-
-            if (targetStyle === 'reply') {
-              stateRef.current.handleStartTextReplyAnalysis(captured);
+            if (stateRef.current.activeStyle === 'translate') {
+              stateRef.current.activateTranslate(captured, screenshot, undefined, true);
             } else {
-              setScreenReplyAnalysis(null);
-              stateRef.current.handleStartPolish(captured, targetStyle, undefined, screenshot);
+              const cls = classifyContext({
+                text: captured,
+                sourceApp: event.payload.sourceApp,
+                windowTitle: event.payload.windowTitle,
+              });
+              const targetStyle = cls.style;
+              stateRef.current.activeStyle = targetStyle;
+              setActiveStyle(targetStyle);
+
+              if (cls.confidence >= 0.7 && targetStyle !== 'polished') {
+                showToast(`已智能识别【${STYLE_NAMES[targetStyle]}】(${cls.reason})`);
+              }
+
+              if (targetStyle === 'reply') {
+                stateRef.current.handleStartTextReplyAnalysis(captured);
+              } else if (targetStyle === 'translate') {
+                stateRef.current.activateTranslate(captured, screenshot, undefined, true);
+              } else {
+                setScreenReplyAnalysis(null);
+                stateRef.current.handleStartPolish(captured, targetStyle, undefined, screenshot);
+              }
             }
           } else {
             if (stateRef.current.activeStyle === 'reply') {
               stateRef.current.handleStartTextReplyAnalysis(captured);
+            } else if (stateRef.current.activeStyle === 'translate') {
+              stateRef.current.activateTranslate(captured, screenshot);
             } else {
               setScreenReplyAnalysis(null);
               stateRef.current.handleStartPolish(captured, stateRef.current.activeStyle, undefined, screenshot);
@@ -2130,11 +2179,19 @@ export const App: React.FC = () => {
 
   // Regenerate
   const handleRegenerate = () => {
-    handleStartPolish(originalText, activeStyle, undefined, currentScreenshot);
+    if (activeStyle === 'translate') {
+      activateTranslate(originalText, currentScreenshot, translateTarget);
+    } else {
+      handleStartPolish(originalText, activeStyle, undefined, currentScreenshot);
+    }
   };
 
   // Style Change（点任意风格即退出专家模式与智能模式：风格与专家是同一"方式"槽位，互斥）
   const handleStyleChange = (newStyle: PolishStyle) => {
+    if (newStyle === 'translate') {
+      activateTranslate(originalText, currentScreenshot);
+      return;
+    }
     translationPanelRef.current = false;
     if (stateRef.current.activeExpert) {
       stateRef.current.activeExpert = null;
@@ -2142,7 +2199,7 @@ export const App: React.FC = () => {
     }
     setAutoMode(false);
     stateRef.current.autoMode = false;
-    if (newStyle !== 'reply' && newStyle !== 'translate') lastPolishStyleRef.current = newStyle;
+    if (newStyle !== 'reply') lastPolishStyleRef.current = newStyle;
     setActiveStyle(newStyle);
     handleStartPolish(originalText, newStyle, undefined, currentScreenshot);
   };
@@ -2182,9 +2239,13 @@ export const App: React.FC = () => {
   }, []);
 
   const handleSwitchToTranslate = useCallback(() => {
-    if (stateRef.current.activeStyle === 'translate') return;
     const text = stateRef.current.originalText;
-    activateTranslate(text, null);
+    if (text.trim()) {
+      activateTranslate(text, null);
+    } else {
+      setActiveStyle('translate');
+      stateRef.current.activeStyle = 'translate';
+    }
   }, [activateTranslate]);
 
   // ---- 多专家并行：同一输入并发发给 2-4 位专家，各自独立流式 ----

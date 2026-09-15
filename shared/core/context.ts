@@ -109,11 +109,11 @@ export function classifyContext(signals: ContextSignals): ContextClassification 
     };
   }
 
-  // 2. English / Translation Check
+  // 2. English / Foreign / Translation Check
   if (TRANSLATION_PATTERN.test(text)) {
     return {
       mode: 'polish',
-      style: 'native_en',
+      style: 'translate',
       confidence: 0.9,
       reason: '包含翻译指令',
     };
@@ -121,15 +121,21 @@ export function classifyContext(signals: ContextSignals): ContextClassification 
 
   const latinChars = (text.match(/[a-zA-Z]/g) || []).length;
   const cjkChars = (text.match(/[\u4e00-\u9fa5]/g) || []).length;
-  const letterTotal = latinChars + cjkChars;
-  // Near-pure English only: mixed Chinese text carrying technical tokens
-  // (model names, shortcuts, code) must NOT be shipped to the translator.
-  if (letterTotal > 20 && cjkChars / letterTotal < 0.15) {
+  const kanaHangul = (text.match(/[\u3040-\u30ff\uac00-\ud7af]/g) || []).length;
+  const foreignChars = latinChars + kanaHangul;
+  const letterTotal = foreignChars + cjkChars;
+
+  // 纯外文（英文、日文、韩文等）或含假名/谚文，或绝大部分为外文 -> 自动识别为翻译模式，译为中文
+  if (
+    kanaHangul >= 2 ||
+    (cjkChars === 0 && foreignChars >= 2) ||
+    (letterTotal > 15 && cjkChars / letterTotal < 0.15)
+  ) {
     return {
       mode: 'polish',
-      style: 'native_en',
+      style: 'translate',
       confidence: 0.85,
-      reason: '纯英文文本',
+      reason: '外文文本，自动翻译为中文',
     };
   }
 
