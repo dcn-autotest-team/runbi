@@ -3148,9 +3148,9 @@ export const App: React.FC = () => {
                   </p>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-[minmax(0,9fr)_minmax(0,11fr)] gap-3">
                   <div className="space-y-1.5">
-                    <label htmlFor="api-endpoint" className="block font-medium text-slate-300">API Endpoint</label>
+                    <label htmlFor="api-endpoint" className="block font-medium text-slate-300">接口地址</label>
                     <input
                       id="api-endpoint"
                       type="url"
