@@ -4,10 +4,8 @@
  * 自包含受控组件：主线程挂载时传 settings + onPatch 即可，持久化由主线程负责。
  * 挂载示例：<AdvancedSettings settings={settings} onPatch={patchSettings} />
  */
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import type { AppSettings, GlossaryRule } from '@runbi/shared/types';
-import { probeLocalModels, fetchSenseAudioModels, type LocalModelProbeResult } from '@runbi/shared/core';
-import { RefreshCw } from './Icons';
 
 export interface AdvancedSettingsProps {
   settings: AppSettings;
@@ -34,44 +32,6 @@ export const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({ settings, on
   const [samples, setSamples] = useState<string[]>(() =>
     settings.styleSamples?.length ? settings.styleSamples : ['']
   );
-  // 本地模型探测结果：null = 尚未完成首次探测。
-  const [probes, setProbes] = useState<LocalModelProbeResult[] | null>(null);
-  const [probing, setProbing] = useState<boolean>(false);
-  // 每个端点的模型下拉选中值（key = baseUrl）。
-  const [pickedModel, setPickedModel] = useState<Record<string, string>>({});
-  // SenseAudio 云端模型列表：null = 尚未拉取。
-  const [senseAudioModels, setSenseAudioModels] = useState<string[] | null>(null);
-  const [senseAudioError, setSenseAudioError] = useState<string>('');
-  const [senseAudioLoading, setSenseAudioLoading] = useState(false);
-  const [senseAudioPicked, setSenseAudioPicked] = useState('');
-
-  const fetchSenseAudio = () => {
-    setSenseAudioLoading(true);
-    setSenseAudioError('');
-    // 自带 8s 超时且错误折叠进返回值，无需在卸载时取消。
-    fetchSenseAudioModels(undefined, undefined, settings.apiKey ?? settings.senseAudioApiKey)
-      .then(({ models, error }) => {
-        if (error) {
-          setSenseAudioModels(null);
-          setSenseAudioError(error);
-        } else {
-          setSenseAudioModels(models);
-          // 自动选取默认模型：默认选中第一个。
-          setSenseAudioPicked((prev) => (models.includes(prev) ? prev : models[0] ?? ''));
-        }
-      })
-      .finally(() => setSenseAudioLoading(false));
-  };
-
-  const runProbe = () => {
-    setProbing(true);
-    // 探测自带 1.2s 超时且失败静默返回 []，无需在卸载时取消。
-    probeLocalModels()
-      .then((results) => setProbes(results))
-      .finally(() => setProbing(false));
-  };
-
-  useEffect(runProbe, []);
 
   /** 编辑一条词库规则；from 为空的残项不回传（prompt 编译端也会兜底过滤）。 */
   const editRule = (index: number, patch: Partial<GlossaryRule>) => {
@@ -208,138 +168,6 @@ export const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({ settings, on
         )}
       </section>
 
-      {/* ── 区块 3：SenseAudio 云端模型 · /v1/models 自动获取 ── */}
-      <section className="runbi-settings-card space-y-1.5 px-3 py-2.5">
-        <div className="flex items-center justify-between gap-2">
-          <span className="min-w-0">
-            <span className="block text-[11px] font-medium text-slate-300">SenseAudio 云端模型</span>
-            <span className="mt-0.5 block text-[10px] leading-relaxed text-slate-500">
-              自动获取可用模型列表，默认选中第一个。
-            </span>
-          </span>
-          <button
-            type="button"
-            onClick={fetchSenseAudio}
-            disabled={senseAudioLoading}
-            aria-label="获取模型列表"
-            className="runbi-secondary-button runbi-focus-ring shrink-0 cursor-pointer px-2.5 py-1 text-[11px]"
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${senseAudioLoading ? 'animate-spin' : ''}`} />
-            {senseAudioLoading ? '获取中' : '获取模型列表'}
-          </button>
-        </div>
-
-        {senseAudioError ? (
-          <p role="alert" className="text-[10px] leading-relaxed text-rose-300">
-            获取模型列表失败：{senseAudioError}
-          </p>
-        ) : senseAudioModels && senseAudioModels.length > 0 ? (
-          <div className="flex items-center gap-1.5">
-            <select
-              aria-label="SenseAudio 模型选择"
-              value={senseAudioPicked}
-              onChange={(e) => setSenseAudioPicked(e.target.value)}
-              className="runbi-form-control min-w-0 flex-1 cursor-pointer font-mono text-[11px]"
-            >
-              {senseAudioModels.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              onClick={() =>
-                onPatch({
-                  baseUrl: 'https://api.senseaudio.cn/v1/chat/completions',
-                  model: senseAudioPicked,
-                })
-              }
-              className="runbi-focus-ring shrink-0 rounded-lg border border-teal-500/40 bg-teal-500/20 px-2.5 py-1 text-[11px] font-medium text-teal-300 hover:bg-teal-500/25 transition-colors cursor-pointer"
-            >
-              一键使用
-            </button>
-          </div>
-        ) : (
-          <p className="text-[10px] leading-relaxed text-slate-500">
-            {senseAudioLoading
-              ? '正在从 https://api.senseaudio.cn/v1/models 拉取…'
-              : '点击「获取模型列表」自动获取可用模型；选择后保存即可在润色时使用所选模型。'}
-          </p>
-        )}
-      </section>
-
-      {/* ── 区块 4：本地模型 · 零配置探测 ── */}
-      <section className="runbi-settings-card space-y-1.5 px-3 py-2.5">
-        <div className="flex items-center justify-between gap-2">
-          <span className="min-w-0">
-            <span className="block text-[11px] font-medium text-slate-300">本地模型（Ollama / LM Studio）</span>
-            <span className="mt-0.5 block text-[10px] leading-relaxed text-slate-500">
-              自动探测本机已运行的推理服务，数据 100% 离线。
-            </span>
-          </span>
-          <button
-            type="button"
-            onClick={runProbe}
-            disabled={probing}
-            className="runbi-secondary-button runbi-focus-ring shrink-0 cursor-pointer px-2.5 py-1 text-[11px]"
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${probing ? 'animate-spin' : ''}`} />
-            {probing ? '探测中' : '重新探测'}
-          </button>
-        </div>
-
-        {probes && probes.length > 0 ? (
-          probes.map((result) => {
-            const model = pickedModel[result.baseUrl] ?? result.models[0];
-            return (
-              <div
-                key={result.baseUrl}
-                className="space-y-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2"
-              >
-                <p className="text-[11px] font-medium text-emerald-300">
-                  🟢 {result.label} 已就绪 · {result.models.length} 个模型
-                </p>
-                <div className="flex items-center gap-1.5">
-                  <select
-                    aria-label={`${result.label} 模型选择`}
-                    value={model}
-                    onChange={(e) =>
-                      setPickedModel((prev) => ({ ...prev, [result.baseUrl]: e.target.value }))
-                    }
-                    className="runbi-form-control min-w-0 flex-1 cursor-pointer font-mono text-[11px]"
-                  >
-                    {result.models.map((m) => (
-                      <option key={m} value={m}>
-                        {m}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      onPatch({
-                        provider: result.providerId === 'ollama' ? 'ollama' : 'custom',
-                        baseUrl: result.baseUrl,
-                        model,
-                      })
-                    }
-                    className="runbi-focus-ring shrink-0 rounded-lg border border-teal-500/40 bg-teal-500/20 px-2.5 py-1 text-[11px] font-medium text-teal-300 hover:bg-teal-500/25 transition-colors cursor-pointer"
-                  >
-                    一键使用
-                  </button>
-                </div>
-              </div>
-            );
-          })
-        ) : (
-          <p className="text-[10px] leading-relaxed text-slate-500">
-            {probes === null
-              ? '正在探测本地模型服务（Ollama / LM Studio）…'
-              : '未发现本地模型（Ollama / LM Studio 未运行）；安装并启动后点“重新探测”即可自动连上，数据 100% 离线。'}
-          </p>
-        )}
-      </section>
     </div>
   );
 };

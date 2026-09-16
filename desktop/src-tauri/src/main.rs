@@ -367,6 +367,7 @@ fn main() {
             commands::replace_text,
             commands::position_window_at_cursor,
             commands::test_llm_connection,
+            commands::fetch_model_list,
             commands::hide_window,
             commands::hide_capsule_window,
             commands::app_ready,

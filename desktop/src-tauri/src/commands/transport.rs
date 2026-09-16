@@ -471,3 +471,24 @@ mod tests {
         assert!(!is_stream_aborted(0));
     }
 }
+
+/// Fetch through native HTTP so local endpoints work without browser CORS/CSP restrictions.
+#[allow(dead_code)]
+#[tauri::command]
+pub async fn fetch_model_list(url: String, api_key: String) -> Result<String, String> {
+    let url = reqwest::Url::parse(&url).map_err(|e| e.to_string())?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err("仅支持 HTTP/HTTPS 端点".into());
+    }
+    let client = Client::builder()
+        .no_proxy()
+        .timeout(std::time::Duration::from_secs(8))
+        .build().map_err(|e| e.to_string())?;
+    let mut request = client.get(url);
+    if !api_key.trim().is_empty() {
+        request = request.bearer_auth(api_key.trim());
+    }
+    request.send().await.map_err(|e| e.to_string())?
+        .error_for_status().map_err(|e| e.to_string())?
+        .text().await.map_err(|e| e.to_string())
+}

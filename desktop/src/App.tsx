@@ -26,6 +26,8 @@ window.addEventListener('unhandledrejection', (e) => {
   invoke('append_log', { msg: `unhandled rejection: ${String((e as PromiseRejectionEvent).reason).slice(0, 300)}` }).catch(() => {});
 });
 import {
+  fetchCompatibleModels,
+  SENSEAUDIO_BASE_URL,
   classifyContext,
   isScreenReplyPayload,
   buildScreenReplySystemPrompt,
@@ -87,28 +89,6 @@ interface CapsuleInfo {
 
 type CapsuleAction = 'search' | 'polish' | 'reply' | 'translate' | 'copy';
 
-const PROVIDER_PRESETS: Record<string, { label: string; endpoint: string; model: string }> = {
-  deepseek: {
-    label: 'DeepSeek',
-    endpoint: 'https://api.deepseek.com/v1/chat/completions',
-    model: 'deepseek-chat',
-  },
-  zhipu: {
-    label: '智谱 glm-4',
-    endpoint: 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
-    model: 'glm-4',
-  },
-  openai: {
-    label: 'OpenAI',
-    endpoint: 'https://api.openai.com/v1/chat/completions',
-    model: 'gpt-4o-mini',
-  },
-  custom: {
-    label: '自定义',
-    endpoint: '',
-    model: '',
-  },
-};
 
 const SettingsToggle: React.FC<{
   label: string;
@@ -163,8 +143,8 @@ export const App: React.FC = () => {
 
   // Settings State
   const [apiKey, setApiKey] = useState<string>('');
-  const [endpoint, setEndpoint] = useState<string>('https://api.deepseek.com/v1/chat/completions');
-  const [model, setModel] = useState<string>('deepseek-chat');
+  const [endpoint, setEndpoint] = useState<string>(SENSEAUDIO_BASE_URL);
+  const [model, setModel] = useState<string>('');
   const [wakeShortcut, setWakeShortcut] = useState<string>(DEFAULT_SHORTCUT);
   const [autoCopyPopup, setAutoCopyPopup] = useState<boolean>(true);
   const [clipboardTriggerEnabled, setClipboardTriggerEnabled] = useState<boolean>(false);
@@ -324,18 +304,44 @@ export const App: React.FC = () => {
   const upsertCustomAction = (idx: number, patch: Partial<CustomAction>) =>
     setCustomActions((prev) => prev.map((a, i) => (i === idx ? { ...a, ...patch } : a)));
 
-  const getProviderPreset = (ep: string, md: string) => {
-    if (ep === PROVIDER_PRESETS.deepseek.endpoint && md === PROVIDER_PRESETS.deepseek.model) return 'deepseek';
-    if (ep === PROVIDER_PRESETS.zhipu.endpoint && md === PROVIDER_PRESETS.zhipu.model) return 'zhipu';
-    if (ep === PROVIDER_PRESETS.openai.endpoint && md === PROVIDER_PRESETS.openai.model) return 'openai';
-    return 'custom';
+  const [modelList, setModelList] = useState<string[]>([]);
+  const [modelListError, setModelListError] = useState('');
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const modelRequest = useRef(0);
+  useEffect(() => {
+    ++modelRequest.current;
+    setModelList([]);
+    setModelListError('');
+    setModelsLoading(false);
+  }, [endpoint, apiKey]);
+
+  const handleFetchModels = async () => {
+    const request = ++modelRequest.current;
+    setModelsLoading(true);
+    setModelListError('');
+    const nativeFetch: typeof fetch = async (url) => new Response(await invoke<string>('fetch_model_list', {
+      url: String(url), apiKey: apiKey.trim(),
+    }));
+    const result = await fetchCompatibleModels(
+      '__TAURI_INTERNALS__' in window || '__TAURI__' in window ? nativeFetch : undefined,
+      endpoint, apiKey,
+    );
+    if (request !== modelRequest.current) return;
+    setModelsLoading(false);
+    setModelList(result.models);
+    setModelListError(result.error ?? '');
+    if (!result.error) {
+      setModel((previous) => result.models.includes(previous) ? previous : result.models[0]);
+      setConnectionTest({ status: 'idle', message: '' });
+    }
   };
 
+  const getProviderPreset = (ep: string) =>
+    ep.trim().replace(/\/+$/, '').replace(/\/chat\/completions$/, '') === SENSEAUDIO_BASE_URL ? 'senseaudio' : 'custom';
+
   const handleSelectPreset = (key: string) => {
-    if (key !== 'custom' && PROVIDER_PRESETS[key]) {
-      setEndpoint(PROVIDER_PRESETS[key].endpoint);
-      setModel(PROVIDER_PRESETS[key].model);
-    }
+    setEndpoint(key === 'senseaudio' ? SENSEAUDIO_BASE_URL : '');
+    setModel('');
     setConnectionTest({ status: 'idle', message: '' });
   };
 
@@ -1651,8 +1657,8 @@ export const App: React.FC = () => {
       const styleOverrideAtStart = styleOverrideRef.current;
       const config = await adapters.storageProvider.getAll();
       const savedKey = String(config.apiKey || '');
-      const savedEndpoint = String(config.endpoint || 'https://api.deepseek.com/v1/chat/completions');
-      const savedModel = String(config.model || 'deepseek-chat');
+      const savedEndpoint = String(config.endpoint || SENSEAUDIO_BASE_URL);
+      const savedModel = String(config.model || '');
       const savedStyle = (config.defaultStyle || 'academic') as PolishStyle;
       const savedAutoPopup = Boolean(config.autoCopyPopup ?? true);
       const savedClipboardTrigger = Boolean(config.clipboardTriggerEnabled ?? false);
@@ -3113,14 +3119,12 @@ export const App: React.FC = () => {
                   <label htmlFor="provider-preset" className="block font-medium text-slate-300">服务商预设</label>
                   <select
                     id="provider-preset"
-                    value={getProviderPreset(endpoint, model)}
+                    value={getProviderPreset(endpoint)}
                     onChange={(e) => handleSelectPreset(e.target.value)}
                     className="runbi-form-control cursor-pointer"
                   >
-                    <option value="deepseek">DeepSeek (官方 API)</option>
-                    <option value="zhipu">智谱 GLM-4 (官方 API)</option>
-                    <option value="openai">OpenAI (官方 API)</option>
-                    <option value="custom">自定义兼容端点 (SiliconFlow/Ollama等)</option>
+                    <option value="senseaudio">商汤 (官方 API)</option>
+                    <option value="custom">自定义兼容端点 (Ollama / llama.cpp 等)</option>
                   </select>
                 </div>
 
@@ -3151,9 +3155,11 @@ export const App: React.FC = () => {
                       id="api-endpoint"
                       type="url"
                       required
+                      placeholder="http://localhost:11434/v1"
                       value={endpoint}
                       onChange={(e) => {
                         setEndpoint(e.target.value);
+                        setModel('');
                         setConnectionTest({ status: 'idle', message: '' });
                       }}
                       className="runbi-form-control font-mono text-[11px]"
@@ -3162,17 +3168,26 @@ export const App: React.FC = () => {
 
                   <div className="space-y-1.5">
                     <label htmlFor="model-name" className="block font-medium text-slate-300">模型名称</label>
-                    <input
+                    <select
                       id="model-name"
-                      type="text"
                       required
                       value={model}
                       onChange={(e) => {
                         setModel(e.target.value);
                         setConnectionTest({ status: 'idle', message: '' });
                       }}
-                      className="runbi-form-control font-mono text-[11px]"
-                    />
+                      className="runbi-form-control cursor-pointer font-mono text-[11px]"
+                    >
+                      <option value="" disabled>请先获取模型列表</option>
+                      {model && !modelList.includes(model) && <option value={model}>{model}</option>}
+                      {modelList.map((name) => <option key={name} value={name}>{name}</option>)}
+                    </select>
+                    <button type="button" onClick={handleFetchModels} disabled={modelsLoading || !endpoint.trim()}
+                      className="runbi-secondary-button runbi-focus-ring cursor-pointer text-[11px]">
+                      <RefreshCw className={modelsLoading ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
+                      {modelsLoading ? '获取中…' : '获取模型列表'}
+                    </button>
+                    {modelListError && <p role="alert" className="text-[10px] text-rose-300">获取失败：{modelListError}</p>}
                   </div>
                 </div>
 
@@ -3204,19 +3219,12 @@ export const App: React.FC = () => {
                   </button>
                 </div>
 
-                {/* 缺陷5/7:个人词库 + 文风标杆 + 本地模型零配置探测 */}
+                {/* 个人词库 + 文风标杆 */}
                 <AdvancedSettings
                   settings={{ apiKey, baseUrl: endpoint, model, glossary, styleSamples }}
                   onPatch={(patch) => {
                     if (patch.glossary) setGlossary(patch.glossary);
                     if (patch.styleSamples) setStyleSamples(patch.styleSamples);
-                    if (patch.baseUrl && patch.model) {
-                      // 本地模型一键直连:探测给出 /v1 根地址,App 端点存完整 /chat/completions
-                      const base = patch.baseUrl.replace(/\/+$/, '');
-                      setEndpoint(/\/chat\/completions$/.test(base) ? base : `${base}/chat/completions`);
-                      setModel(patch.model);
-                      setConnectionTest({ status: 'idle', message: '' });
-                    }
                   }}
                 />
               </div>

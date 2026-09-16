@@ -93,6 +93,45 @@ describe('Desktop selection-to-polish flow', () => {
     expect(host.textContent).toContain('Runbi 1.0.22 可以更新');
   });
 
+  it('offers only SenseAudio and custom endpoints and selects fetched models', async () => {
+    await act(async () => { root.render(<App />); });
+    await act(async () => { eventMocks.listeners.get('runbi://open-settings')?.({ payload: null }); });
+    const provider = host.querySelector<HTMLSelectElement>('#provider-preset')!;
+    expect(Array.from(provider.options).map(o => o.value)).toEqual(['senseaudio', 'custom']);
+    expect(provider.value).toBe('senseaudio');
+    expect(host.querySelector<HTMLInputElement>('#api-endpoint')!.value).toBe('https://api.senseaudio.cn/v1');
+    const invoke = (window as any).__TAURI_INTERNALS__.invoke;
+    invoke.mockImplementation(async (command: string) => command === 'fetch_model_list'
+      ? JSON.stringify({ data: [{ id: 'senseaudio-s2' }, { id: 'senseaudio-vl' }] }) : null);
+    await act(async () => {
+      Array.from(host.querySelectorAll('button')).find(b => b.textContent?.includes('获取模型列表'))!.click();
+    });
+    expect(invoke).toHaveBeenCalledWith('fetch_model_list', { url: 'https://api.senseaudio.cn/v1/models', apiKey: '' }, undefined);
+    const models = host.querySelector<HTMLSelectElement>('#model-name')!;
+    expect(models.tagName).toBe('SELECT');
+    expect(models.value).toBe('senseaudio-s2');
+    await act(async () => {
+      models.value = 'senseaudio-vl';
+      models.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(models.value).toBe('senseaudio-vl');
+    let finish!: (value: string) => void;
+    invoke.mockImplementation(async (command: string) => command === 'fetch_model_list'
+      ? new Promise<string>(resolve => { finish = resolve; }) : null);
+    await act(async () => {
+      Array.from(host.querySelectorAll('button')).find(b => b.textContent?.includes('获取模型列表'))!.click();
+    });
+    await act(async () => {
+      provider.value = 'custom';
+      provider.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await act(async () => { finish(JSON.stringify({ data: [{ id: 'stale-model' }] })); });
+    expect(models.value).toBe('');
+    expect(models.options).toHaveLength(1);
+    expect(host.textContent).not.toContain('SenseAudio 云端模型');
+    expect(host.textContent).not.toContain('重新探测');
+  });
+
   it('exposes the installed version from a dedicated settings tab', async () => {
     await act(async () => {
       root.render(<App />);

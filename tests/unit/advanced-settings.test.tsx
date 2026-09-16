@@ -128,123 +128,12 @@ describe('Desktop AdvancedSettings Component', () => {
     expect(findButton(container, '添加样本')).toBeUndefined();
   });
 
-  it('probes local models on mount and applies the picked model via onPatch', async () => {
-    // Ollama /api/tags 形状；LM Studio 目标解析 data 字段为空，自动过滤
-    const fetchMock = vi.fn(async (_url: unknown, _init?: unknown) => ({
-      ok: true,
-      json: async () => ({ models: [{ name: 'qwen2.5:7b' }, { name: 'llama3.1:8b' }] }),
-    }));
+  it('does not render or probe removed model sections', async () => {
+    const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
-
-    const onPatch = vi.fn((_patch: Partial<AppSettings>) => undefined);
-    await renderComponent({ onPatch });
-    await act(async () => {}); // 等探测 promise 链落定
-
-    // 探测端点被调用（Ollama 11434 与 LM Studio 1234）
-    const calledUrls = fetchMock.mock.calls.map((c) => c[0]);
-    expect(calledUrls).toContain('http://localhost:11434/api/tags');
-    expect(calledUrls).toContain('http://localhost:1234/v1/models');
-
-    expect(container.textContent).toContain('Ollama (本地) 已就绪 · 2 个模型');
-    expect(container.textContent).not.toContain('未发现本地模型');
-
-    // 模型下拉默认选中第一个模型，一键使用回调带 provider/baseUrl/model
-    const modelSelect = container.querySelector<HTMLSelectElement>('select[aria-label*="模型选择"]');
-    expect(modelSelect).toBeTruthy();
-    expect(modelSelect!.value).toBe('qwen2.5:7b');
-    await act(async () => {
-      setSelectValue(modelSelect!, 'llama3.1:8b');
-    });
-
-    const useBtn = findButton(container, '一键使用');
-    expect(useBtn).toBeDefined();
-    await act(async () => {
-      useBtn!.click();
-    });
-    expect(onPatch).toHaveBeenLastCalledWith({
-      provider: 'ollama',
-      baseUrl: 'http://localhost:11434/v1',
-      model: 'llama3.1:8b',
-    });
-  });
-
-  it('shows the offline hint when no local model responds', async () => {
-    const fetchMock = vi.fn(async () => {
-      throw new TypeError('fetch failed');
-    });
-    vi.stubGlobal('fetch', fetchMock);
-
-    const onPatch = vi.fn((_patch: Partial<AppSettings>) => undefined);
-    await renderComponent({ onPatch });
-    await act(async () => {});
-
-    expect(container.textContent).toContain('未发现本地模型');
-    expect(container.textContent).toContain('数据 100% 离线');
-    expect(findButton(container, '一键使用')).toBeUndefined();
-  });
-});
-
-describe('AdvancedSettings SenseAudio model picker', () => {
-  let container: HTMLDivElement;
-  let root: ReturnType<typeof createRoot> | null = null;
-
-  const renderComponent = async (props: { settings?: AppSettings; onPatch: (patch: Partial<AppSettings>) => void }) => {
-    container = document.createElement('div');
-    document.body.appendChild(container);
-    root = createRoot(container);
-    await act(async () => {
-      root!.render(<AdvancedSettings settings={props.settings ?? {}} onPatch={props.onPatch} />);
-    });
-  };
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    if (root) {
-      act(() => root!.unmount());
-      root = null;
-    }
-    document.body.innerHTML = '';
-  });
-
-  it('fetches models, auto-picks the first and applies selection via onPatch', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () =>
-      ({ ok: true, status: 200, json: async () => ({ object: 'list', data: [{ id: 'senseaudio-s2' }, { id: 'senseaudio-vl' }] }) }) as unknown as Response
-    ));
-    const onPatch = vi.fn((_patch: Partial<AppSettings>) => undefined);
-    await renderComponent({ settings: { apiKey: 'sk-test' }, onPatch });
-
-    const fetchBtn = findButton(container, '获取模型列表');
-    expect(fetchBtn).toBeDefined();
-    await act(async () => {
-      fetchBtn!.click();
-    });
-    const select = container.querySelector('select[aria-label="SenseAudio 模型选择"]') as HTMLSelectElement;
-    expect(select).toBeDefined();
-    expect(select.options.length).toBe(2);
-    // 自动选取默认模型：默认选中第一个
-    expect(select.value).toBe('senseaudio-s2');
-
-    await act(async () => {
-      findButton(container, '一键使用')!.click();
-    });
-    expect(onPatch).toHaveBeenCalledWith({
-      baseUrl: 'https://api.senseaudio.cn/v1/chat/completions',
-      model: 'senseaudio-s2',
-    });
-  });
-
-  it('shows the failure path with the HTTP error the user sees', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () =>
-      ({ ok: false, status: 401, statusText: 'Unauthorized' } as unknown as Response)
-    ));
-    const onPatch = vi.fn((_patch: Partial<AppSettings>) => undefined);
-    await renderComponent({ settings: { apiKey: 'bad' }, onPatch });
-
-    await act(async () => {
-      findButton(container, '获取模型列表')!.click();
-    });
-    const alert = container.querySelector('p[role="alert"]');
-    expect(alert?.textContent).toContain('HTTP 401');
-    expect(container.querySelector('select[aria-label="SenseAudio 模型选择"]')).toBeNull();
+    await renderComponent({ onPatch: vi.fn() });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(container.textContent).not.toContain('SenseAudio');
+    expect(container.textContent).not.toContain('本地模型');
   });
 });

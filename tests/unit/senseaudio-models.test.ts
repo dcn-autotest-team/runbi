@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { fetchSenseAudioModels, SENSEAUDIO_BASE_URL } from '@runbi/shared/core';
+import { fetchCompatibleModels, fetchSenseAudioModels, SENSEAUDIO_BASE_URL } from '@runbi/shared/core';
 
 /** 与真实端点同形的 /v1/models 响应（截取）。 */
 const REAL_SHAPE = {
@@ -55,5 +55,21 @@ describe('fetchSenseAudioModels', () => {
     const { models, error } = await fetchSenseAudioModels(fetchImpl, undefined, 'sk-test');
     expect(models).toEqual([]);
     expect(error).toBe('connection refused');
+  });
+});
+
+describe('compatible model lists', () => {
+  it.each(['http://localhost:11434/v1/', 'http://localhost:11434/v1/chat/completions/'])(
+    'normalizes %s and permits a keyless local service', async (baseUrl) => {
+      const fetchImpl = (async (url, init) => {
+        expect(url).toBe('http://localhost:11434/v1/models');
+        expect(init?.headers).toEqual({});
+        return { ok: true, json: async () => ({ data: [{ id: 'qwen' }, { id: 'qwen' }, null] }) } as Response;
+      }) as typeof fetch;
+      expect(await fetchCompatibleModels(fetchImpl, baseUrl)).toEqual({ models: ['qwen'] });
+    });
+  it('reports an empty model list', async () => {
+    const fetchImpl = (async () => ({ ok: true, json: async () => ({ data: [] }) })) as unknown as typeof fetch;
+    expect((await fetchCompatibleModels(fetchImpl)).error).toContain('未返回可用模型');
   });
 });
