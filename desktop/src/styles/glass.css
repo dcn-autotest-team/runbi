@@ -39,6 +39,16 @@
   --runbi-button-primary-text: #111827;
   --runbi-button-secondary: rgba(255, 255, 255, 0.06);
   --runbi-button-shadow: rgba(209, 213, 219, 0.8);
+  --runbi-surface-raised: rgba(255, 255, 255, 0.055);
+  --runbi-surface-hover: rgba(255, 255, 255, 0.085);
+  --runbi-tab-active-bg: rgba(255, 255, 255, 0.12);
+  --runbi-tab-active-border: rgba(255, 255, 255, 0.14);
+  --runbi-tab-active-text: #F8FAFC;
+  --runbi-shadow-window: 0 24px 60px -15px rgba(0, 0, 0, 0.95),
+                         0 0 0 1px rgba(255, 255, 255, 0.05) inset,
+                         0 16px 40px -20px rgba(0, 0, 0, 0.45);
+  --runbi-shadow-raised: 0 8px 20px -16px rgba(0, 0, 0, 0.8),
+                         0 1px 0 rgba(255, 255, 255, 0.05) inset;
   --runbi-transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
   --runbi-transition-base: 240ms cubic-bezier(0.16, 1, 0.3, 1);
   
@@ -66,9 +76,42 @@ body {
 .runbi-window {
   background: #12181b;
   border: 1px solid rgba(255, 255, 255, 0.12);
-  box-shadow: 0 24px 60px -15px rgba(0, 0, 0, 0.95),
-              0 0 0 1px rgba(255, 255, 255, 0.05) inset,
-              0 16px 40px -20px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--runbi-shadow-window);
+}
+
+.runbi-window > [data-tauri-drag-region] {
+  background: linear-gradient(180deg, var(--runbi-surface-raised), transparent);
+}
+
+.runbi-mode-tabs,
+.runbi-settings-tabs {
+  background: var(--runbi-control-bg);
+  border-color: var(--runbi-border);
+  box-shadow: var(--runbi-shadow-raised);
+}
+
+.runbi-mode-tab,
+.runbi-settings-tab {
+  border: 1px solid transparent;
+  color: var(--runbi-text-muted);
+  transition: color var(--runbi-transition-fast),
+              background-color var(--runbi-transition-fast),
+              border-color var(--runbi-transition-fast),
+              box-shadow var(--runbi-transition-fast);
+}
+
+.runbi-mode-tab:hover,
+.runbi-settings-tab:hover {
+  color: var(--runbi-text-primary);
+  background: var(--runbi-surface-hover);
+}
+
+.runbi-mode-tab[aria-selected='true'],
+.runbi-settings-tab[class*='bg-teal-500'] {
+  color: var(--runbi-tab-active-text);
+  background: var(--runbi-tab-active-bg);
+  border-color: var(--runbi-tab-active-border);
+  box-shadow: var(--runbi-shadow-raised);
 }
 
 .runbi-icon-button {
@@ -249,9 +292,16 @@ html[data-theme='light'] .runbi-selection-action.is-success {
 }
 
 .runbi-settings-card {
-  border: 1px solid rgba(255, 255, 255, 0.07);
+  border: 1px solid var(--runbi-border);
   border-radius: 0.75rem;
-  background: rgba(0, 0, 0, 0.18);
+  background: var(--runbi-surface-raised);
+  box-shadow: var(--runbi-shadow-raised);
+  transition: border-color var(--runbi-transition-fast), background-color var(--runbi-transition-fast);
+}
+
+.runbi-settings-card:hover {
+  border-color: var(--runbi-border-strong);
+  background: var(--runbi-surface-hover);
 }
 
 .runbi-settings-scroll {
@@ -501,6 +551,16 @@ html[data-theme='light'] {
   --runbi-button-primary-text: #ffffff;
   --runbi-button-secondary: rgba(17, 24, 39, 0.06);
   --runbi-button-shadow: rgba(220, 38, 38, 0.85);
+  --runbi-surface-raised: rgba(17, 24, 39, 0.035);
+  --runbi-surface-hover: rgba(17, 24, 39, 0.07);
+  --runbi-tab-active-bg: rgba(220, 38, 38, 0.10);
+  --runbi-tab-active-border: rgba(220, 38, 38, 0.25);
+  --runbi-tab-active-text: #991b1b;
+  --runbi-shadow-window: 0 24px 60px -15px rgba(17, 24, 39, 0.25),
+                         0 0 0 1px rgba(17, 24, 39, 0.04) inset,
+                         0 16px 40px -20px rgba(220, 38, 38, 0.25);
+  --runbi-shadow-raised: 0 8px 20px -16px rgba(17, 24, 39, 0.18),
+                         0 1px 0 rgba(255, 255, 255, 0.75) inset;
 }
 
 html[data-theme='light'] .runbi-window {

@@ -385,10 +385,10 @@ export const App: React.FC = () => {
     armCapsule: (_info: CapsuleInfo) => {},
     hideCapsule: (_immediate?: boolean, _nativeAlreadyHidden?: boolean) => {},
     handleCapsuleAction: (_action: CapsuleAction) => {},
-    handleStartPolish: (_t: string, _s: PolishStyle, _c?: string, _img?: string | null) => {},
+    handleStartPolish: (_t: string, _s: PolishStyle, _c?: string, _img?: string | null, _h?: string, _k?: string) => {},
     activateTranslate: (_t: string, _img?: string | null, _target?: TranslateTargetId, _preserveAutoMode?: boolean) => {},
     handleStartScreenReplyAnalysis: (_hint?: string) => {},
-    handleStartTextReplyAnalysis: (_msg: string) => {},
+    handleStartTextReplyAnalysis: (_msg: string, _k?: string) => {},
     handleRecapture: () => {},
   });
   stateRef.current.apiKey = apiKey;
@@ -415,6 +415,22 @@ export const App: React.FC = () => {
   stateRef.current.autoMode = autoMode;
   stateRef.current.translateTarget = translateTarget;
   stateRef.current.uiMode = uiMode;
+
+  // —— Tab 切换结果缓存：同 (原文, 模式, 人设/行业包) 的结果直接复用，不发重复 LLM 请求 ——
+  // ponytail: 简单 Map，selection 变化时整体清空；将来量大可换 LRU
+  const resultCacheRef = useRef<Map<string, { text: string; screenReplyAnalysis?: ScreenReplyAnalysis | null }>>(new Map());
+  const resultCacheKey = useCallback((text: string, mode: 'polish' | 'reply' | 'translate') => {
+    const norm = text.trim();
+    const ctx = `${stateRef.current.activePersonaPrompt || ''}|${stateRef.current.activePack?.id || ''}`;
+    // translate 结果随目标语言变化，目标语言必须进 key
+    const target = mode === 'translate' ? `|${stateRef.current.translateTarget}` : '';
+    return `${mode}|${ctx}${target}|${norm.length}|${norm.slice(0, 120)}|${norm.slice(-120)}`;
+  }, []);
+  const resultCacheGet = useCallback((key: string) => resultCacheRef.current.get(key) ?? null, []);
+  const resultCacheSet = useCallback((key: string, entry: { text: string; screenReplyAnalysis?: ScreenReplyAnalysis | null }) => {
+    resultCacheRef.current.set(key, entry);
+  }, []);
+  const resultCacheClear = useCallback(() => { resultCacheRef.current.clear(); }, []);
 
   // Show Toast
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -493,6 +509,7 @@ export const App: React.FC = () => {
     preserveAutoMode = false
   ) => {
     if (!text.trim()) return;
+    const enteringPanel = stateRef.current.uiMode !== 'panel';
     invoke('append_log', {
       msg: `frontend: activate translate len=${text.length} head=${text.slice(0, 20)} before_ui=${stateRef.current.uiMode} before_style=${stateRef.current.activeStyle} override=${targetOverride ?? "none"}`,
     }).catch(() => {});
@@ -505,7 +522,7 @@ export const App: React.FC = () => {
     setUiMode('panel');
     setCapsule(null);
     setCapsuleVisible(true);
-    setShowEpoch((n) => n + 1);
+    if (enteringPanel) setShowEpoch((n) => n + 1);
     setShowSettings(false);
     setShowHistory(false);
     setShowScriptLibrary(false);
@@ -936,7 +953,8 @@ export const App: React.FC = () => {
     style: PolishStyle,
     customInstruction?: string,
     screenshotUrl?: string | null,
-    historyOriginalText?: string
+    historyOriginalText?: string,
+    cacheKey?: string
   ) => {
     if (!text || text.trim().length === 0) return;
 
@@ -1079,6 +1097,7 @@ export const App: React.FC = () => {
               }
               setPolishedText((finalText) => {
                 if (finalText && finalText.trim()) {
+                  if (cacheKey) resultCacheSet(cacheKey, { text: finalText });
                   addHistoryRecord({
                     // refine 路径传入的 text 是整段 prompt,历史"原文"要显示真实对话原文
                     originalText: historyOriginalText?.trim() || text,
@@ -1346,7 +1365,7 @@ export const App: React.FC = () => {
   stateRef.current.handleStartScreenReplyAnalysis = handleStartScreenReplyAnalysis;
 
   // Structured Text-based Reply Analysis (Output JSON for selected chat messages)
-  const handleStartTextReplyAnalysis = useCallback(async (messageText: string) => {
+  const handleStartTextReplyAnalysis = useCallback(async (messageText: string, cacheKey?: string) => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
@@ -1430,6 +1449,7 @@ export const App: React.FC = () => {
               setScreenReplyAnalysis(parsed);
               const draft = parsed.draft_reply || rawOutput.trim();
               setPolishedText(draft);
+              if (cacheKey) resultCacheSet(cacheKey, { text: draft, screenReplyAnalysis: parsed });
               const targetMsg = parsed.last_message_from_other || messageText;
               setOriginalText(targetMsg);
               stateRef.current.originalText = targetMsg;
@@ -1823,10 +1843,14 @@ export const App: React.FC = () => {
       unlistens.push(listen<{ action?: CapsuleAction; generation?: number }>('runbi://capsule-action', ({ payload }) => {
         const info = capsuleInfoRef.current;
         if (stateRef.current.uiMode !== 'capsule' || !info || !payload?.action) return;
+        // NO_CAPSULE (u64::MAX) is Rust's "no capsule" sentinel. A hit-test at
+        // the dismissal edge can emit the action with that value; treating it
+        // as a mismatched generation made the button silently do nothing.
+        const eventGeneration = payload.generation === 18446744073709551615 ? undefined : payload.generation;
         if (
-          typeof payload.generation === 'number'
+          typeof eventGeneration === 'number'
           && typeof info.generation === 'number'
-          && payload.generation !== info.generation
+          && eventGeneration !== info.generation
         ) {
           return;
         }
@@ -2243,8 +2267,10 @@ export const App: React.FC = () => {
   // Regenerate
   const handleRegenerate = () => {
     if (activeStyle === 'translate') {
+      resultCacheRef.current.delete(resultCacheKey(originalText, 'translate'));
       activateTranslate(originalText, currentScreenshot, translateTarget);
     } else {
+      resultCacheRef.current.delete(resultCacheKey(originalText, 'polish'));
       handleStartPolish(originalText, activeStyle, undefined, currentScreenshot);
     }
   };
@@ -2264,6 +2290,8 @@ export const App: React.FC = () => {
     stateRef.current.autoMode = false;
     if (newStyle !== 'reply') lastPolishStyleRef.current = newStyle;
     setActiveStyle(newStyle);
+    // 显式重选风格：强制重新生成，绕过 tab 切换缓存（translate 在上方提前 return）
+    resultCacheRef.current.delete(resultCacheKey(originalText, 'polish'));
     handleStartPolish(originalText, newStyle, undefined, currentScreenshot);
   };
 
@@ -2278,8 +2306,17 @@ export const App: React.FC = () => {
     stateRef.current.activeStyle = target;
     setActiveStyle(target);
     const text = stateRef.current.originalText;
-    if (text.trim()) handleStartPolish(text, target, undefined);
-  }, [handleStartPolish]);
+    if (text.trim()) {
+      // 同 (原文, 模式) 已有结果：直接复用，不发重复请求
+      const cached = resultCacheGet(resultCacheKey(text, 'polish'));
+      if (cached) {
+        setPolishedText(cached.text);
+        setIsGenerating(false);
+        return;
+      }
+      handleStartPolish(text, target, undefined, undefined, undefined, resultCacheKey(text, 'polish'));
+    }
+  }, [handleStartPolish, resultCacheGet, resultCacheKey]);
 
   // 翻译模式语言条：切换目标语言 → 持久化并对当前原文立即重译
   const handleTranslateTargetChange = useCallback((id: TranslateTargetId) => {
@@ -2298,18 +2335,40 @@ export const App: React.FC = () => {
     stateRef.current.activeStyle = 'reply';
     setActiveStyle('reply');
     const text = stateRef.current.originalText;
-    if (text.trim()) stateRef.current.handleStartTextReplyAnalysis(text);
-  }, []);
+    if (text.trim()) {
+      // 同 (原文, 模式) 已有结果：直接复用，不发重复请求
+      const cached = resultCacheGet(resultCacheKey(text, 'reply'));
+      if (cached) {
+        setPolishedText(cached.text);
+        if (cached.screenReplyAnalysis) setScreenReplyAnalysis(cached.screenReplyAnalysis);
+        setIsGenerating(false);
+        return;
+      }
+      stateRef.current.handleStartTextReplyAnalysis(text, resultCacheKey(text, 'reply'));
+    }
+  }, [resultCacheGet, resultCacheKey]);
 
   const handleSwitchToTranslate = useCallback(() => {
     const text = stateRef.current.originalText;
     if (text.trim()) {
+      // 同 (原文, 模式) 已有结果：只切 UI 状态，不发重复请求
+      const cached = resultCacheGet(resultCacheKey(text, 'translate'));
+      if (cached) {
+        styleOverrideRef.current = true;
+        translationPanelRef.current = true;
+        setUiMode('panel');
+        stateRef.current.activeStyle = 'translate';
+        setActiveStyle('translate');
+        setPolishedText(cached.text);
+        setIsGenerating(false);
+        return;
+      }
       activateTranslate(text, null);
     } else {
       setActiveStyle('translate');
       stateRef.current.activeStyle = 'translate';
     }
-  }, [activateTranslate]);
+  }, [activateTranslate, resultCacheGet, resultCacheKey]);
 
   // ---- 多专家并行：同一输入并发发给 2-4 位专家，各自独立流式 ----
   const applyParallelWindowSize = useCallback((wide: boolean) => {
@@ -2855,7 +2914,7 @@ export const App: React.FC = () => {
             </div>
             {/* 工作模式开关：当前所处模式显式可见、可一键切换（划词时 AI 也会自动选） */}
             <div
-              className="flex items-center rounded-full border border-white/10 bg-black/20 p-0.5"
+              className="runbi-mode-tabs flex items-center rounded-full border border-white/10 bg-black/20 p-0.5"
               role="tablist"
               aria-label="工作模式切换"
             >
@@ -2864,7 +2923,7 @@ export const App: React.FC = () => {
                 role="tab"
                 aria-selected={renderedPanelStyle !== 'reply' && renderedPanelStyle !== 'translate' && !screenReplyAnalysis}
                 title="润色：改写我自己的文字"                onClick={handleSwitchToPolish}
-                className={`rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors cursor-pointer ${
+                className={`runbi-mode-tab rounded-full px-2 py-0.5 text-[10px] font-medium cursor-pointer ${
                   renderedPanelStyle !== 'reply' && renderedPanelStyle !== 'translate' && !screenReplyAnalysis
                     ? 'bg-white/10 text-slate-200'
                     : 'text-slate-500 hover:text-slate-300'
@@ -2878,7 +2937,7 @@ export const App: React.FC = () => {
                 aria-selected={Boolean(renderedPanelStyle === 'reply' || screenReplyAnalysis)}
                 title="回复：把上方文字当作对方消息，帮我想一条回复"
                 onClick={handleSwitchToReply}
-                className={`rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors cursor-pointer ${
+                className={`runbi-mode-tab rounded-full px-2 py-0.5 text-[10px] font-medium cursor-pointer ${
                   renderedPanelStyle === 'reply' || screenReplyAnalysis
                     ? 'bg-teal-500/20 text-teal-300 border border-teal-500/30'
                     : 'text-slate-500 hover:text-slate-300'
@@ -2892,7 +2951,7 @@ export const App: React.FC = () => {
                 aria-selected={renderedPanelStyle === 'translate'}
                 title="翻译：精准双向翻译"
                 onClick={handleSwitchToTranslate}
-                className={`rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors cursor-pointer ${
+                className={`runbi-mode-tab rounded-full px-2 py-0.5 text-[10px] font-medium cursor-pointer ${
                   renderedPanelStyle === 'translate'
                     ? 'bg-teal-500/20 text-teal-300 border border-teal-500/30'
                     : 'text-slate-500 hover:text-slate-300'
@@ -3060,11 +3119,11 @@ export const App: React.FC = () => {
           >
             {/* Settings Header with 3 Tabs */}
             <div className="flex shrink-0 items-center justify-between border-b border-white/10 px-4 py-2.5 bg-black/20">
-              <div className="flex items-center gap-1 rounded-lg bg-black/40 p-0.5 border border-white/10">
+              <div className="runbi-settings-tabs flex items-center gap-1 rounded-lg bg-black/40 p-0.5 border border-white/10">
                 <button
                   type="button"
                   onClick={() => setSettingsTab('model')}
-                  className={`rounded-md px-3 py-1 text-xs font-medium transition-all cursor-pointer ${
+                  className={`runbi-settings-tab rounded-md px-3 py-1 text-xs font-medium cursor-pointer ${
                     settingsTab === 'model'
                       ? 'bg-teal-500/20 text-teal-300 shadow-sm border border-teal-500/30'
                       : 'text-slate-400 hover:text-slate-200'
@@ -3075,7 +3134,7 @@ export const App: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setSettingsTab('desktop')}
-                  className={`rounded-md px-3 py-1 text-xs font-medium transition-all cursor-pointer ${
+                  className={`runbi-settings-tab rounded-md px-3 py-1 text-xs font-medium cursor-pointer ${
                     settingsTab === 'desktop'
                       ? 'bg-teal-500/20 text-teal-300 shadow-sm border border-teal-500/30'
                       : 'text-slate-400 hover:text-slate-200'
@@ -3086,7 +3145,7 @@ export const App: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setSettingsTab('persona')}
-                  className={`rounded-md px-3 py-1 text-xs font-medium transition-all cursor-pointer ${
+                  className={`runbi-settings-tab rounded-md px-3 py-1 text-xs font-medium cursor-pointer ${
                     settingsTab === 'persona'
                       ? 'bg-teal-500/20 text-teal-300 shadow-sm border border-teal-500/30'
                       : 'text-slate-400 hover:text-slate-200'
@@ -3097,7 +3156,7 @@ export const App: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setSettingsTab('about')}
-                  className={`rounded-md px-3 py-1 text-xs font-medium transition-all cursor-pointer ${
+                  className={`runbi-settings-tab rounded-md px-3 py-1 text-xs font-medium cursor-pointer ${
                     settingsTab === 'about'
                       ? 'bg-teal-500/20 text-teal-300 shadow-sm border border-teal-500/30'
                       : 'text-slate-400 hover:text-slate-200'
@@ -3114,7 +3173,7 @@ export const App: React.FC = () => {
 
             {/* Tab 1: Model Settings */}
             {settingsTab === 'model' && (
-              <div className="runbi-settings-scroll min-h-0 flex-1 space-y-3 overflow-y-auto p-4 animate-in fade-in duration-150">
+              <div className="runbi-settings-scroll min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
                 <div className="space-y-1.5">
                   <label htmlFor="provider-preset" className="block font-medium text-slate-300">服务商预设</label>
                   <select
@@ -3234,7 +3293,7 @@ export const App: React.FC = () => {
 
             {/* Tab 2: Desktop Settings */}
             {settingsTab === 'desktop' && (
-              <div className="runbi-settings-scroll min-h-0 flex-1 space-y-2.5 overflow-y-auto p-4 animate-in fade-in duration-150">
+              <div className="runbi-settings-scroll min-h-0 flex-1 space-y-2.5 overflow-y-auto p-4">
                 <div className="space-y-1.5">
                   <label htmlFor="skin-select" className="block font-medium text-slate-300">皮肤</label>
                   <select
@@ -3336,7 +3395,7 @@ export const App: React.FC = () => {
 
             {/* Tab 3: Persona & Advanced */}
             {settingsTab === 'persona' && (
-              <div className="runbi-settings-scroll min-h-0 flex-1 space-y-3 overflow-y-auto p-4 animate-in fade-in duration-150">
+              <div className="runbi-settings-scroll min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
                 <div className="space-y-1.5">
                   <label htmlFor="industry-pack" className="block font-medium text-slate-300">行业模板包</label>
                   <select
@@ -3513,7 +3572,7 @@ export const App: React.FC = () => {
             )}
 
             {settingsTab === 'about' && (
-              <div className="runbi-settings-scroll min-h-0 flex-1 space-y-3 overflow-y-auto p-4 animate-in fade-in duration-150">
+              <div className="runbi-settings-scroll min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
                 <UpdateCheckRow
                   onOpenReleaseHistory={() => {
                     invoke('open_url', {

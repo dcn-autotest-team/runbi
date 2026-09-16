@@ -568,6 +568,37 @@ fn dismissal_suppresses_selection(now: u64, suppress_until_ms: u64) -> bool {
     suppress_until_ms != 0 && now < suppress_until_ms
 }
 
+fn point_in_rect(
+    pt_x: i32,
+    pt_y: i32,
+    left: i32,
+    top: i32,
+    width: i32,
+    height: i32,
+) -> bool {
+    width > 0
+        && height > 0
+        && pt_x >= left
+        && pt_x < left.saturating_add(width)
+        && pt_y >= top
+        && pt_y < top.saturating_add(height)
+}
+
+/// True when the pointer is over Runbi's own interactive UI. The main host
+/// window is a transparent full-screen overlay, so its outer rect can never be
+/// used as a hit-test: the old check swallowed ~28% of real selections (log:
+/// "selection capture skipped: pointer still inside Runbi window" with no
+/// capsule on screen). Only the tight capsule rect and the actual point-hit
+/// window count; the expanded panel is a real topmost window, so the
+/// WindowFromPoint test still protects its buttons.
+#[cfg(windows)]
+fn point_over_runbi_ui(pt: windows_sys::Win32::Foundation::POINT) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::WindowFromPoint;
+    let (left, top, width, height) = capsule_bounds_for_pointer();
+    point_in_rect(pt.x, pt.y, left, top, width, height)
+        || unsafe { is_runbi_window(WindowFromPoint(pt)) }
+}
+
 fn should_defer_capsule_dismissal(capsule_active: bool, outside: bool, dragged: bool) -> bool {
     capsule_active && outside && !dragged
 }
@@ -578,8 +609,16 @@ fn should_invalidate_keyboard(
     modifier: bool,
     inside_runbi: bool,
     internal_action: bool,
+    escape: bool,
 ) -> bool {
-    !injected && !capsule_active && !modifier && !inside_runbi && !internal_action
+    if capsule_active {
+        // While the capsule is visible the source app still owns the focus, so
+        // every ordinary keystroke reaches this hook. Invalidating on each one
+        // made the capsule vanish while the user only kept typing; only a
+        // deliberate Escape now dismisses a visible capsule.
+        return !injected && !inside_runbi && escape;
+    }
+    !injected && !modifier && !inside_runbi && !internal_action
 }
 
 #[cfg(windows)]
@@ -704,6 +743,13 @@ unsafe fn is_runbi_window(hwnd: windows_sys::Win32::Foundation::HWND) -> bool {
 #[cfg(windows)]
 fn invalidate_selection(reason: &'static str) -> u64 {
     let generation = SELECTION_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    // Snapshot the capsule generation on the hook thread. The queued
+    // main-thread callback can run after a newer capsule was shown; re-reading
+    // the live value there dismissed a capsule the user had not yet dismissed
+    // (log: shown 410 -> dismiss outside-pointer-down generation=410 event=411
+    // 8ms later). The snapshot keeps "what was visible when this interaction
+    // started" authoritative.
+    let queued_capsule = CAPSULE_GENERATION.load(Ordering::SeqCst);
     if let Some((_, app)) = MONITOR_STATE.get() {
         let app_handle = app.clone();
         let started = std::time::Instant::now();
@@ -713,7 +759,7 @@ fn invalidate_selection(reason: &'static str) -> u64 {
                     &app_handle,
                     &format!("selection invalidated: reason={reason} generation={generation}"),
                 );
-                let active = CAPSULE_GENERATION.load(Ordering::SeqCst);
+                let active = queued_capsule;
                 if active < generation {
                     if let Some(window) = app_handle.get_webview_window("main") {
                         let result = dismiss_native_capsule(&window, active);
@@ -722,7 +768,7 @@ fn invalidate_selection(reason: &'static str) -> u64 {
                             started.elapsed().as_millis(), !window.is_visible().unwrap_or(true), result.err()
                         ));
                     }
-                } else if active == NO_CAPSULE
+                } else if CAPSULE_GENERATION.load(Ordering::SeqCst) == NO_CAPSULE
                     && OUTSIDE_DISMISS_GENERATION.load(Ordering::SeqCst) == generation
                 {
                     // The low-level hook hides immediately, but keep a main-thread
@@ -782,12 +828,14 @@ unsafe extern "system" fn low_level_keyboard_proc(
                 false
             }
         };
+        let escape = event.vkCode == 0x1B;
         if should_invalidate_keyboard(
             event.flags & LLKHF_INJECTED != 0,
             CAPSULE_GENERATION.load(Ordering::SeqCst) != NO_CAPSULE,
             modifier,
             is_runbi_window(GetForegroundWindow()),
             internal_action || internal_keyboard_grace || selection_capture_pending,
+            escape,
         ) {
             clear_outside_dismissal();
             invalidate_selection("keyboard");
@@ -1081,25 +1129,16 @@ unsafe extern "system" fn low_level_mouse_proc(
                                 return;
                             }
 
-                            // 1. Check if the mouse is currently over our own Runbi window
-                            if let Some(win) = app.get_webview_window("main") {
-                                if win.is_visible().unwrap_or(false) {
-                                    if let (Ok(win_pos), Ok(win_size)) =
-                                        (win.outer_position(), win.outer_size())
-                                    {
-                                        if pt.x >= win_pos.x
-                                            && pt.x <= win_pos.x + win_size.width as i32
-                                            && pt.y >= win_pos.y
-                                            && pt.y <= win_pos.y + win_size.height as i32
-                                        {
-                                            crate::commands::file_log(
-                                                &app,
-                                                "selection capture skipped: pointer still inside Runbi window",
-                                            );
-                                            return; // Clicked inside Runbi UI, don't grab
-                                        }
-                                    }
-                                }
+                            // 1. Skip only when the pointer is genuinely over Runbi's
+                            // own UI. Testing the host's outer rect here made every
+                            // selection fail while the transparent overlay happened to
+                            // report a rect covering the point.
+                            if point_over_runbi_ui(pt) {
+                                crate::commands::file_log(
+                                    &app,
+                                    "selection capture skipped: pointer over Runbi UI",
+                                );
+                                return; // Over Runbi UI, don't grab
                             }
 
                             // 2. Get foreground context (source_app, window_title)
@@ -1419,20 +1458,32 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn capsule_rect_filter_excludes_helper_and_restored_panel() {
-        use super::is_capsule_rect;
+        use super::{is_capsule_rect, point_in_rect};
 
         assert!(!is_capsule_rect(18, 18));
         assert!(!is_capsule_rect(560, 520));
         assert!(is_capsule_rect(235, 53));
+
+        // Tight hit-test used by the capture guard: only the capsule UI rect
+        // counts, never a point beside it.
+        assert!(point_in_rect(100, 100, 100, 100, 235, 53));
+        assert!(point_in_rect(334, 152, 100, 100, 235, 53));
+        assert!(!point_in_rect(335, 100, 100, 100, 235, 53));
+        assert!(!point_in_rect(99, 100, 100, 100, 235, 53));
+        assert!(!point_in_rect(100, 100, 100, 100, 0, 53));
     }
 
     #[test]
     fn internal_keyboard_injection_does_not_cancel_selection_capture() {
         use super::should_invalidate_keyboard;
 
-        assert!(!should_invalidate_keyboard(false, false, false, false, true));
-        assert!(!should_invalidate_keyboard(true, false, false, false, false));
-        assert!(should_invalidate_keyboard(false, false, false, false, false));
+        assert!(!should_invalidate_keyboard(false, false, false, false, true, false));
+        assert!(!should_invalidate_keyboard(true, false, false, false, false, false));
+        assert!(should_invalidate_keyboard(false, false, false, false, false, false));
+        // A visible capsule survives ordinary typing; only Escape dismisses it.
+        assert!(!should_invalidate_keyboard(false, true, false, false, false, false));
+        assert!(should_invalidate_keyboard(false, true, false, false, false, true));
+        assert!(!should_invalidate_keyboard(true, true, false, false, false, true));
     }
 
     #[test]
