@@ -3168,25 +3168,27 @@ export const App: React.FC = () => {
 
                   <div className="space-y-1.5">
                     <label htmlFor="model-name" className="block font-medium text-slate-300">模型名称</label>
-                    <select
-                      id="model-name"
-                      required
-                      value={model}
-                      onChange={(e) => {
-                        setModel(e.target.value);
-                        setConnectionTest({ status: 'idle', message: '' });
-                      }}
-                      className="runbi-form-control cursor-pointer font-mono text-[11px]"
-                    >
-                      <option value="" disabled>请先获取模型列表</option>
-                      {model && !modelList.includes(model) && <option value={model}>{model}</option>}
-                      {modelList.map((name) => <option key={name} value={name}>{name}</option>)}
-                    </select>
-                    <button type="button" onClick={handleFetchModels} disabled={modelsLoading || !endpoint.trim()}
-                      className="runbi-secondary-button runbi-focus-ring cursor-pointer text-[11px]">
-                      <RefreshCw className={modelsLoading ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
-                      {modelsLoading ? '获取中…' : '获取模型列表'}
-                    </button>
+                    <div className="flex min-w-0 gap-2">
+                      <select
+                        id="model-name"
+                        required
+                        value={model}
+                        onChange={(e) => {
+                          setModel(e.target.value);
+                          setConnectionTest({ status: 'idle', message: '' });
+                        }}
+                        className="runbi-form-control min-w-0 flex-1 cursor-pointer font-mono text-[11px]"
+                      >
+                        <option value="" disabled>请先获取模型列表</option>
+                        {model && !modelList.includes(model) && <option value={model}>{model}</option>}
+                        {modelList.map((name) => <option key={name} value={name}>{name}</option>)}
+                      </select>
+                      <button type="button" onClick={handleFetchModels} disabled={modelsLoading || !endpoint.trim()}
+                        className="runbi-secondary-button runbi-focus-ring shrink-0 cursor-pointer whitespace-nowrap px-2.5 text-[11px]">
+                        <RefreshCw className={modelsLoading ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
+                        {modelsLoading ? '获取中…' : '获取模型列表'}
+                      </button>
+                    </div>
                     {modelListError && <p role="alert" className="text-[10px] text-rose-300">获取失败：{modelListError}</p>}
                   </div>
                 </div>

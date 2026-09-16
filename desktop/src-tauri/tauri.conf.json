@@ -15,9 +15,9 @@
       {
         "title": "Runbi 润笔",
         "label": "main",
-        "width": 640,
+        "width": 700,
         "height": 580,
-        "minWidth": 480,
+        "minWidth": 560,
         "minHeight": 420,
         "resizable": true,
         "decorations": false,
