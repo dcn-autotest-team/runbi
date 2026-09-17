@@ -2860,8 +2860,8 @@ export const App: React.FC = () => {
         return;
       }
 
-      // Don't hijack keys while the user is editing a field or in settings or in history.
-      if (typing || s.showSettings || s.showHistory || s.showParallel) return;
+      // Don't hijack keys while the user is editing a field or in settings or in history or in agent.
+      if (typing || s.showSettings || s.showHistory || s.showParallel || s.showAgent) return;
 
       // 面板聚焦时 R = 重新截屏（截图上下文才有意义）
       if ((e.key === 'r' || e.key === 'R') && !e.ctrlKey && !e.metaKey && !e.altKey && s.hasScreenshot) {
@@ -2881,30 +2881,62 @@ export const App: React.FC = () => {
       }
     };
 
+    let isMouseDown = false;
+    const onMouseDown = () => {
+      isMouseDown = true;
+      if (panelBlurTimerRef.current) {
+        clearTimeout(panelBlurTimerRef.current);
+        panelBlurTimerRef.current = null;
+      }
+    };
+
+    const onMouseUp = () => {
+      isMouseDown = false;
+    };
+
     const onBlur = () => {
       const s = stateRef.current;
       // 胶囊模式不随失焦隐藏:划词后焦点通常仍留在源应用,胶囊的退场
       // 由悬停离开/空闲淡出/Esc 负责(Raycast 式失焦即隐藏只适用面板)。
       if (panelBlurTimerRef.current) clearTimeout(panelBlurTimerRef.current);
+      if (isMouseDown) return;
       // The native capsule can activate the WebView when clicked. Its
       // captured-selection event can still arrive just after blur; defer the
       // panel-only hide so blur cannot hide a newly shown capsule.
-      panelBlurTimerRef.current = setTimeout(() => {
+      panelBlurTimerRef.current = setTimeout(async () => {
         panelBlurTimerRef.current = null;
         const current = stateRef.current;
-        if (current.uiMode === 'capsule') return;
-        if (current.dragging) return;
+        if (current.uiMode === 'capsule' || current.showAgent || current.dragging) return;
         if (!current.isPinned && !current.isGenerating && !current.showSettings && !current.showHistory && !current.screenReplyAnalysis && !current.showParallel && !current.parallelRunning) {
-          if (isTauri) invoke('hide_window').catch(() => {});
+          if (isTauri) {
+            try {
+              const win = getCurrentWindow() as any;
+              if (typeof win.isFocused === 'function' && await win.isFocused()) return;
+            } catch {}
+            invoke('hide_window', { onlyIfUnfocused: true }).catch(() => {});
+          }
         }
       }, 120);
     };
 
+    const onFocus = () => {
+      if (panelBlurTimerRef.current) {
+        clearTimeout(panelBlurTimerRef.current);
+        panelBlurTimerRef.current = null;
+      }
+    };
+
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('blur', onBlur);
+    window.addEventListener('focus', onFocus);
+    window.addEventListener('mousedown', onMouseDown);
+    window.addEventListener('mouseup', onMouseUp);
     return () => {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('blur', onBlur);
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('mousedown', onMouseDown);
+      window.removeEventListener('mouseup', onMouseUp);
     };
   }, [handleReplace, handleStyleChange, closeParallel, isTauri, handleRecapture, handleClose]);
 
@@ -3757,6 +3789,8 @@ export const App: React.FC = () => {
             endpoint={resolveEndpoint(endpoint)}
             apiKey={apiKey}
             model={model || 'deepseek-chat'}
+            onModelChange={setModel}
+            modelList={modelList}
             onToast={showToast}
           />
         ) : (

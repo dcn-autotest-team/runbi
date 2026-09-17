@@ -398,6 +398,7 @@ fn main() {
             commands::agent::approve_agent_tool,
             commands::agent::abort_agent_task,
             commands::agent::get_agent_env_info,
+            commands::agent::select_project_directory,
         ])
         .run(tauri::generate_context!());
 

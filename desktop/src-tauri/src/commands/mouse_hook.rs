@@ -51,6 +51,31 @@ static CAPSULE_WIDTH: AtomicI32 = AtomicI32::new(0);
 #[cfg(windows)]
 static CAPSULE_HEIGHT: AtomicI32 = AtomicI32::new(0);
 
+#[cfg(windows)]
+static IS_MOUSE_DOWN_ON_RUNBI: AtomicBool = AtomicBool::new(false);
+#[cfg(windows)]
+static LAST_DRAG_MOVE_TIME_MS: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(windows)]
+pub fn is_mouse_down_on_runbi() -> bool {
+    IS_MOUSE_DOWN_ON_RUNBI.load(Ordering::Relaxed)
+}
+
+#[cfg(not(windows))]
+pub fn is_mouse_down_on_runbi() -> bool {
+    false
+}
+
+#[cfg(windows)]
+pub fn last_drag_move_time_ms() -> u64 {
+    LAST_DRAG_MOVE_TIME_MS.load(Ordering::Relaxed)
+}
+
+#[cfg(not(windows))]
+pub fn last_drag_move_time_ms() -> u64 {
+    0
+}
+
 pub fn leave_capsule_mode() {
     CAPSULE_GENERATION.store(NO_CAPSULE, Ordering::SeqCst);
     clear_capsule_bounds();
@@ -681,7 +706,7 @@ fn should_pop_once(_text: &str) -> bool {
 }
 
 #[cfg(windows)]
-fn current_time_ms() -> u64 {
+pub(crate) fn current_time_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -695,7 +720,7 @@ fn should_handle_selection(state: &SelectionMonitorState) -> bool {
 }
 
 #[cfg(windows)]
-unsafe fn is_runbi_window(hwnd: windows_sys::Win32::Foundation::HWND) -> bool {
+pub(crate) unsafe fn is_runbi_window(hwnd: windows_sys::Win32::Foundation::HWND) -> bool {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetAncestor, GetParent, GetWindow, GetWindowThreadProcessId, GA_ROOT, GA_ROOTOWNER,
         GW_OWNER,
@@ -852,13 +877,19 @@ unsafe extern "system" fn low_level_mouse_proc(
 ) -> isize {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CallNextHookEx, WindowFromPoint, LLMHF_INJECTED, MSLLHOOKSTRUCT, WM_LBUTTONDOWN,
-        WM_LBUTTONUP, WM_MBUTTONDOWN, WM_RBUTTONDOWN,
+        WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEMOVE, WM_RBUTTONDOWN,
     };
 
     if n_code >= 0 {
         let hook_struct = *(l_param as *const MSLLHOOKSTRUCT);
         let pt = hook_struct.pt;
         let now = current_time_ms();
+
+        if w_param as u32 == WM_MOUSEMOVE {
+            if IS_MOUSE_DOWN_ON_RUNBI.load(Ordering::Relaxed) {
+                LAST_DRAG_MOVE_TIME_MS.store(now, Ordering::Relaxed);
+            }
+        }
 
         if CAPSULE_GENERATION.load(Ordering::SeqCst) != NO_CAPSULE
             && matches!(w_param as u32, WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN) {
@@ -914,15 +945,14 @@ unsafe extern "system" fn low_level_mouse_proc(
                 }
             }
             if w_param == WM_LBUTTONDOWN as usize {
+                if !outside_runbi {
+                    IS_MOUSE_DOWN_ON_RUNBI.store(true, Ordering::SeqCst);
+                    crate::commands::input::remember_foreground_window();
+                } else {
+                    IS_MOUSE_DOWN_ON_RUNBI.store(false, Ordering::SeqCst);
+                }
                 if capsule_hit {
                     DOWN_STARTED_INSIDE_CAPSULE.store(true, Ordering::Relaxed);
-                }
-                // If the user switched to another app while the Runbi panel stayed
-                // open, the low-level hook still sees that app as foreground before
-                // Windows focuses the clicked Runbi button. Keep paste/send aimed at
-                // the app the user just left instead of an older selection target.
-                if !outside_runbi {
-                    crate::commands::input::remember_foreground_window();
                 }
                 // Defer dismissal while a capsule is active. The hook sees
                 // mouse-down before the WebView can deliver the button's DOM
@@ -1015,6 +1045,8 @@ unsafe extern "system" fn low_level_mouse_proc(
             LAST_DOWN_X.store(pt.x, Ordering::Relaxed);
             LAST_DOWN_Y.store(pt.y, Ordering::Relaxed);
         } else if w_param == WM_LBUTTONUP as usize {
+            IS_MOUSE_DOWN_ON_RUNBI.store(false, Ordering::SeqCst);
+            LAST_DRAG_MOVE_TIME_MS.store(now, Ordering::Relaxed);
             let down_x = LAST_DOWN_X.load(Ordering::Relaxed);
             let down_y = LAST_DOWN_Y.load(Ordering::Relaxed);
 
@@ -1509,5 +1541,13 @@ mod tests {
         // 换了新文本立即可弹；同一 generation 的重复生产者仍被挡。
         let c = should_pop_once("different text");
         assert!(a && !b && c);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_is_runbi_window_null_handle() {
+        unsafe {
+            assert!(!super::is_runbi_window(std::ptr::null_mut()));
+        }
     }
 }

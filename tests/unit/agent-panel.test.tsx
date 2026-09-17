@@ -63,7 +63,10 @@ describe('Autonomous AgentPanel', () => {
   });
 
   it('invokes start_agent_task when clicking start and handles tool approvals', async () => {
-    invokeMock.mockResolvedValue({});
+    let finishTask!: () => void;
+    invokeMock.mockImplementation((command) => command === 'start_agent_task'
+      ? new Promise<void>((resolve) => { finishTask = resolve; })
+      : Promise.resolve());
     const onToast = vi.fn();
 
     act(() => {
@@ -100,6 +103,8 @@ describe('Autonomous AgentPanel', () => {
     }));
 
     expect(lastCreatedChannel).not.toBeNull();
+    expect(textarea.value).toBe('');
+    expect(host.textContent).toContain('检查当前目录文件并统计行数');
 
     // Simulate Agent proposing a tool that requires user approval
     act(() => {
@@ -151,5 +156,49 @@ describe('Autonomous AgentPanel', () => {
 
     expect(host.textContent).toContain('Build finished in 2.1s');
     expect(host.textContent).toContain('任务已完成');
+    await act(async () => finishTask());
+  });
+
+  it('does not submit IME confirmation, prevents duplicate starts, and aborts on unmount', async () => {
+    invokeMock.mockImplementation((command) => command === 'start_agent_task' ? new Promise(() => {}) : Promise.resolve());
+    act(() => root.render(<AgentPanel endpoint="http://localhost:8888/v1/chat/completions" apiKey="" model="local" />));
+    const textarea = host.querySelector('textarea')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(textarea, '测试任务');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    act(() => textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true })));
+    expect(invokeMock).not.toHaveBeenCalled();
+    await act(async () => {
+      textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    });
+    expect(invokeMock.mock.calls.filter(([cmd]) => cmd === 'start_agent_task')).toHaveLength(1);
+    expect(textarea.value).toBe('');
+    act(() => root.render(<div />));
+    expect(invokeMock).toHaveBeenCalledWith('abort_agent_task');
+  });
+
+  it('restores failed task input without overwriting a new draft and clears stale approvals', async () => {
+    let rejectTask!: (reason: Error) => void;
+    invokeMock.mockImplementation(() => new Promise((_, reject) => { rejectTask = reject; }));
+    act(() => root.render(<AgentPanel endpoint="http://localhost:8888/v1/chat/completions" apiKey="key" model="local" />));
+    const textarea = host.querySelector('textarea')!;
+    const input = (text: string) => act(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(textarea, text);
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const submit = async () => act(async () => textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
+    input('原始任务');
+    await submit();
+    await act(async () => rejectTask(new Error('连接失败')));
+    expect(textarea.value).toBe('原始任务');
+    await submit();
+    act(() => lastCreatedChannel.onmessage({ type: 'ToolProposed', payload: { call_id: 'pending', name: 'run_cli', command: 'test', requires_approval: true } }));
+    input('下一项任务');
+    await act(async () => rejectTask(new Error('连接中断')));
+    expect(textarea.value).toBe('下一项任务');
+    expect(host.textContent).not.toContain('批准执行');
+    expect(host.textContent).toContain('连接中断');
   });
 });

@@ -7,6 +7,30 @@
 @tailwind components;
 @tailwind utilities;
 
+.runbi-agent {
+  color: var(--runbi-text-primary);
+  background: var(--runbi-acrylic-input);
+}
+.runbi-agent-icon,
+.runbi-agent-goal,
+.runbi-agent-suggestion {
+  background: var(--runbi-surface-raised);
+  border-color: var(--runbi-border);
+  color: var(--runbi-text-primary);
+}
+.runbi-agent-suggestion:hover { background: var(--runbi-surface-hover); }
+.runbi-agent button:focus-visible {
+  outline: 2px solid var(--runbi-text-secondary);
+  outline-offset: 2px;
+}
+.runbi-agent button:disabled { cursor: not-allowed; }
+.runbi-agent textarea { background: var(--runbi-control-bg); }
+.runbi-agent pre,
+.runbi-agent .whitespace-pre-wrap { overflow-wrap: anywhere; }
+@media (prefers-reduced-motion: reduce) {
+  .runbi-agent .animate-spin { animation: none; }
+}
+
 :root {
   /* Brand Colors */
   --runbi-jade-primary: #D1D5DB;

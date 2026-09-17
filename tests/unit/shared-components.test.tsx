@@ -206,6 +206,18 @@ describe('Shared UI Components (@runbi/shared/components)', () => {
 
       expect(container.textContent).toContain('祝学习顺利！');
     });
+
+    it('should render fenced code blocks properly', async () => {
+      const markdown = '```bash\ngit status\necho done\n```';
+      await renderElement(
+        <MarkdownRenderer content={markdown} />
+      );
+      const pre = container.querySelector('pre');
+      expect(pre).not.toBeNull();
+      expect(pre?.textContent).toContain('git status');
+      expect(pre?.textContent).toContain('echo done');
+      expect(container.textContent).toContain('bash');
+    });
   });
 
   describe('DiffViewer Component', () => {

@@ -49,6 +49,17 @@ pub enum AgentEvent {
 type ApprovalSender = tokio::sync::oneshot::Sender<bool>;
 static PENDING_APPROVALS: Mutex<Option<HashMap<String, ApprovalSender>>> = Mutex::new(None);
 static ACTIVE_AGENT_ABORT: AtomicBool = AtomicBool::new(false);
+static AGENT_RUNNING: AtomicBool = AtomicBool::new(false);
+
+struct AgentRunGuard;
+impl Drop for AgentRunGuard {
+    fn drop(&mut self) {
+        if let Ok(mut pending) = PENDING_APPROVALS.lock() {
+            if let Some(map) = pending.as_mut() { map.clear(); }
+        }
+        AGENT_RUNNING.store(false, Ordering::SeqCst);
+    }
+}
 
 fn ensure_approval_map() {
     let mut lock = PENDING_APPROVALS.lock().unwrap();
@@ -211,10 +222,27 @@ fn chrono_like_today() -> String {
 }
 
 fn check_tool_version(tool: &str) -> Option<String> {
-    let output = std::process::Command::new(tool)
-        .arg("--version")
-        .output()
-        .ok()?;
+    let mut command = std::process::Command::new(tool);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
+    let mut child = command.arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null()).spawn().ok()?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        if child.try_wait().ok()?.is_some() { break; }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let output = child.wait_with_output().ok()?;
     if output.status.success() {
         let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
         if !s.is_empty() {
@@ -231,12 +259,16 @@ fn check_tool_version(tool: &str) -> Option<String> {
 
 pub fn is_readonly_command(cmd: &str) -> bool {
     let lower = cmd.trim().to_lowercase();
+    // Shell syntax and substitutions require review, even after a read-only prefix.
+    if lower.contains([';', '|', '&', '$', '`', '\n', '\r', '(', ')', '{', '}', '>', '<']) {
+        return false;
+    }
     // Typical read-only commands
     let safe_prefixes = [
-        "git status", "git log", "git diff", "git show", "git branch",
+        "git status", "git log", "git diff", "git show",
         "ls", "dir", "cat", "type", "pwd", "cd", "echo", "head", "tail",
-        "grep", "rg", "find", "where", "which", "get-childitem", "get-content",
-        "test-path", "whoami", "uname", "hostname", "date",
+        "grep", "rg", "where", "which", "get-childitem", "get-content",
+        "test-path", "whoami", "uname", "hostname",
     ];
 
     // Modifying keywords that immediately disqualify
@@ -254,7 +286,10 @@ pub fn is_readonly_command(cmd: &str) -> bool {
     }
 
     for safe in &safe_prefixes {
-        if lower.starts_with(safe) {
+        if (lower == *safe || lower.strip_prefix(safe).is_some_and(|rest| rest.starts_with(' ')))
+            && !lower.contains("--output") && !lower.contains("--exec")
+            && !lower.contains("--ext-diff") && !lower.contains("--textconv")
+            && !lower.contains("--pre") && !lower.contains("-outfile") {
             return true;
         }
     }
@@ -268,6 +303,30 @@ pub fn is_readonly_command(cmd: &str) -> bool {
 
 const MAX_OUTPUT_CHARS: usize = 6000;
 
+fn truncate_output(text: &str) -> String {
+    if text.chars().count() <= MAX_OUTPUT_CHARS { return text.to_string(); }
+    let half = MAX_OUTPUT_CHARS / 2;
+    let head: String = text.chars().take(half).collect();
+    let tail: String = text.chars().rev().take(half).collect::<Vec<_>>().into_iter().rev().collect();
+    format!("{}\n...（工具返回过长，中间部分已省略）...\n{}", head, tail)
+}
+
+async fn read_bounded_output(mut reader: impl tokio::io::AsyncRead + Unpin) -> std::io::Result<Vec<u8>> {
+    use tokio::io::AsyncReadExt;
+    let mut result = Vec::new();
+    let mut buffer = [0u8; 8192];
+    let mut truncated = false;
+    loop {
+        let count = reader.read(&mut buffer).await?;
+        if count == 0 { break; }
+        let keep = count.min((1024usize * 1024).saturating_sub(result.len()));
+        result.extend_from_slice(&buffer[..keep]);
+        truncated |= keep < count;
+    }
+    if truncated { result.extend_from_slice("\n（输出超过 1 MiB，后续内容已省略）".as_bytes()); }
+    Ok(result)
+}
+
 pub async fn run_cli_command(command: &str, cwd: &Path, timeout_secs: u64) -> (String, Option<i32>) {
     let (shell, flag) = if cfg!(windows) {
         ("powershell", "-Command")
@@ -276,9 +335,13 @@ pub async fn run_cli_command(command: &str, cwd: &Path, timeout_secs: u64) -> (S
     };
 
     let mut cmd = tokio::process::Command::new(shell);
+    #[cfg(windows)]
+    cmd.args(["-NoLogo", "-NoProfile", "-NonInteractive"]);
     cmd.arg(flag)
         .arg(command)
         .current_dir(cwd)
+        .kill_on_drop(true)
+        .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
@@ -288,19 +351,23 @@ pub async fn run_cli_command(command: &str, cwd: &Path, timeout_secs: u64) -> (S
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
 
-    let child = match cmd.spawn() {
+    let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => return (format!("启动命令失败: {}", e), None),
     };
 
     let timeout_dur = Duration::from_secs(timeout_secs.clamp(5, 600));
-    let output_res = tokio::time::timeout(timeout_dur, child.wait_with_output()).await;
+    let stdout = child.stdout.take().unwrap();
+    let stderr = child.stderr.take().unwrap();
+    let output_res = tokio::time::timeout(timeout_dur, async {
+        tokio::try_join!(child.wait(), read_bounded_output(stdout), read_bounded_output(stderr))
+    }).await;
 
     match output_res {
-        Ok(Ok(output)) => {
-            let code = output.status.code();
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
+        Ok(Ok((status, stdout, stderr))) => {
+            let code = status.code();
+            let stdout = String::from_utf8_lossy(&stdout);
+            let stderr = String::from_utf8_lossy(&stderr);
 
             let mut combined = format!("Exit code: {}\n{}", code.unwrap_or(-1), stdout.trim());
             if !stderr.trim().is_empty() {
@@ -308,17 +375,10 @@ pub async fn run_cli_command(command: &str, cwd: &Path, timeout_secs: u64) -> (S
             }
 
             let trimmed = combined.trim().to_string();
-            let result = if trimmed.len() > MAX_OUTPUT_CHARS {
-                let half = MAX_OUTPUT_CHARS / 2;
-                format!(
-                    "{}\n...（工具返回过长，中间部分已省略）...\n{}",
-                    &trimmed[..half],
-                    &trimmed[trimmed.len() - half..]
-                )
-            } else if trimmed.is_empty() {
+            let result = if trimmed.is_empty() {
                 "(no output)".to_string()
             } else {
-                trimmed
+                truncate_output(&trimmed)
             };
 
             (result, code)
@@ -412,11 +472,46 @@ pub fn abort_agent_task() {
 
 #[tauri::command]
 #[allow(dead_code)]
-pub fn get_agent_env_info(project_dir: Option<String>) -> String {
+pub async fn get_agent_env_info(project_dir: Option<String>) -> Result<String, String> {
     let dir = project_dir
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-    collect_env_info(&dir)
+    tauri::async_runtime::spawn_blocking(move || collect_env_info(&dir)).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[allow(dead_code)]
+pub async fn select_project_directory(default_path: Option<String>) -> Result<Option<String>, String> {
+    #[cfg(windows)]
+    {
+        tauri::async_runtime::spawn_blocking(move || {
+            let init_dir = default_path.unwrap_or_default().replace('\'', "''");
+            let script = format!(
+                r#"[System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null; $f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description = '选择工作目录'; if ('{0}' -ne '' -and (Test-Path '{0}')) {{ $f.SelectedPath = '{0}' }}; if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{ Write-Output $f.SelectedPath }}"#,
+                init_dir
+            );
+            let mut command = std::process::Command::new("powershell");
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x0800_0000);
+            let output = command
+                .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+                .output()
+                .map_err(|e| e.to_string())?;
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if path.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(path))
+            }
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = default_path;
+        Ok(None)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -437,12 +532,34 @@ pub struct StartAgentTaskParams {
 #[tauri::command]
 #[allow(dead_code)]
 pub async fn start_agent_task(
-    _app: tauri::AppHandle,
+    app: tauri::AppHandle,
     params: StartAgentTaskParams,
     channel: Channel<AgentEvent>,
 ) -> Result<(), String> {
+    if AGENT_RUNNING.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+        return Err("已有智能体任务正在运行，请先停止该任务".into());
+    }
+    let _guard = AgentRunGuard;
     ensure_approval_map();
     ACTIVE_AGENT_ABORT.store(false, Ordering::SeqCst);
+    crate::commands::file_log(&app, "agent task started");
+    let result = tokio::select! {
+        biased;
+        _ = async {
+            while !ACTIVE_AGENT_ABORT.load(Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        } => {
+            let _ = channel.send(AgentEvent::Done { success: false, total_tokens: 0 });
+            Ok(())
+        },
+        result = run_agent_task(params, &channel) => result,
+    };
+    crate::commands::file_log(&app, if result.is_ok() { "agent task ended" } else { "agent task failed" });
+    result
+}
+
+async fn run_agent_task(params: StartAgentTaskParams, channel: &Channel<AgentEvent>) -> Result<(), String> {
 
     let project_dir = params
         .project_dir
@@ -450,7 +567,9 @@ pub async fn start_agent_task(
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
     let allow_all = params.allow_all.unwrap_or(false);
-    let max_turns = params.max_turns.unwrap_or(15);
+    let max_turns = params.max_turns.unwrap_or(15).clamp(1, 50);
+    if !project_dir.is_dir() { return Err("工作目录不存在或不是文件夹".into()); }
+    if params.prompt.trim().is_empty() { return Err("请输入任务目标".into()); }
     let client = Client::builder()
         .no_proxy()
         .connect_timeout(Duration::from_secs(15))
@@ -458,7 +577,9 @@ pub async fn start_agent_task(
         .build()
         .map_err(|e| e.to_string())?;
 
-    let system_prompt = build_system_prompt(&project_dir);
+    let prompt_dir = project_dir.clone();
+    let system_prompt = tauri::async_runtime::spawn_blocking(move || build_system_prompt(&prompt_dir))
+        .await.map_err(|e| format!("环境初始化失败: {}", e))?;
     let mut messages: Vec<Value> = vec![
         json!({ "role": "system", "content": system_prompt }),
         json!({ "role": "user", "content": params.prompt }),
@@ -537,16 +658,10 @@ pub async fn start_agent_task(
             Ok(r) => {
                 let status = r.status();
                 let err_text = r.text().await.unwrap_or_default();
-                let _ = channel.send(AgentEvent::Error {
-                    message: format!("LLM 请求失败 (HTTP {}): {}", status, err_text),
-                });
-                return Ok(());
+                return Err(format!("LLM 请求失败 (HTTP {}): {}", status, truncate_output(&err_text)));
             }
             Err(e) => {
-                let _ = channel.send(AgentEvent::Error {
-                    message: format!("网络连接异常: {}", e),
-                });
-                return Ok(());
+                return Err(format!("网络连接异常: {}", e));
             }
         };
 
@@ -556,37 +671,49 @@ pub async fn start_agent_task(
         let mut full_reasoning = String::new();
         let mut tool_calls_map: HashMap<usize, (String, String, String)> = HashMap::new();
         let mut repeat_checker = RepeatSuffixChecker::new(80);
+        let mut received_completion = false;
+        let mut response_bytes = 0usize;
 
-        while let Some(item) = stream.next().await {
+        'response: while let Some(item) = stream.next().await {
             if ACTIVE_AGENT_ABORT.load(Ordering::SeqCst) {
-                break;
+                let _ = channel.send(AgentEvent::Done { success: false, total_tokens });
+                return Ok(());
             }
             let bytes = match item {
                 Ok(b) => b,
                 Err(e) => {
-                    let _ = channel.send(AgentEvent::Error {
-                        message: format!("读取响应流失败: {}", e),
-                    });
-                    break;
+                    return Err(format!("读取响应流失败: {}", e));
                 }
             };
 
             buffer.extend_from_slice(&bytes);
+            response_bytes += bytes.len();
+            if response_bytes > 2 * 1024 * 1024 {
+                return Err("模型响应过长，已停止以避免内存持续增长".into());
+            }
 
             while let Some(pos) = buffer.iter().position(|&b| b == b'\n') {
                 let line_bytes: Vec<u8> = buffer.drain(..=pos).collect();
                 let line = String::from_utf8_lossy(&line_bytes).trim().to_string();
-                if !line.starts_with("data: ") {
+                if !line.starts_with("data:") {
                     continue;
                 }
-                let payload_str = &line[6..];
+                let payload_str = line[5..].trim();
                 if payload_str == "[DONE]" {
-                    break;
+                    received_completion = true;
+                    break 'response;
                 }
 
                 if let Ok(chunk) = serde_json::from_str::<Value>(payload_str) {
                     if let Some(choices) = chunk.get("choices").and_then(|c| c.as_array()) {
                         if let Some(first) = choices.first() {
+                            if first.get("finish_reason").is_some_and(|reason| !reason.is_null()) {
+                                let reason = first["finish_reason"].as_str().unwrap_or("");
+                                if reason != "stop" && reason != "tool_calls" {
+                                    return Err(format!("模型未完成响应（{}），请缩小任务后重试", reason));
+                                }
+                                received_completion = true;
+                            }
                             let delta = first.get("delta").unwrap_or(&Value::Null);
 
                             // Reasoning / Thinking stream
@@ -603,7 +730,7 @@ pub async fn start_agent_task(
                                             message: "检测到思考内容陷入重复循环，已自动抑制"
                                                 .to_string(),
                                         });
-                                        break;
+                                        return Err("检测到思考重复循环，已停止，请重新描述任务".into());
                                     }
                                 }
                                 let _ = channel.send(AgentEvent::ThinkingChunk {
@@ -650,6 +777,9 @@ pub async fn start_agent_task(
         }
 
         total_tokens += full_content.len() / 4 + full_reasoning.len() / 4;
+        if !received_completion {
+            return Err("模型响应意外中断，请重试".into());
+        }
 
         // If no tool calls, task reached textual completion
         if tool_calls_map.is_empty() {
@@ -668,7 +798,7 @@ pub async fn start_agent_task(
         for &idx in &sorted_indices {
             let (id, name, args) = &tool_calls_map[&idx];
             assistant_tool_calls.push(json!({
-                "id": if id.is_empty() { format!("call_{}", idx) } else { id.clone() },
+                "id": if id.is_empty() { format!("call_{}_{}", turn, idx) } else { id.clone() },
                 "type": "function",
                 "function": {
                     "name": name,
@@ -677,29 +807,39 @@ pub async fn start_agent_task(
             }));
         }
 
-        messages.push(json!({
+        let mut assistant_message = json!({
             "role": "assistant",
             "content": full_content,
             "tool_calls": assistant_tool_calls
-        }));
+        });
+        if !full_reasoning.is_empty() {
+            assistant_message["reasoning_content"] = json!(full_reasoning);
+        }
+        messages.push(assistant_message);
 
         // Execute each tool call
         for &idx in &sorted_indices {
             let (id, name, args_str) = &tool_calls_map[&idx];
-            let call_id = if id.is_empty() { format!("call_{}", idx) } else { id.clone() };
+            let call_id = if id.is_empty() { format!("call_{}_{}", turn, idx) } else { id.clone() };
 
             if name == "run_cli" {
-                let args_json: Value = serde_json::from_str(args_str).unwrap_or_default();
+                let args_json: Value = serde_json::from_str(args_str).map_err(|e| format!("工具参数无效: {}", e))?;
                 let command = args_json
                     .get("command")
                     .and_then(|c| c.as_str())
                     .unwrap_or("")
                     .to_string();
+                if command.trim().is_empty() { return Err("模型返回了空命令，请重试".into()); }
                 let timeout = args_json.get("timeout").and_then(|t| t.as_u64()).unwrap_or(60);
 
                 let is_readonly = is_readonly_command(&command);
                 let requires_approval = !allow_all && !is_readonly;
 
+                let approval = if requires_approval {
+                    let (tx, rx) = tokio::sync::oneshot::channel();
+                    PENDING_APPROVALS.lock().unwrap().as_mut().unwrap().insert(call_id.clone(), tx);
+                    Some(rx)
+                } else { None };
                 let _ = channel.send(AgentEvent::ToolProposed {
                     call_id: call_id.clone(),
                     name: name.clone(),
@@ -707,20 +847,13 @@ pub async fn start_agent_task(
                     requires_approval,
                 });
 
-                if requires_approval {
-                    let (tx, rx) = tokio::sync::oneshot::channel();
-                    {
-                        let mut lock = PENDING_APPROVALS.lock().unwrap();
-                        if let Some(map) = lock.as_mut() {
-                            map.insert(call_id.clone(), tx);
-                        }
-                    }
-
+                if let Some(rx) = approval {
                     // Await approval with a 5-minute timeout
                     let approved = match tokio::time::timeout(Duration::from_secs(300), rx).await {
                         Ok(Ok(true)) => true,
                         _ => false,
                     };
+                    PENDING_APPROVALS.lock().unwrap().as_mut().unwrap().remove(&call_id);
 
                     if !approved {
                         let msg = "用户拒绝了执行此命令".to_string();
@@ -756,14 +889,14 @@ pub async fn start_agent_task(
                     "content": output
                 }));
             } else if name == "leave_memory_hints" {
-                let args_json: Value = serde_json::from_str(args_str).unwrap_or_default();
+                let args_json: Value = serde_json::from_str(args_str).map_err(|e| format!("记忆参数无效: {}", e))?;
                 let hints = args_json
                     .get("hints")
                     .and_then(|h| h.as_str())
                     .unwrap_or("")
                     .to_string();
 
-                let _ = save_memory_hints(&project_dir, &hints);
+                save_memory_hints(&project_dir, &hints).map_err(|e| format!("保存记忆失败: {}", e))?;
                 let _ = channel.send(AgentEvent::MemoryCompacted {
                     hints: hints.clone(),
                 });
@@ -782,15 +915,13 @@ pub async fn start_agent_task(
                     "name": name,
                     "content": res_msg
                 }));
+            } else {
+                return Err(format!("模型请求了不支持的工具: {}", name));
             }
         }
     }
 
-    let _ = channel.send(AgentEvent::Done {
-        success: true,
-        total_tokens,
-    });
-    Ok(())
+    Err("已达到任务轮数上限，请根据已有结果缩小任务范围后继续".into())
 }
 
 // ---------------------------------------------------------------------------
@@ -848,6 +979,20 @@ mod tests {
         assert!(!is_readonly_command("git commit -m 'test'"));
         assert!(!is_readonly_command("echo hello > out.txt"));
         assert!(!is_readonly_command("npm install"));
+        for command in ["echo ok; Start-Process app", "cat $(touch x)", "git branch -D main", "find . -delete", "git diff --output=x", "directory.exe", "ls\nstart app"] {
+            assert!(!is_readonly_command(command), "{} must require approval", command);
+        }
+    }
+
+    #[test]
+    fn truncation_preserves_unicode_boundaries() {
+        let text = format!("a{}🙂", "中文🙂".repeat(3000));
+        let output = truncate_output(&text);
+        assert!(output.starts_with('a'));
+        assert!(output.ends_with('🙂'));
+        assert!(output.contains("中间部分已省略"));
+        assert!(output.chars().count() < MAX_OUTPUT_CHARS + 50);
+        assert_eq!(truncate_output("中文🙂"), "中文🙂");
     }
 
     #[tokio::test]
@@ -856,6 +1001,29 @@ mod tests {
         let (output, code) = run_cli_command("echo 'runbi_agent_test'", &temp_dir, 5).await;
         assert_eq!(code, Some(0));
         assert!(output.contains("runbi_agent_test"));
+    }
+
+    #[tokio::test]
+    async fn output_capture_is_bounded() {
+        let input = vec![b'x'; 2 * 1024 * 1024];
+        let output = read_bounded_output(input.as_slice()).await.unwrap();
+        assert!(output.len() < 1024 * 1024 + 100);
+        assert!(String::from_utf8_lossy(&output).contains("后续内容已省略"));
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn timed_out_command_does_not_keep_running() {
+        let marker = std::env::temp_dir().join(format!("runbi-agent-timeout-{}.txt", std::process::id()));
+        let path = marker.to_string_lossy().replace('\'', "''");
+        let command = format!("Start-Sleep -Seconds 6; Set-Content -LiteralPath '{}' -Value unexpected", path);
+        let (output, code) = run_cli_command(&command, &std::env::temp_dir(), 5).await;
+        assert!(output.contains("超时"));
+        assert_eq!(code, None);
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let exists = marker.exists();
+        if exists { let _ = std::fs::remove_file(marker); }
+        assert!(!exists, "timed out PowerShell must be terminated");
     }
 
     #[test]

@@ -75,103 +75,169 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
   isGenerating = false,
 }) => {
   const lines = content.split('\n');
+  const elements: React.ReactNode[] = [];
+  let inCodeBlock = false;
+  let codeBlockLines: string[] = [];
+  let codeBlockLang = '';
 
-  return (
-    <div className={`space-y-1.5 break-words select-text ${className}`}>
-      {lines.map((line, idx) => {
-        const isLastLine = idx === lines.length - 1;
-        const trimmed = line.trim();
+  for (let idx = 0; idx < lines.length; idx++) {
+    const line = lines[idx];
+    const isLastLine = idx === lines.length - 1;
+    const trimmed = line.trim();
 
-        // Empty line spacing
-        if (!trimmed) {
-          return (
-            <div key={idx} className="h-1.5">
-              {isLastLine && isGenerating && (
-                <span className="inline-block h-3.5 w-1.5 rounded-sm bg-gray-300 align-middle animate-cursor-blink" />
-              )}
-            </div>
-          );
-        }
-
-        // Ordered list: 1. 2. 3.
-        const numMatch = line.match(/^(\s*)(\d+)\.\s+(.*)$/);
-        if (numMatch) {
-          return (
-            <div key={idx} className="flex items-start gap-1.5 pl-0.5 leading-relaxed">
-              <span className="shrink-0 select-none font-mono font-medium text-teal-600 dark:text-teal-400">
-                {numMatch[2]}.
-              </span>
-              <div className="min-w-0 flex-1 break-words">
-                {renderInlineMarkdown(numMatch[3])}
-                {isLastLine && isGenerating && (
-                  <span className="ml-1 inline-block h-3.5 w-1.5 rounded-sm bg-gray-300 align-middle animate-cursor-blink" />
-                )}
+    // Fenced code blocks: ```lang ... ```
+    if (trimmed.startsWith('```')) {
+      if (inCodeBlock) {
+        // End of code block
+        const blockCode = codeBlockLines.join('\n');
+        elements.push(
+          <div key={`code-${idx}`} className="my-2 overflow-hidden rounded-lg border border-white/10 bg-black/60">
+            {codeBlockLang && (
+              <div className="border-b border-white/10 bg-white/[0.04] px-3 py-1 font-mono text-[10px] text-slate-400">
+                {codeBlockLang}
               </div>
-            </div>
-          );
-        }
+            )}
+            <pre className="overflow-x-auto p-3 font-mono text-[11px] leading-relaxed text-teal-200">
+              <code>{blockCode}</code>
+            </pre>
+          </div>
+        );
+        inCodeBlock = false;
+        codeBlockLines = [];
+        codeBlockLang = '';
+        continue;
+      } else {
+        // Start of code block
+        inCodeBlock = true;
+        codeBlockLang = trimmed.slice(3).trim();
+        codeBlockLines = [];
+        continue;
+      }
+    }
 
-        // Unordered list: - * •
-        const bulletMatch = line.match(/^(\s*)([-*•])\s+(.*)$/);
-        if (bulletMatch) {
-          return (
-            <div key={idx} className="flex items-start gap-2 pl-0.5 leading-relaxed">
-              <span className="shrink-0 select-none font-bold text-teal-500">•</span>
-              <div className="min-w-0 flex-1 break-words">
-                {renderInlineMarkdown(bulletMatch[3])}
-                {isLastLine && isGenerating && (
-                  <span className="ml-1 inline-block h-3.5 w-1.5 rounded-sm bg-gray-300 align-middle animate-cursor-blink" />
-                )}
+    if (inCodeBlock) {
+      codeBlockLines.push(line);
+      if (isLastLine) {
+        // Unclosed code block while streaming
+        const blockCode = codeBlockLines.join('\n');
+        elements.push(
+          <div key={`code-stream-${idx}`} className="my-2 overflow-hidden rounded-lg border border-white/10 bg-black/60">
+            {codeBlockLang && (
+              <div className="border-b border-white/10 bg-white/[0.04] px-3 py-1 font-mono text-[10px] text-slate-400">
+                {codeBlockLang}
               </div>
-            </div>
-          );
-        }
-
-        // Headings: ### ## #
-        const headingMatch = line.match(/^(#{1,4})\s+(.*)$/);
-        if (headingMatch) {
-          const level = headingMatch[1].length;
-          const headingClass =
-            level === 1
-              ? 'text-sm font-bold text-slate-900 dark:text-white pt-1'
-              : level === 2
-                ? 'text-[13px] font-bold text-slate-900 dark:text-white pt-0.5'
-                : 'text-xs font-semibold text-slate-800 dark:text-slate-200';
-          return (
-            <div key={idx} className={headingClass}>
-              {renderInlineMarkdown(headingMatch[2])}
-              {isLastLine && isGenerating && (
+            )}
+            <pre className="overflow-x-auto p-3 font-mono text-[11px] leading-relaxed text-teal-200">
+              <code>{blockCode}</code>
+              {isGenerating && (
                 <span className="ml-1 inline-block h-3.5 w-1.5 rounded-sm bg-gray-300 align-middle animate-cursor-blink" />
               )}
-            </div>
-          );
-        }
+            </pre>
+          </div>
+        );
+      }
+      continue;
+    }
 
-        // Blockquote: >
-        if (line.startsWith('>')) {
-          return (
-            <div
-              key={idx}
-              className="border-l-2 border-teal-500/50 pl-2.5 py-0.5 text-slate-600 italic dark:text-slate-300"
-            >
-              {renderInlineMarkdown(line.slice(1).trim())}
-              {isLastLine && isGenerating && (
-                <span className="ml-1 inline-block h-3.5 w-1.5 rounded-sm bg-gray-300 align-middle animate-cursor-blink" />
-              )}
-            </div>
-          );
-        }
+    // Empty line spacing
+    if (!trimmed) {
+      elements.push(
+        <div key={idx} className="h-1.5">
+          {isLastLine && isGenerating && (
+            <span className="inline-block h-3.5 w-1.5 rounded-sm bg-gray-300 align-middle animate-cursor-blink" />
+          )}
+        </div>
+      );
+      continue;
+    }
 
-        // Standard text paragraph
-        return (
-          <div key={idx} className="leading-relaxed">
-            {renderInlineMarkdown(line)}
+    // Ordered list: 1. 2. 3.
+    const numMatch = line.match(/^(\s*)(\d+)\.\s+(.*)$/);
+    if (numMatch) {
+      elements.push(
+        <div key={idx} className="flex items-start gap-1.5 pl-0.5 leading-relaxed">
+          <span className="shrink-0 select-none font-mono font-medium text-teal-600 dark:text-teal-400">
+            {numMatch[2]}.
+          </span>
+          <div className="min-w-0 flex-1 break-words">
+            {renderInlineMarkdown(numMatch[3])}
             {isLastLine && isGenerating && (
               <span className="ml-1 inline-block h-3.5 w-1.5 rounded-sm bg-gray-300 align-middle animate-cursor-blink" />
             )}
           </div>
-        );
-      })}
+        </div>
+      );
+      continue;
+    }
+
+    // Unordered list: - * •
+    const bulletMatch = line.match(/^(\s*)([-*•])\s+(.*)$/);
+    if (bulletMatch) {
+      elements.push(
+        <div key={idx} className="flex items-start gap-2 pl-0.5 leading-relaxed">
+          <span className="shrink-0 select-none font-bold text-teal-500">•</span>
+          <div className="min-w-0 flex-1 break-words">
+            {renderInlineMarkdown(bulletMatch[3])}
+            {isLastLine && isGenerating && (
+              <span className="ml-1 inline-block h-3.5 w-1.5 rounded-sm bg-gray-300 align-middle animate-cursor-blink" />
+            )}
+          </div>
+        </div>
+      );
+      continue;
+    }
+
+    // Headings: ### ## #
+    const headingMatch = line.match(/^(#{1,4})\s+(.*)$/);
+    if (headingMatch) {
+      const level = headingMatch[1].length;
+      const headingClass =
+        level === 1
+          ? 'text-sm font-bold text-slate-900 dark:text-white pt-1'
+          : level === 2
+            ? 'text-[13px] font-bold text-slate-900 dark:text-white pt-0.5'
+            : 'text-xs font-semibold text-slate-800 dark:text-slate-200';
+      elements.push(
+        <div key={idx} className={headingClass}>
+          {renderInlineMarkdown(headingMatch[2])}
+          {isLastLine && isGenerating && (
+            <span className="ml-1 inline-block h-3.5 w-1.5 rounded-sm bg-gray-300 align-middle animate-cursor-blink" />
+          )}
+        </div>
+      );
+      continue;
+    }
+
+    // Blockquote: >
+    if (line.startsWith('>')) {
+      elements.push(
+        <div
+          key={idx}
+          className="border-l-2 border-teal-500/50 pl-2.5 py-0.5 text-slate-600 italic dark:text-slate-300"
+        >
+          {renderInlineMarkdown(line.slice(1).trim())}
+          {isLastLine && isGenerating && (
+            <span className="ml-1 inline-block h-3.5 w-1.5 rounded-sm bg-gray-300 align-middle animate-cursor-blink" />
+          )}
+        </div>
+      );
+      continue;
+    }
+
+    // Standard text paragraph
+    elements.push(
+      <div key={idx} className="leading-relaxed">
+        {renderInlineMarkdown(line)}
+        {isLastLine && isGenerating && (
+          <span className="ml-1 inline-block h-3.5 w-1.5 rounded-sm bg-gray-300 align-middle animate-cursor-blink" />
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className={`space-y-1.5 break-words select-text ${className}`}>
+      {elements}
     </div>
   );
 };

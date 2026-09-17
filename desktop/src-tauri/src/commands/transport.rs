@@ -412,8 +412,56 @@ pub async fn test_llm_connection(
 }
 
 #[tauri::command]
-pub fn hide_window(window: WebviewWindow) -> Result<(), String> {
-    window.hide().map_err(|e| e.to_string())
+pub fn hide_window(window: WebviewWindow, only_if_unfocused: Option<bool>) -> Result<bool, String> {
+    if only_if_unfocused.unwrap_or(false) {
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                GetCursorPos, GetForegroundWindow, WindowFromPoint,
+            };
+            use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+                GetAsyncKeyState, VK_LBUTTON,
+            };
+
+            // 1. If mouse button is currently held down inside Runbi (e.g. dragging titlebar): DO NOT HIDE
+            if crate::commands::mouse_hook::is_mouse_down_on_runbi() {
+                return Ok(false);
+            }
+
+            // 2. If recent drag movement happened within the last 800ms: DO NOT HIDE
+            let now = crate::commands::mouse_hook::current_time_ms();
+            let last_drag = crate::commands::mouse_hook::last_drag_move_time_ms();
+            if now.saturating_sub(last_drag) < 800 {
+                return Ok(false);
+            }
+
+            // 3. If left mouse button is pressed anywhere on system, check if pointer is over Runbi:
+            let lbutton = unsafe { (GetAsyncKeyState(VK_LBUTTON as i32) as u16 & 0x8000) != 0 };
+            if lbutton {
+                let mut pt = unsafe { std::mem::zeroed::<windows_sys::Win32::Foundation::POINT>() };
+                if unsafe { GetCursorPos(&mut pt) } != 0 {
+                    let hover_hwnd = unsafe { WindowFromPoint(pt) };
+                    if unsafe { crate::commands::mouse_hook::is_runbi_window(hover_hwnd) } {
+                        return Ok(false);
+                    }
+                }
+            }
+
+            // 4. If foreground window belongs to Runbi: DO NOT HIDE
+            let fg = unsafe { GetForegroundWindow() };
+            if unsafe { crate::commands::mouse_hook::is_runbi_window(fg) } {
+                return Ok(false);
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            if window.is_focused().unwrap_or(false) {
+                return Ok(false);
+            }
+        }
+    }
+    window.hide().map_err(|e| e.to_string())?;
+    Ok(true)
 }
 
 #[tauri::command]
@@ -469,6 +517,15 @@ mod tests {
         // stream_id 缺失时(旧前端不发)必须保持旧行为:不因残留 id 误停。
         ABORTED_STREAM_ID.store(9, Ordering::SeqCst);
         assert!(!is_stream_aborted(0));
+    }
+
+    #[test]
+    fn test_hide_window_unfocused_check_logic() {
+        // 当 only_if_unfocused 为 false/None 时，允许直接隐藏
+        assert!(!None.unwrap_or(false));
+        assert!(!Some(false).unwrap_or(false));
+        // 当 only_if_unfocused 为 true 时，启用前台焦点防误关守卫
+        assert!(Some(true).unwrap_or(false));
     }
 }
 

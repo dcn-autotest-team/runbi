@@ -70,6 +70,24 @@ describe('Desktop selection-to-polish flow', () => {
     vi.useRealTimers();
   });
 
+  it('keeps the agent visible on blur and leaves Enter to agent controls', async () => {
+    await act(async () => { root.render(<App />); });
+    const agentTab = host.querySelector<HTMLButtonElement>('[role="tab"][title="智能体：自主感知与执行任务"]')
+      ?? Array.from(host.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find((tab) => tab.textContent?.includes('智能体'))!;
+    await act(async () => agentTab.click());
+    expect(host.textContent).toContain('把任务交给润笔');
+    const invoke = (window as any).__TAURI_INTERNALS__.invoke;
+    invoke.mockClear();
+    const key = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+    await act(async () => {
+      agentTab.dispatchEvent(key);
+      window.dispatchEvent(new Event('blur'));
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    expect(key.defaultPrevented).toBe(false);
+    expect(invoke.mock.calls.some(([cmd]: [string]) => cmd === 'hide_window')).toBe(false);
+  });
+
   it('shows an available update once without remounting the auto-checker', async () => {
     updaterMocks.check
       .mockResolvedValueOnce({
@@ -864,6 +882,80 @@ describe('Desktop selection-to-polish flow', () => {
       expect(trigger.textContent).toContain('简体中文');
       expect(trigger.textContent).not.toContain('英文');
     }
+  });
+
+  it('cancels panel hide timer when pointerdown starts dragging the drag region', async () => {
+    await act(async () => root.render(<App />));
+    const select = eventMocks.listeners.get('runbi://captured-selection')!;
+    await act(async () => {
+      select({
+        payload: { text: '测试拖动不消失', trigger: 'shortcut' },
+      });
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+    const invoke = (window as any).__TAURI_INTERNALS__.invoke;
+    invoke.mockClear();
+
+    // Trigger blur (as happens when native drag starts)
+    await act(async () => {
+      window.dispatchEvent(new Event('blur'));
+    });
+    // User presses pointerdown on the drag region to drag
+    const dragRegion = host.querySelector('[data-tauri-drag-region]') as HTMLElement;
+    expect(dragRegion).not.toBeNull();
+    await act(async () => {
+      dragRegion.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    });
+    // Advance timers past blur threshold
+    await act(async () => vi.advanceTimersByTimeAsync(200));
+
+    // hide_window must NOT have been called because drag interaction cancelled the timer
+    expect(invoke.mock.calls.some(([cmd]: [string]) => cmd === 'hide_window')).toBe(false);
+  });
+
+  it('passes onlyIfUnfocused: true to hide_window on genuine blur', async () => {
+    await act(async () => root.render(<App />));
+    const select = eventMocks.listeners.get('runbi://captured-selection')!;
+    await act(async () => {
+      select({
+        payload: { text: '测试失焦隐藏守卫', trigger: 'shortcut' },
+      });
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+    const invoke = (window as any).__TAURI_INTERNALS__.invoke;
+    invoke.mockClear();
+
+    await act(async () => {
+      window.dispatchEvent(new Event('blur'));
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(200));
+
+    expect(invoke).toHaveBeenCalledWith('hide_window', { onlyIfUnfocused: true }, undefined);
+  });
+
+  it('cancels panel hide timer when window regains focus', async () => {
+    await act(async () => root.render(<App />));
+    const select = eventMocks.listeners.get('runbi://captured-selection')!;
+    await act(async () => {
+      select({
+        payload: { text: '测试对焦恢复', trigger: 'shortcut' },
+      });
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+    const invoke = (window as any).__TAURI_INTERNALS__.invoke;
+    invoke.mockClear();
+
+    // Trigger blur
+    await act(async () => {
+      window.dispatchEvent(new Event('blur'));
+    });
+    // Window regains focus before timeout
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(200));
+
+    expect(invoke.mock.calls.some(([cmd]: [string]) => cmd === 'hide_window')).toBe(false);
   });
 
 });
