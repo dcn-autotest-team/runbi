@@ -381,6 +381,7 @@ export const App: React.FC = () => {
     translateTarget: 'en' as TranslateTargetId,
     lastChatApp: '',
     recaptureForceVision: false,
+    dragging: false,
     uiMode: 'panel' as 'panel' | 'capsule',
     armCapsule: (_info: CapsuleInfo) => {},
     hideCapsule: (_immediate?: boolean, _nativeAlreadyHidden?: boolean) => {},
@@ -2839,6 +2840,7 @@ export const App: React.FC = () => {
         panelBlurTimerRef.current = null;
         const current = stateRef.current;
         if (current.uiMode === 'capsule') return;
+        if (current.dragging) return;
         if (!current.isPinned && !current.isGenerating && !current.showSettings && !current.showHistory && !current.screenReplyAnalysis && !current.showParallel && !current.parallelRunning) {
           if (isTauri) invoke('hide_window').catch(() => {});
         }
@@ -2907,6 +2909,10 @@ export const App: React.FC = () => {
         <div
           data-tauri-drag-region
           className="flex shrink-0 items-center justify-between border-b border-white/10 bg-black/20 px-3 py-2 cursor-grab active:cursor-grabbing"
+          onPointerDown={() => { stateRef.current.dragging = true; }}
+          onPointerUp={() => { stateRef.current.dragging = false; }}
+          onPointerLeave={() => { stateRef.current.dragging = false; }}
+          onBlur={() => { stateRef.current.dragging = false; }}
         >
           <div className="flex items-center gap-2.5">
             <div className="runbi-logo-tile flex h-7 w-7 items-center justify-center rounded-lg border">
