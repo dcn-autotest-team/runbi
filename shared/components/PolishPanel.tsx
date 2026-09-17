@@ -217,7 +217,7 @@ export const PolishPanel: React.FC<PolishPanelProps> = ({
       }}
       style={positionStyle}
       className={embedded
-        ? `z-[2147483647] pointer-events-auto flex min-h-0 w-full flex-col text-slate-800 dark:text-slate-100 select-none font-sans ${className}`
+        ? `pointer-events-auto flex min-h-0 w-full flex-col text-slate-800 dark:text-slate-100 select-none font-sans ${className}`
         : `z-[2147483647] pointer-events-auto w-[400px] max-w-[90vw] bg-white/95 dark:bg-slate-900/95 backdrop-blur-md rounded-2xl border border-slate-200/80 dark:border-slate-700/80 shadow-panel dark:shadow-panel-dark text-slate-800 dark:text-slate-100 animate-panel-in select-none font-sans overflow-hidden ${className}`}
     >
       {/* Toast Feedback */}

@@ -68,11 +68,70 @@ describe('desktop updater diagnostics', () => {
 
     expect(updaterMocks.check).toHaveBeenCalledTimes(1);
     expect(onUpdateFound).toHaveBeenCalledTimes(1);
-    expect(host.querySelector('[role="dialog"]')?.textContent).toContain('Runbi 1.1.0 可以更新');
+    const dialog = host.querySelector('[role="dialog"]');
+    expect(dialog?.textContent).toContain('Runbi 1.1.0 可以更新');
     expect(host.textContent).toContain('v1.0.21 → v1.1.0');
     expect(host.textContent).toContain('本次更新');
     expect(host.textContent).toContain('更新并重启');
 
+    // Overlay has top-level z-index to stay above main window contents
+    const overlay = dialog?.parentElement;
+    expect(overlay?.className).toContain('z-[2147483647]');
+
+    // Clicking "稍后提醒" dismisses the modal
+    const buttons = host.querySelectorAll('button');
+    const dismissBtn = Array.from(buttons).find((b) => b.textContent?.includes('稍后提醒'));
+    expect(dismissBtn).toBeDefined();
+
+    await act(async () => {
+      dismissBtn?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+
+    await act(async () => root.unmount());
+  });
+
+  it('triggers downloadAndInstall when clicking restart and update', async () => {
+    vi.useFakeTimers();
+    const downloadAndInstall = vi.fn().mockImplementation(async (cb) => {
+      if (cb) {
+        cb({ event: 'Started', data: { contentLength: 100 } });
+        cb({ event: 'Progress', data: { chunkLength: 50 } });
+        cb({ event: 'Finished' });
+      }
+    });
+    updaterMocks.check.mockResolvedValue({
+      currentVersion: '1.0.21',
+      version: '1.1.0',
+      date: '2026-09-14T08:00:00Z',
+      body: '修复若干问题',
+      downloadAndInstall,
+    });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+
+    await act(async () => {
+      root.render(React.createElement(UpdateCheckRow, { autoCheck: true, prominent: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const installBtn = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.includes('更新并重启'));
+    expect(installBtn).toBeDefined();
+
+    await act(async () => {
+      installBtn?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(downloadAndInstall).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(updaterMocks.relaunch).toHaveBeenCalledTimes(1);
+
+    vi.useRealTimers();
     await act(async () => root.unmount());
   });
 });

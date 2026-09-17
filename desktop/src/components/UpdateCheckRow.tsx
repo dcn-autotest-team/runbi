@@ -89,8 +89,22 @@ export function UpdateCheckRow({
     if (!update) return;
     setPhase('downloading');
     setNote('正在安全下载并验证更新…');
+    let downloaded = 0;
+    let total = 0;
     try {
-      await update.downloadAndInstall();
+      await update.downloadAndInstall((event) => {
+        if (event.event === 'Started') {
+          total = event.data.contentLength ?? 0;
+        } else if (event.event === 'Progress') {
+          downloaded += event.data.chunkLength;
+          if (total > 0) {
+            const pct = Math.min(100, Math.round((downloaded / total) * 100));
+            setNote(`正在安全下载并验证更新 (${pct}%)…`);
+          }
+        } else if (event.event === 'Finished') {
+          setNote('下载完成，正在验证签名并安装…');
+        }
+      });
       setNote('安装完成，正在重启…');
       setTimeout(() => {
         relaunch();
@@ -108,12 +122,13 @@ export function UpdateCheckRow({
   if (prominent) {
     if (!update) return null;
     return (
-      <div className="absolute inset-0 z-[100] flex items-center justify-center bg-black/70 p-5 backdrop-blur-sm">
+      <div className="absolute inset-0 z-[2147483647] flex items-center justify-center bg-black/70 p-5 backdrop-blur-sm pointer-events-auto">
         <div
           role="dialog"
           aria-modal="true"
           aria-labelledby="runbi-update-title"
           className="w-full max-w-sm overflow-hidden rounded-2xl border border-white/15 bg-slate-950 shadow-2xl"
+          onMouseDown={(e) => e.stopPropagation()}
         >
           <div className="border-b border-white/10 bg-gradient-to-br from-teal-400/10 via-transparent to-transparent p-5">
             <div className="flex items-center gap-2 text-[11px] font-medium text-teal-300">
@@ -152,7 +167,7 @@ export function UpdateCheckRow({
                 type="button"
                 onClick={() => setUpdate(null)}
                 disabled={busy}
-                className="runbi-focus-ring rounded-lg px-3 py-2 text-xs text-slate-300 transition-colors hover:bg-white/10 disabled:opacity-50"
+                className="runbi-focus-ring rounded-lg px-3 py-2 text-xs text-slate-300 transition-colors hover:bg-white/10 disabled:opacity-50 cursor-pointer"
               >
                 稍后提醒
               </button>
@@ -160,7 +175,7 @@ export function UpdateCheckRow({
                 type="button"
                 onClick={onInstall}
                 disabled={busy}
-                className="runbi-primary-button runbi-focus-ring px-4 text-xs"
+                className="runbi-primary-button runbi-focus-ring px-4 text-xs cursor-pointer"
               >
                 {phase === 'downloading' && <RefreshCw className="h-3.5 w-3.5 animate-spin" />}
                 {phase === 'downloading' ? '正在更新…' : '更新并重启'}
