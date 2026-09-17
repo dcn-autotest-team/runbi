@@ -98,11 +98,14 @@ pub fn animate_window_opacity(
                 if cur == goal {
                     break;
                 }
-                let step = cur + (goal - cur) * 35 / 100;
-                let next: i32 = if (goal - step).abs() < 2 {
+                // 线性插值：每帧固定走剩余距离的 1/20（约 320ms 全程），
+                // 不做指数缓动 —— 指数前段跨度过大，拖动时窗口 alpha
+                // 远快于滑杆数值，稍拉就变得非常透明（Issue #12）。
+                let dist = goal - cur;
+                let next: i32 = if dist.abs() <= 2 {
                     goal
                 } else {
-                    step.max(51)
+                    cur + dist / 20
                 };
                 let _ = win.set_opacity_alpha(next as u32);
                 if next == goal {
