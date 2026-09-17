@@ -5,6 +5,13 @@
 
 declare module '@tauri-apps/api/core' {
   export function invoke<T = any>(cmd: string, args?: Record<string, unknown>): Promise<T>;
+  export class Channel<T = unknown> {
+    id: number;
+    constructor(onmessage?: (response: T) => void);
+    set onmessage(handler: (response: T) => void);
+    get onmessage(): (response: T) => void;
+    toJSON(): string;
+  }
 }
 
 declare module '@tauri-apps/api/event' {

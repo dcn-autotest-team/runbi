@@ -394,6 +394,10 @@ fn main() {
             commands::position::record_panel_size,
             commands::feishu_copilot::capture_feishu_multi_turn_context,
             commands::feishu_copilot::send_to_feishu_input,
+            commands::agent::start_agent_task,
+            commands::agent::approve_agent_tool,
+            commands::agent::abort_agent_task,
+            commands::agent::get_agent_env_info,
         ])
         .run(tauri::generate_context!());
 

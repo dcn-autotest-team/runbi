@@ -49,6 +49,7 @@ import {
   findLatexViolations,
   TRANSLATE_TARGETS,
   parseModelJson,
+  resolveEndpoint,
   type ScreenReplyAnalysis,
   type TranslateTargetId,
 } from '@runbi/shared/core';
@@ -58,6 +59,7 @@ import { ParallelResultsView, type ParallelSession } from './components/Parallel
 import { buildBrowserSearchUrl, SelectionCapsule, shouldShowCapsule } from './components/SelectionCapsule';
 import { AdvancedSettings } from './components/AdvancedSettings';
 import { UpdateCheckRow } from './components/UpdateCheckRow';
+import { AgentPanel } from './components/AgentPanel';
 
 const STYLE_NAMES: Record<PolishStyle, string> = {
   polished: '通用润色',
@@ -245,6 +247,7 @@ export const App: React.FC = () => {
   const [history, setHistory] = useState<HistoryRecord[]>([]);
   const [showHistory, setShowHistory] = useState<boolean>(false);
   const [showOnboarding, setShowOnboarding] = useState<boolean>(false);
+  const [showAgent, setShowAgent] = useState<boolean>(false);
   const [settingsTab, setSettingsTab] = useState<'model' | 'desktop' | 'persona' | 'about'>('model');
   const [recoverableDraft, setRecoverableDraft] = useState<DraftSnapshot | null>(null);
   const [lastReplacement, setLastReplacement] = useState<LastReplacementSnapshot | null>(null);
@@ -365,6 +368,7 @@ export const App: React.FC = () => {
     isGenerating,
     showSettings,
     showHistory,
+    showAgent: false,
     isPinned,
     readChatScreenshot,
     autoCopyPopup,
@@ -401,6 +405,7 @@ export const App: React.FC = () => {
   stateRef.current.isGenerating = isGenerating;
   stateRef.current.showSettings = showSettings;
   stateRef.current.showHistory = showHistory;
+  stateRef.current.showAgent = showAgent;
   stateRef.current.isPinned = isPinned;
   stateRef.current.readChatScreenshot = readChatScreenshot;
   stateRef.current.autoCopyPopup = autoCopyPopup;
@@ -526,6 +531,7 @@ export const App: React.FC = () => {
     if (enteringPanel) setShowEpoch((n) => n + 1);
     setShowSettings(false);
     setShowHistory(false);
+    setShowAgent(false);
     setShowScriptLibrary(false);
     setShowExpertPicker(false);
     setShowParallel(false);
@@ -1916,6 +1922,7 @@ export const App: React.FC = () => {
         setShowOnboarding(false);
         setShowSettings(false);
         setShowHistory(false);
+        setShowAgent(false);
         adapters.storageProvider.set('onboardingDone', true).catch(() => {});
         setShowEpoch((n) => n + 1); // remount panel container → replay enter animation
         invoke('append_log', { msg: 'frontend: epoch bumped' }).catch(() => {});
@@ -2296,9 +2303,16 @@ export const App: React.FC = () => {
     handleStartPolish(originalText, newStyle, undefined, currentScreenshot);
   };
 
-  // ---- 工作模式：显式可切换的第一层（润色 = 改写我的文字；回复 = 帮我想回复）----
+  // ---- 工作模式：显式可切换的第一层（润色 = 改写我的文字；回复 = 帮我想回复；智能体 = 自主感知与执行任务）----
   const handleSwitchToPolish = useCallback(() => {
-    if (stateRef.current.activeStyle !== 'reply' && stateRef.current.activeStyle !== 'translate' && !stateRef.current.screenReplyAnalysis) return;
+    const wasAgent = stateRef.current.showAgent;
+    if (wasAgent) {
+      setShowAgent(false);
+      if (isTauri) {
+        getCurrentWindow().setSize(new LogicalSize(560, 520)).catch(() => {});
+      }
+    }
+    if (!wasAgent && stateRef.current.activeStyle !== 'reply' && stateRef.current.activeStyle !== 'translate' && !stateRef.current.screenReplyAnalysis) return;
     translationPanelRef.current = false;
     stateRef.current.activeExpert = null;
     setActiveExpert(null);
@@ -2317,7 +2331,7 @@ export const App: React.FC = () => {
       }
       handleStartPolish(text, target, undefined, undefined, undefined, resultCacheKey(text, 'polish'));
     }
-  }, [handleStartPolish, resultCacheGet, resultCacheKey]);
+  }, [handleStartPolish, isTauri, resultCacheGet, resultCacheKey]);
 
   // 翻译模式语言条：切换目标语言 → 持久化并对当前原文立即重译
   const handleTranslateTargetChange = useCallback((id: TranslateTargetId) => {
@@ -2330,7 +2344,14 @@ export const App: React.FC = () => {
   }, [adapters.storageProvider, currentScreenshot]);
 
   const handleSwitchToReply = useCallback(() => {
-    if (stateRef.current.activeStyle === 'reply') return;
+    if (stateRef.current.showAgent) {
+      setShowAgent(false);
+      if (isTauri) {
+        getCurrentWindow().setSize(new LogicalSize(560, 520)).catch(() => {});
+      }
+    } else if (stateRef.current.activeStyle === 'reply') {
+      return;
+    }
     translationPanelRef.current = false;
     setScreenReplyAnalysis(null);
     stateRef.current.activeStyle = 'reply';
@@ -2347,9 +2368,15 @@ export const App: React.FC = () => {
       }
       stateRef.current.handleStartTextReplyAnalysis(text, resultCacheKey(text, 'reply'));
     }
-  }, [resultCacheGet, resultCacheKey]);
+  }, [isTauri, resultCacheGet, resultCacheKey]);
 
   const handleSwitchToTranslate = useCallback(() => {
+    if (stateRef.current.showAgent) {
+      setShowAgent(false);
+      if (isTauri) {
+        getCurrentWindow().setSize(new LogicalSize(560, 520)).catch(() => {});
+      }
+    }
     const text = stateRef.current.originalText;
     if (text.trim()) {
       // 同 (原文, 模式) 已有结果：只切 UI 状态，不发重复请求
@@ -2369,7 +2396,7 @@ export const App: React.FC = () => {
       setActiveStyle('translate');
       stateRef.current.activeStyle = 'translate';
     }
-  }, [activateTranslate, resultCacheGet, resultCacheKey]);
+  }, [activateTranslate, isTauri, resultCacheGet, resultCacheKey]);
 
   // ---- 多专家并行：同一输入并发发给 2-4 位专家，各自独立流式 ----
   const applyParallelWindowSize = useCallback((wide: boolean) => {
@@ -2400,6 +2427,19 @@ export const App: React.FC = () => {
     setParallelSessions([]);
     applyParallelWindowSize(false);
   }, [stopAllParallel, applyParallelWindowSize]);
+
+  const handleSwitchToAgent = useCallback(() => {
+    setShowAgent(true);
+    setShowSettings(false);
+    setShowHistory(false);
+    setShowOnboarding(false);
+    closeParallel();
+    if (isTauri) {
+      getCurrentWindow()
+        .setSize(new LogicalSize(860, 640))
+        .catch(() => {});
+    }
+  }, [closeParallel, isTauri]);
 
   const handleStartParallel = useCallback(
     (experts: ExpertAgent[]) => {
@@ -2695,6 +2735,12 @@ export const App: React.FC = () => {
     setShowSettings(false);
     setShowHistory(false);
     setShowOnboarding(false);
+    if (stateRef.current.showAgent) {
+      setShowAgent(false);
+      if (isTauri) {
+        getCurrentWindow().setSize(new LogicalSize(560, 520)).catch(() => {});
+      }
+    }
     setAttachedFiles([]);
     setClipboardRef(null);
     if (stateRef.current.showParallel || parallelControllersRef.current.size > 0) {
@@ -2773,6 +2819,13 @@ export const App: React.FC = () => {
         }
         if (s.showSettings) {
           setShowSettings(false);
+          return;
+        }
+        if (s.showAgent) {
+          setShowAgent(false);
+          if (isTauri) {
+            getCurrentWindow().setSize(new LogicalSize(560, 520)).catch(() => {});
+          }
           return;
         }
         if (s.showParallel) {
@@ -2903,7 +2956,7 @@ export const App: React.FC = () => {
   return (
     <div className="flex h-screen w-screen flex-col items-center justify-start overflow-hidden bg-transparent p-3 font-sans select-none">
       {/* Raycast Container (keyed by showEpoch so enter animation replays on each summon) */}
-      <div key={showEpoch} className={`runbi-window runbi-enter relative flex h-full min-h-0 w-full flex-col overflow-hidden rounded-2xl backdrop-blur-xl ${showParallel ? 'max-w-[1000px]' : 'max-w-[540px]'}`}>
+      <div key={showEpoch} className={`runbi-window runbi-enter relative flex h-full min-h-0 w-full flex-col overflow-hidden rounded-2xl backdrop-blur-xl ${showParallel || showAgent ? 'max-w-[1000px]' : 'max-w-[540px]'}`}>
         
         {/* Title & Drag Region */}
         <div
@@ -2927,10 +2980,11 @@ export const App: React.FC = () => {
               <button
                 type="button"
                 role="tab"
-                aria-selected={renderedPanelStyle !== 'reply' && renderedPanelStyle !== 'translate' && !screenReplyAnalysis}
-                title="润色：改写我自己的文字"                onClick={handleSwitchToPolish}
+                aria-selected={!showAgent && renderedPanelStyle !== 'reply' && renderedPanelStyle !== 'translate' && !screenReplyAnalysis}
+                title="润色：改写我自己的文字"
+                onClick={handleSwitchToPolish}
                 className={`runbi-mode-tab rounded-full px-2 py-0.5 text-[10px] font-medium cursor-pointer ${
-                  renderedPanelStyle !== 'reply' && renderedPanelStyle !== 'translate' && !screenReplyAnalysis
+                  !showAgent && renderedPanelStyle !== 'reply' && renderedPanelStyle !== 'translate' && !screenReplyAnalysis
                     ? 'bg-white/10 text-slate-200'
                     : 'text-slate-500 hover:text-slate-300'
                 }`}
@@ -2940,11 +2994,11 @@ export const App: React.FC = () => {
               <button
                 type="button"
                 role="tab"
-                aria-selected={Boolean(renderedPanelStyle === 'reply' || screenReplyAnalysis)}
+                aria-selected={!showAgent && Boolean(renderedPanelStyle === 'reply' || screenReplyAnalysis)}
                 title="回复：把上方文字当作对方消息，帮我想一条回复"
                 onClick={handleSwitchToReply}
                 className={`runbi-mode-tab rounded-full px-2 py-0.5 text-[10px] font-medium cursor-pointer ${
-                  renderedPanelStyle === 'reply' || screenReplyAnalysis
+                  !showAgent && (renderedPanelStyle === 'reply' || screenReplyAnalysis)
                     ? 'bg-teal-500/20 text-teal-300 border border-teal-500/30'
                     : 'text-slate-500 hover:text-slate-300'
                 }`}
@@ -2954,16 +3008,30 @@ export const App: React.FC = () => {
               <button
                 type="button"
                 role="tab"
-                aria-selected={renderedPanelStyle === 'translate'}
+                aria-selected={!showAgent && renderedPanelStyle === 'translate'}
                 title="翻译：精准双向翻译"
                 onClick={handleSwitchToTranslate}
                 className={`runbi-mode-tab rounded-full px-2 py-0.5 text-[10px] font-medium cursor-pointer ${
-                  renderedPanelStyle === 'translate'
+                  !showAgent && renderedPanelStyle === 'translate'
                     ? 'bg-teal-500/20 text-teal-300 border border-teal-500/30'
                     : 'text-slate-500 hover:text-slate-300'
                 }`}
               >
                 翻译
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={showAgent}
+                title="智能体：自主感知与执行任务"
+                onClick={handleSwitchToAgent}
+                className={`runbi-mode-tab rounded-full px-2 py-0.5 text-[10px] font-medium cursor-pointer ${
+                  showAgent
+                    ? 'bg-indigo-500/25 text-indigo-300 border border-indigo-500/40 shadow-xs'
+                    : 'text-slate-500 hover:text-slate-300'
+                }`}
+              >
+                智能体
               </button>
             </div>
           </div>
@@ -3683,6 +3751,13 @@ export const App: React.FC = () => {
                 res.success ? 2000 : 3500
               );
             }}
+          />
+        ) : showAgent ? (
+          <AgentPanel
+            endpoint={resolveEndpoint(endpoint)}
+            apiKey={apiKey}
+            model={model || 'deepseek-chat'}
+            onToast={showToast}
           />
         ) : (
           /* Main Polish Panel Component */
