@@ -28,8 +28,9 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                     crate::commands::mouse_hook::leave_capsule_mode();
                     #[cfg(windows)]
                     crate::commands::mouse_hook::clear_outside_dismissal();
-                    let _ = window.show();
-                    let _ = window.set_focus();
+                    // 统一显示入口：先把窗口几何归一成面板尺寸再显示，
+                    // 否则窗口会带着上一次的几何出现(胶囊态时只有 196×44)。
+                    let _ = crate::commands::position::show_panel(&window);
                 }
             }
             "settings" => {
@@ -37,8 +38,7 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                     crate::commands::mouse_hook::leave_capsule_mode();
                     #[cfg(windows)]
                     crate::commands::mouse_hook::clear_outside_dismissal();
-                    let _ = window.show();
-                    let _ = window.set_focus();
+                    let _ = crate::commands::position::show_panel(&window);
                     let _ = window.emit("runbi://open-settings", ());
                 }
             }
@@ -67,8 +67,7 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                     if window.is_visible().unwrap_or(false) {
                         let _ = window.hide();
                     } else {
-                        let _ = window.show();
-                        let _ = window.set_focus();
+                        let _ = crate::commands::position::show_panel(&window);
                     }
                 }
             }

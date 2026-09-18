@@ -285,13 +285,14 @@ fn capsule_action_for_geometry(x: i32, left: i32, width: i32) -> Option<&'static
     if width <= 0 || x < left || x >= left.saturating_add(width) {
         return None;
     }
-    let index = (((i64::from(x) - i64::from(left)) * 5) / i64::from(width)) as usize;
+    let index = (((i64::from(x) - i64::from(left)) * 6) / i64::from(width)) as usize;
     Some(match index {
-        0 => "search",
+        0 => "agent",
         1 => "polish",
         2 => "reply",
         3 => "translate",
         4 => "copy",
+        5 => "search",
         _ => return None,
     })
 }
@@ -515,6 +516,32 @@ static LAST_UP_Y: AtomicI32 = AtomicI32::new(0);
 #[cfg(windows)]
 pub fn set_runbi_window_handle(hwnd: isize) {
     RUNBI_WINDOW_HANDLE.store(hwnd, Ordering::SeqCst);
+}
+
+/// User intent for "始终置顶". The panel window is shared with the capsule, so this cannot be read
+/// back from the OS: every mode flip rewrites always-on-top. Native hide/dismiss paths consult this
+/// flag instead, so a pinned window is never taken away by an outside click, a shortcut toggle or a
+/// positioning pass.
+static WINDOW_PINNED: AtomicBool = AtomicBool::new(false);
+
+pub fn store_window_pinned(pinned: bool) {
+    WINDOW_PINNED.store(pinned, Ordering::SeqCst);
+}
+
+pub fn window_pinned() -> bool {
+    WINDOW_PINNED.load(Ordering::SeqCst)
+}
+
+/// Always-on-top requested for the shared window: the capsule must float over the source app
+/// (PopClip-style), the panel only when the user pinned it. A pin must survive mode flips, otherwise
+/// the next position call silently unpins the window and the panel gets buried by the next click.
+pub fn desired_always_on_top(is_capsule: bool, pinned: bool) -> bool {
+    is_capsule || pinned
+}
+
+/// Whether a visibility toggle is allowed to take the window away. A pinned window stays put.
+pub fn should_hide_window(is_visible: bool, pinned: bool) -> bool {
+    is_visible && !pinned
 }
 
 #[cfg(windows)]
@@ -958,7 +985,10 @@ unsafe extern "system" fn low_level_mouse_proc(
                 // mouse-down before the WebView can deliver the button's DOM
                 // click; hiding here can swallow the action on DPI/WebView
                 // combinations where the hit-test briefly misses the host.
-                if capsule_visible && outside_runbi && !capsule_active {
+                // A pinned window is never taken away by an outside click: the
+                // geometry-only branch below can misfire on a transient
+                // capsule-sized frame.
+                if capsule_visible && outside_runbi && !capsule_active && !window_pinned() {
                     // A blank click dismisses the current capsule. Give any
                     // already queued clipboard/UIA capture a short grace
                     // period so it cannot resurrect the same capsule.
@@ -1410,7 +1440,10 @@ pub fn set_auto_popup_enabled(
 
 #[cfg(test)]
 mod tests {
-    use super::{should_handle_selection, should_pop_once, SelectionMonitorState};
+    use super::{
+        desired_always_on_top, should_handle_selection, should_hide_window, should_pop_once,
+        store_window_pinned, window_pinned, SelectionMonitorState,
+    };
     use std::sync::atomic::Ordering;
 
     #[test]
@@ -1439,6 +1472,28 @@ mod tests {
         // after the old short grace period has elapsed.
         assert!(should_skip_capsule_show_due_to_dismissal(1201, 1200, 1100, 1200));
         assert!(should_skip_capsule_show_due_to_dismissal(1201, 1200, 1300, 1200));
+    }
+
+    #[test]
+    fn a_pinned_window_keeps_floating_and_is_never_hidden() {
+        // The capsule has to float over the source app; the panel only when the user pinned it.
+        assert!(desired_always_on_top(true, false), "capsule must stay on top by design");
+        assert!(desired_always_on_top(true, true));
+        assert!(!desired_always_on_top(false, false), "a plain panel follows normal focus rules");
+        assert!(desired_always_on_top(false, true), "a user pin must survive a panel mode flip");
+
+        // Visibility toggles (wake shortcut, outside click) must respect the pin.
+        assert!(should_hide_window(true, false));
+        assert!(!should_hide_window(false, false), "a hidden window is not hidden twice");
+        assert!(!should_hide_window(true, true), "a pinned window must not disappear");
+    }
+
+    #[test]
+    fn pin_flag_round_trips() {
+        store_window_pinned(true);
+        assert!(window_pinned());
+        store_window_pinned(false);
+        assert!(!window_pinned());
     }
 
     #[test]
@@ -1473,18 +1528,21 @@ mod tests {
     fn native_capsule_action_mapping_matches_left_to_right_buttons() {
         use super::capsule_action_for_geometry;
 
-        assert_eq!(capsule_action_for_geometry(100, 100, 200), Some("search"));
-        assert_eq!(capsule_action_for_geometry(139, 100, 200), Some("search"));
-        assert_eq!(capsule_action_for_geometry(140, 100, 200), Some("polish"));
-        assert_eq!(capsule_action_for_geometry(179, 100, 200), Some("polish"));
-        assert_eq!(capsule_action_for_geometry(180, 100, 200), Some("reply"));
-        assert_eq!(capsule_action_for_geometry(220, 100, 200), Some("translate"));
-        assert_eq!(capsule_action_for_geometry(259, 100, 200), Some("translate"));
-        assert_eq!(capsule_action_for_geometry(260, 100, 200), Some("copy"));
-        assert_eq!(capsule_action_for_geometry(299, 100, 200), Some("copy"));
-        assert_eq!(capsule_action_for_geometry(300, 100, 0), None);
-        assert_eq!(capsule_action_for_geometry(99, 100, 200), None);
-        assert_eq!(capsule_action_for_geometry(300, 100, 200), None);
+        assert_eq!(capsule_action_for_geometry(100, 100, 240), Some("agent"));
+        assert_eq!(capsule_action_for_geometry(139, 100, 240), Some("agent"));
+        assert_eq!(capsule_action_for_geometry(140, 100, 240), Some("polish"));
+        assert_eq!(capsule_action_for_geometry(179, 100, 240), Some("polish"));
+        assert_eq!(capsule_action_for_geometry(180, 100, 240), Some("reply"));
+        assert_eq!(capsule_action_for_geometry(219, 100, 240), Some("reply"));
+        assert_eq!(capsule_action_for_geometry(220, 100, 240), Some("translate"));
+        assert_eq!(capsule_action_for_geometry(259, 100, 240), Some("translate"));
+        assert_eq!(capsule_action_for_geometry(260, 100, 240), Some("copy"));
+        assert_eq!(capsule_action_for_geometry(299, 100, 240), Some("copy"));
+        assert_eq!(capsule_action_for_geometry(300, 100, 240), Some("search"));
+        assert_eq!(capsule_action_for_geometry(339, 100, 240), Some("search"));
+        assert_eq!(capsule_action_for_geometry(340, 100, 0), None);
+        assert_eq!(capsule_action_for_geometry(99, 100, 240), None);
+        assert_eq!(capsule_action_for_geometry(340, 100, 240), None);
     }
 
     #[cfg(windows)]

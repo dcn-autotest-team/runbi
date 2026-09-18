@@ -144,8 +144,8 @@ fn main() {
                 commands::mouse_hook::leave_capsule_mode();
                 #[cfg(windows)]
                 commands::mouse_hook::clear_outside_dismissal();
-                let _ = window.show();
-                let _ = window.set_focus();
+                // 统一显示入口:先归一面板尺寸再 show,避免沿用上一次的窗口几何。
+                let _ = commands::position::show_panel(&window);
                 let _ = window.emit(
                     "runbi://captured-selection",
                     serde_json::json!({
@@ -192,9 +192,15 @@ fn main() {
                             commands::mouse_hook::clear_outside_dismissal();
                             let app_handle = app.clone();
                             if let Some(window) = app.get_webview_window("main") {
-                                if window.is_visible().unwrap_or(false) {
+                                // 置顶的窗口不参与"再按一次收起"的切换:用户已经明确要求它留在
+                                // 屏幕上,快捷键只负责把它调出来,不能把它收走。
+                                let visible = window.is_visible().unwrap_or(false);
+                                if commands::mouse_hook::should_hide_window(
+                                    visible,
+                                    commands::mouse_hook::window_pinned(),
+                                ) {
                                     let _ = window.hide();
-                                } else {
+                                } else if !visible {
                                     // Capture selected text first while the target app still has focus.
                                     let (source_app, window_title) = commands::get_foreground_context();
                                     commands::input::remember_foreground_window();
@@ -346,6 +352,9 @@ fn main() {
             let is_silent = std::env::args().any(|arg| arg == "--autostart" || arg == "--silent");
             if !is_silent {
                 if let Some(window) = app.get_webview_window("main") {
+                    // 先按统一面板尺寸归一,再居中 —— 反过来的话居中使用的是旧尺寸,
+                    // 窗口会偏出屏幕中央(tauri.conf 里的初始尺寸只用于首帧)。
+                    let _ = commands::position::apply_panel_geometry(&window);
                     let _ = window.center();
                     let _ = window.show();
                     let _ = window.set_focus();
@@ -366,6 +375,7 @@ fn main() {
             commands::get_current_selection,
             commands::replace_text,
             commands::position_window_at_cursor,
+            commands::set_window_pinned,
             commands::test_llm_connection,
             commands::fetch_model_list,
             commands::hide_window,

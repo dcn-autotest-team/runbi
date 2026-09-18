@@ -119,7 +119,7 @@ describe('Autonomous AgentPanel', () => {
       });
     });
 
-    expect(host.textContent).toContain('run_cli');
+    expect(host.textContent).toContain('终端命令');
     expect(host.textContent).toContain('npm run build');
     expect(host.textContent).toContain('批准');
     expect(host.textContent).toContain('拒绝');
@@ -200,5 +200,100 @@ describe('Autonomous AgentPanel', () => {
     expect(textarea.value).toBe('下一项任务');
     expect(host.textContent).not.toContain('批准执行');
     expect(host.textContent).toContain('连接中断');
+  });
+
+  it('keeps exactly one turn in StrictMode and ignores late events from a previous task', async () => {
+    let finish!: () => void;
+    invokeMock.mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
+    act(() => root.render(<React.StrictMode><AgentPanel endpoint="http://localhost/v1" apiKey="" model="local" /></React.StrictMode>));
+    const input = host.querySelector('textarea')!;
+    const submit = async (value: string) => {
+      act(() => {
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(input, value);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      await act(async () => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
+    };
+    await submit('第一轮');
+    const oldChannel = lastCreatedChannel;
+    await act(async () => {
+      oldChannel.onmessage({ type: 'ContentChunk', payload: { delta: '第一轮结果' } });
+      oldChannel.onmessage({ type: 'Done', payload: { success: true } });
+      oldChannel.onmessage({ type: 'Done', payload: { success: true } });
+      finish();
+    });
+    expect(host.querySelectorAll('.agent-turn')).toHaveLength(1);
+    await submit('继续');
+    const params = invokeMock.mock.calls.at(-1)![1].params;
+    expect(params.history).toHaveLength(2);
+    expect(params.history[1].content).toContain('第一轮结果');
+    act(() => oldChannel.onmessage({ type: 'ContentChunk', payload: { delta: '不应出现的迟到内容' } }));
+    expect(host.textContent).not.toContain('不应出现的迟到内容');
+    await act(async () => finish());
+    expect(host.textContent).not.toContain('执行中…');
+    expect(host.textContent).toContain('未收到完成确认');
+  });
+
+  it('carries failed tool evidence forward without claiming unfinished tools succeeded', async () => {
+    let reject!: (reason: string) => void;
+    invokeMock.mockImplementation(() => new Promise((_, fail) => { reject = fail; }));
+    act(() => root.render(<AgentPanel endpoint="http://localhost/v1" apiKey="" model="local" />));
+    const input = host.querySelector('textarea')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(input, '检查文件');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
+    act(() => {
+      lastCreatedChannel.onmessage({ type: 'ToolProposed', payload: { call_id: '1', name: 'run_cli', command: 'pwd', requires_approval: false } });
+      lastCreatedChannel.onmessage({ type: 'ToolExecuted', payload: { call_id: '1', output: 'D:/project', exit_code: 0 } });
+      lastCreatedChannel.onmessage({ type: 'ToolProposed', payload: { call_id: '2', name: 'run_cli', command: 'build', requires_approval: true } });
+    });
+    await act(async () => reject('断线'));
+    await act(async () => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
+    const history = invokeMock.mock.calls.at(-1)![1].params.history;
+    expect(history[1].content).toContain('D:/project');
+    expect(history[1].content).toContain('不能确认是否完成');
+    await act(async () => reject('断线'));
+    const directory = host.querySelector<HTMLInputElement>('input[aria-label="工作目录"]')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(directory, 'D:/other');
+      directory.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
+    expect(invokeMock.mock.calls.at(-1)![1].params.history).toBeUndefined();
+  });
+
+  it('blocks submission while choosing a directory and clears the draft on new session', async () => {
+    let choose!: (path: string) => void;
+    invokeMock.mockImplementation(() => new Promise<string>((resolve) => { choose = resolve; }));
+    act(() => root.render(<AgentPanel endpoint="http://localhost/v1" apiKey="" model="local" />));
+    act(() => host.querySelector<HTMLButtonElement>('.agent-suggestions button')!.click());
+    await act(async () => host.querySelector<HTMLButtonElement>('.agent-directory-button')!.click());
+    const input = host.querySelector('textarea')!;
+    act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    await act(async () => choose('D:/中文项目'));
+    expect(host.querySelector<HTMLInputElement>('input[aria-label="工作目录"]')!.value).toBe('D:/中文项目');
+    act(() => host.querySelector<HTMLButtonElement>('.agent-header button')!.click());
+    expect(input.value).toBe('');
+  });
+
+  it('closes the model menu on Escape without closing the agent and does not save IME Enter', () => {
+    const change = vi.fn();
+    act(() => root.render(<AgentPanel endpoint="http://localhost/v1" apiKey="" model="local" onModelChange={change} modelListError="模型列表获取失败" />));
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="选择模型"]')!.click());
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('获取失败');
+    const field = host.querySelector<HTMLInputElement>('.agent-model-menu input')!;
+    field.value = '新模型';
+    act(() => field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true })));
+    expect(change).not.toHaveBeenCalled();
+    act(() => field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
+    expect(change).toHaveBeenCalledWith('新模型');
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="选择模型"]')!.click());
+    const escape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    act(() => host.querySelector('.agent-model-menu input')!.dispatchEvent(escape));
+    expect(escape.defaultPrevented).toBe(true);
+    expect(host.querySelector('.agent-model-menu')).toBeNull();
   });
 });

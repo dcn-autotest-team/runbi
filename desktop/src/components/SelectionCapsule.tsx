@@ -4,16 +4,17 @@
  */
 
 import React, { useRef } from 'react';
-import { Check, Copy, Languages, MessageCircle, Search, Sparkles } from './Icons';
+import { Bot, Check, Copy, Languages, MessageCircle, Search, Sparkles } from './Icons';
 
 export interface SelectionCapsuleProps {
   visible: boolean;
   copied?: boolean;
-  onSearch: () => void;
+  onAgent: () => void;
   onPolish: () => void;
   onReply: () => void;
   onTranslate: () => void;
   onCopy: () => void;
+  onSearch: () => void;
   onHoverChange?: (hovered: boolean) => void;
 }
 
@@ -37,11 +38,12 @@ const actionClass =
 export const SelectionCapsule: React.FC<SelectionCapsuleProps> = ({
   visible,
   copied = false,
-  onSearch,
+  onAgent,
   onPolish,
   onReply,
   onTranslate,
   onCopy,
+  onSearch,
   onHoverChange,
 }) => {
   const clickAfterPointerUpRef = useRef(false);
@@ -70,17 +72,17 @@ export const SelectionCapsule: React.FC<SelectionCapsuleProps> = ({
     onMouseLeave={() => onHoverChange?.(false)}
     onClick={(e) => {
       if ((e.target as HTMLElement).closest('button')) return;
-      onPolish();
+      onAgent();
     }}
     data-testid="selection-capsule"
     role="toolbar"
     aria-label="划词快捷操作"
-    className={`runbi-selection-capsule flex h-11 w-[196px] items-center gap-0.5 p-1 cursor-pointer ${
+    className={`runbi-selection-capsule flex h-11 w-[236px] items-center gap-0.5 p-1 cursor-pointer ${
       visible ? 'is-visible' : 'is-hidden'
     }`}
   >
-    <button type="button" onPointerUp={startAction(onSearch)} onClick={startAction(onSearch)} aria-label="在浏览器中搜索选中文本" title="浏览器搜索" className={actionClass}>
-      <Search className="h-[17px] w-[17px]" aria-hidden="true" />
+    <button type="button" onPointerUp={startAction(onAgent)} onClick={startAction(onAgent)} aria-label="智能体任务" title="智能体" className={actionClass}>
+      <Bot className="h-[17px] w-[17px]" aria-hidden="true" />
     </button>
     <button type="button" onPointerUp={startAction(onPolish)} onClick={startAction(onPolish)} aria-label="润色选中文本" title="润色" className={actionClass}>
       <Sparkles className="h-[17px] w-[17px]" aria-hidden="true" />
@@ -102,6 +104,9 @@ export const SelectionCapsule: React.FC<SelectionCapsuleProps> = ({
       {copied
         ? <Check className="h-[17px] w-[17px]" aria-hidden="true" />
         : <Copy className="h-[17px] w-[17px]" aria-hidden="true" />}
+    </button>
+    <button type="button" onPointerUp={startAction(onSearch)} onClick={startAction(onSearch)} aria-label="在浏览器中搜索选中文本" title="浏览器搜索" className={actionClass}>
+      <Search className="h-[17px] w-[17px]" aria-hidden="true" />
     </button>
   </div>
   );

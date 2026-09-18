@@ -10,6 +10,7 @@ export * from './mockStream';
 export * from './selection';
 export * from './position';
 export * from './context';
+export * from './chatMemory';
 export * from './endpoint';
 export * from './capturedSelection';
 export * from './scriptLibrary';

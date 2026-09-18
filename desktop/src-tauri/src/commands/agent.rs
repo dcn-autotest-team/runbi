@@ -5,7 +5,7 @@
 //! - Multi-turn tool execution loop with streaming thinking & reasoning support
 //! - Safe CLI execution (read-only auto-approval vs human-in-the-loop gate)
 //! - Memory hint persistence and context compaction (leave_memory_hints)
-//! - Polynomial rolling hash repetition checker (prevents thinking loops)
+//! - Polynomial rolling hash repetition checker (suppresses thinking loops)
 
 use futures_util::StreamExt;
 use reqwest::Client;
@@ -369,7 +369,12 @@ pub async fn run_cli_command(command: &str, cwd: &Path, timeout_secs: u64) -> (S
             let stdout = String::from_utf8_lossy(&stdout);
             let stderr = String::from_utf8_lossy(&stderr);
 
-            let mut combined = format!("Exit code: {}\n{}", code.unwrap_or(-1), stdout.trim());
+            let mut combined = format!(
+                "Exit code: {}\nWorking directory: {}\n{}",
+                code.unwrap_or(-1),
+                cwd.display(),
+                stdout.trim()
+            );
             if !stderr.trim().is_empty() {
                 combined.push_str(&format!("\nSTDERR:\n{}", stderr.trim()));
             }
@@ -436,6 +441,8 @@ pub fn build_system_prompt(project_dir: &Path) -> String {
 一、帮助用户完成指定的目标任务。结果要保证可靠与可验证，必要时主动调用命令进行验证。
 二、必须以工具调用的形式执行操作。纯只读命令会自动放行，涉及修改/执行的操作会提请用户审核。
 三、任务完成后，向用户汇报明确的最终结果与产出。
+四、run_cli 以无窗口方式后台执行，输出只会回传给你、用户看不见。当任务需要用户在自己屏幕上看到持续效果（动画／图形／交互窗口）时，直接用 Start-Process 拉起一个可见窗口来承载它，不要因为“用户看不到输出”而反复纠结。
+五、不要重复执行同一条命令，也不要反复试探同一个信息。命令的输出不会因为你再问一次而改变；连续两次探测都没有获得新信息时，说明方向有误，应立即换一种手段，或直接向用户汇报当前结论。
 "#,
         os_name,
         shell_name,
@@ -487,19 +494,27 @@ pub async fn select_project_directory(default_path: Option<String>) -> Result<Op
         tauri::async_runtime::spawn_blocking(move || {
             let init_dir = default_path.unwrap_or_default().replace('\'', "''");
             let script = format!(
-                r#"[System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null; $f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description = '选择工作目录'; if ('{0}' -ne '' -and (Test-Path '{0}')) {{ $f.SelectedPath = '{0}' }}; if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{ Write-Output $f.SelectedPath }}"#,
+                r#"[System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null; $f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description = '选择工作目录'; $f.ShowNewFolderButton = $true; if ('{0}' -ne '' -and (Test-Path -LiteralPath '{0}')) {{ $f.SelectedPath = '{0}' }}; $owner = New-Object System.Windows.Forms.Form; $owner.TopMost = $true; if ($f.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) {{ [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Write-Output $f.SelectedPath }}"#,
                 init_dir
             );
             let mut command = std::process::Command::new("powershell");
             use std::os::windows::process::CommandExt;
+            use base64::Engine;
             command.creation_flags(0x0800_0000);
+            let encoded: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
+            let encoded = base64::engine::general_purpose::STANDARD.encode(encoded);
             let output = command
-                .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+                .args(["-NoLogo", "-NoProfile", "-STA", "-EncodedCommand", &encoded])
                 .output()
                 .map_err(|e| e.to_string())?;
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !output.status.success() {
+                return Err(format!("无法打开目录选择器: {}", String::from_utf8_lossy(&output.stderr).trim()));
+            }
+            let path = String::from_utf8_lossy(&output.stdout).trim_start_matches('\u{feff}').trim().to_string();
             if path.is_empty() {
                 Ok(None)
+            } else if !Path::new(&path).is_dir() {
+                Err("选择的工作目录不存在".into())
             } else {
                 Ok(Some(path))
             }
@@ -510,8 +525,35 @@ pub async fn select_project_directory(default_path: Option<String>) -> Result<Op
     #[cfg(not(windows))]
     {
         let _ = default_path;
-        Ok(None)
+        Err("当前平台暂不支持目录选择器，请手动输入工作目录".into())
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentHistoryItem {
+    pub role: String,
+    pub content: String,
+}
+
+fn bounded_history(history: Vec<AgentHistoryItem>) -> Result<Vec<Value>, String> {
+    if history.len() % 2 != 0 || history.chunks_exact(2).any(|pair| pair[0].role != "user" || pair[1].role != "assistant") {
+        return Err("会话历史格式无效，请开启新会话后重试".into());
+    }
+    // ponytail: bounded recent context, not semantic summarization; extend with a summary when longer memory is needed.
+    let mut pairs = Vec::new();
+    let mut chars = 0;
+    for pair in history.chunks_exact(2).rev().take(16) {
+        let contents: Vec<String> = pair.iter().map(|item| {
+            let mut text: String = item.content.chars().take(8000).collect();
+            if item.content.chars().count() > 8000 { text.push_str("\n[较早内容已截断]"); }
+            text
+        }).collect();
+        let size = contents.iter().map(|text| text.chars().count()).sum::<usize>();
+        if chars + size > 48000 { break; }
+        chars += size;
+        pairs.push(vec![json!({"role": "user", "content": contents[0]}), json!({"role": "assistant", "content": contents[1]})]);
+    }
+    Ok(pairs.into_iter().rev().flatten().collect())
 }
 
 #[derive(Debug, Deserialize)]
@@ -521,6 +563,7 @@ pub struct StartAgentTaskParams {
     pub api_key: String,
     pub model: String,
     pub prompt: String,
+    pub history: Option<Vec<AgentHistoryItem>>,
     #[serde(alias = "projectDir", alias = "project_dir")]
     pub project_dir: Option<String>,
     #[serde(alias = "allowAll", alias = "allow_all")]
@@ -559,6 +602,80 @@ pub async fn start_agent_task(
     result
 }
 
+/// A degenerated thinking turn is interrupted and re-planned this many times before the task is
+/// declared failed. One strike would throw away an otherwise solvable task; unbounded re-planning
+/// would keep burning tokens on a model that cannot escape the loop.
+const MAX_SUPPRESSED_TURNS: usize = 2;
+
+/// True once thinking loops have been suppressed `MAX_SUPPRESSED_TURNS` times in a row, i.e. the
+/// model cannot escape the loop even after being told to stop deliberating and act.
+fn thinking_loop_exhausted(suppressed_turns: usize) -> bool {
+    suppressed_turns >= MAX_SUPPRESSED_TURNS
+}
+
+/// Repeated probes tolerated before the reply tells the model to abandon its current approach
+/// entirely instead of merely skipping the duplicate command.
+const MAX_REPEATED_COMMANDS: usize = 2;
+
+/// Commands are compared after collapsing whitespace and unifying `&&` with `;`, so a model that
+/// re-issues "a && b" as "a; b" is still recognised as repeating itself rather than silently burning
+/// a turn on work that cannot produce new information. `||` and `|` are deliberately left alone:
+/// they change what actually runs.
+fn normalize_command(command: &str) -> String {
+    let mut normalized = String::with_capacity(command.len());
+    let mut chars = command.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '&' => {
+                if matches!(chars.peek(), Some('&')) { chars.next(); normalized.push(';'); }
+                else { normalized.push('&'); }
+            }
+            ';' => normalized.push(';'),
+            c if c.is_whitespace() => {}
+            c => normalized.push(c),
+        }
+    }
+    normalized
+}
+
+/// Tracks what this task has already run. A model stuck in a "probe the filesystem again" loop keeps
+/// spending turns on identical commands; answering those with "already executed" breaks the loop
+/// without failing the task.
+#[derive(Default)]
+struct CommandLedger {
+    seen: std::collections::HashSet<String>,
+    repeats: usize,
+}
+
+impl CommandLedger {
+    /// Forgets every probe recorded so far. Called whenever a command could have changed state, so
+    /// that re-reading afterwards runs for real instead of being skipped as a duplicate.
+    fn reset(&mut self) {
+        self.seen.clear();
+        self.repeats = 0;
+    }
+
+    /// Registers `command` and reports whether it had already been executed in this task.
+    fn is_repeat(&mut self, command: &str) -> bool {
+        let key = normalize_command(command);
+        if key.is_empty() || self.seen.insert(key) { return false; }
+        self.repeats += 1;
+        true
+    }
+
+    /// Tool result handed back for a skipped duplicate command.
+    fn repeat_hint(&self) -> String {
+        if self.repeats >= MAX_REPEATED_COMMANDS {
+            format!(
+                "该命令已经执行过，输出不会改变，本次已跳过重复执行（累计重复 {} 次）。你正在反复探测同一件事：不要再尝试同类命令，请立刻换成完全不同的手段，或直接基于已有输出向用户给出结论。",
+                self.repeats
+            )
+        } else {
+            "该命令已经执行过，输出不会改变，本次已跳过重复执行。请改用不同的命令，或基于已有输出继续推进。".to_string()
+        }
+    }
+}
+
 async fn run_agent_task(params: StartAgentTaskParams, channel: &Channel<AgentEvent>) -> Result<(), String> {
 
     let project_dir = params
@@ -582,8 +699,11 @@ async fn run_agent_task(params: StartAgentTaskParams, channel: &Channel<AgentEve
         .await.map_err(|e| format!("环境初始化失败: {}", e))?;
     let mut messages: Vec<Value> = vec![
         json!({ "role": "system", "content": system_prompt }),
-        json!({ "role": "user", "content": params.prompt }),
     ];
+
+    messages.extend(bounded_history(params.history.unwrap_or_default())?);
+
+    messages.push(json!({ "role": "user", "content": params.prompt }));
 
     let tools = json!([
         {
@@ -618,6 +738,8 @@ async fn run_agent_task(params: StartAgentTaskParams, channel: &Channel<AgentEve
     ]);
 
     let mut total_tokens = 0;
+    let mut suppressed_turns = 0usize;
+    let mut ledger = CommandLedger::default();
 
     for turn in 0..max_turns {
         if ACTIVE_AGENT_ABORT.load(Ordering::SeqCst) {
@@ -635,15 +757,37 @@ async fn run_agent_task(params: StartAgentTaskParams, channel: &Channel<AgentEve
             message: format!("正在规划思考（第 {}/{} 轮）…", turn + 1, max_turns),
         });
 
-        let payload = json!({
+        let remaining_turns = max_turns - turn;
+        let must_finalize = remaining_turns == 1;
+
+        let mut request_messages = messages.clone();
+        if must_finalize {
+            request_messages.push(json!({
+                "role": "user",
+                "content": "这是本次任务的最后一个回合，工具已不可用。请立即停止一切探测，仅基于以上已经获得的信息，用简洁的中文给出最终结论与产出；不要重复已执行过的命令，也不要编造未经验证的内容。"
+            }));
+        } else if remaining_turns <= 3 {
+            request_messages.push(json!({
+                "role": "user",
+                "content": format!(
+                    "提示：本次任务最多 {} 轮，现在只剩 {} 轮。请优先收敛：不要重复执行已经执行过的命令；如果已有信息足以回答，请直接给出结论。",
+                    max_turns, remaining_turns
+                )
+            }));
+        }
+
+        let mut payload = json!({
             "model": params.model,
-            "messages": messages,
+            "messages": request_messages,
             "tools": tools,
             "stream": true,
             "temperature": 0.6,
             "thinking": { "type": "enabled" },
             "chat_template_kwargs": { "enable_thinking": true }
         });
+        if must_finalize {
+            payload["tool_choice"] = json!("none");
+        }
 
         let res = client
             .post(&params.endpoint)
@@ -671,6 +815,7 @@ async fn run_agent_task(params: StartAgentTaskParams, channel: &Channel<AgentEve
         let mut full_reasoning = String::new();
         let mut tool_calls_map: HashMap<usize, (String, String, String)> = HashMap::new();
         let mut repeat_checker = RepeatSuffixChecker::new(80);
+        let mut reasoning_suppressed = false;
         let mut received_completion = false;
         let mut response_bytes = 0usize;
 
@@ -724,18 +869,22 @@ async fn run_agent_task(params: StartAgentTaskParams, channel: &Channel<AgentEve
                                 .unwrap_or("");
                             if !reasoning.is_empty() {
                                 full_reasoning.push_str(reasoning);
-                                for ch in reasoning.chars() {
-                                    if repeat_checker.add_char(ch) {
+                                if !reasoning_suppressed {
+                                    // `any` short-circuits, so the checker stops being fed the
+                                    // moment the loop is spotted instead of re-firing on every char.
+                                    reasoning_suppressed =
+                                        reasoning.chars().any(|ch| repeat_checker.add_char(ch));
+                                    if reasoning_suppressed {
                                         let _ = channel.send(AgentEvent::Status {
-                                            message: "检测到思考内容陷入重复循环，已自动抑制"
+                                            message: "检测到思考内容陷入重复循环，已中断本轮思考并重新规划…"
                                                 .to_string(),
                                         });
-                                        return Err("检测到思考重复循环，已停止，请重新描述任务".into());
+                                        break 'response;
                                     }
+                                    let _ = channel.send(AgentEvent::ThinkingChunk {
+                                        delta: reasoning.to_string(),
+                                    });
                                 }
-                                let _ = channel.send(AgentEvent::ThinkingChunk {
-                                    delta: reasoning.to_string(),
-                                });
                             }
 
                             // Content stream
@@ -777,6 +926,20 @@ async fn run_agent_task(params: StartAgentTaskParams, channel: &Channel<AgentEve
         }
 
         total_tokens += full_content.len() / 4 + full_reasoning.len() / 4;
+
+        if reasoning_suppressed {
+            suppressed_turns += 1;
+            if thinking_loop_exhausted(suppressed_turns) {
+                return Err("检测到思考重复循环，已停止，请重新描述任务".into());
+            }
+            messages.push(json!({
+                "role": "user",
+                "content": "你上一轮的思考陷入了重复循环，已被中断。请立刻停止反复推敲与自我怀疑：直接给出下一步——调用 run_cli 执行一条最简可行的命令，或直接给出最终结论。"
+            }));
+            continue;
+        }
+        suppressed_turns = 0;
+
         if !received_completion {
             return Err("模型响应意外中断，请重试".into());
         }
@@ -833,8 +996,36 @@ async fn run_agent_task(params: StartAgentTaskParams, channel: &Channel<AgentEve
                 let timeout = args_json.get("timeout").and_then(|t| t.as_u64()).unwrap_or(60);
 
                 let is_readonly = is_readonly_command(&command);
-                let requires_approval = !allow_all && !is_readonly;
+                if !is_readonly {
+                    // A command that can change state invalidates every earlier probe: re-reading a
+                    // file or a repo after writing to it is verification, not a loop.
+                    ledger.reset();
+                }
 
+                if ledger.is_repeat(&command) {
+                    let hint = ledger.repeat_hint();
+                    let _ = channel.send(AgentEvent::ToolProposed {
+                        call_id: call_id.clone(),
+                        name: name.clone(),
+                        command: command.clone(),
+                        requires_approval: false,
+                    });
+                    let _ = channel.send(AgentEvent::ToolExecuted {
+                        call_id: call_id.clone(),
+                        name: name.clone(),
+                        output: hint.clone(),
+                        exit_code: Some(1),
+                    });
+                    messages.push(json!({
+                        "role": "tool",
+                        "tool_call_id": call_id,
+                        "name": name,
+                        "content": hint
+                    }));
+                    continue;
+                }
+
+                let requires_approval = !allow_all && !is_readonly;
                 let approval = if requires_approval {
                     let (tx, rx) = tokio::sync::oneshot::channel();
                     PENDING_APPROVALS.lock().unwrap().as_mut().unwrap().insert(call_id.clone(), tx);
@@ -921,7 +1112,84 @@ async fn run_agent_task(params: StartAgentTaskParams, channel: &Channel<AgentEve
         }
     }
 
-    Err("已达到任务轮数上限，请根据已有结果缩小任务范围后继续".into())
+    let _ = channel.send(AgentEvent::Status {
+        message: "已达到任务轮数上限，正在汇总已有结果…".to_string(),
+    });
+    match finalize_without_tools(
+        &client,
+        &params.endpoint,
+        &params.api_key,
+        &params.model,
+        &messages,
+        channel,
+    )
+    .await
+    {
+        Ok(extra_tokens) => {
+            total_tokens += extra_tokens;
+            let _ = channel.send(AgentEvent::Done { success: true, total_tokens });
+            Ok(())
+        }
+        Err(e) => Err(format!(
+            "已达到任务轮数上限，且汇总已有结果失败（{}）。请缩小任务范围后重试",
+            e
+        )),
+    }
+}
+
+/// The turn budget is gone, but the run usually already gathered enough evidence to be useful. Ask
+/// once more for a plain-text conclusion with tools disabled, so the task ends with an answer
+/// instead of a bare failure.
+async fn finalize_without_tools(
+    client: &Client,
+    endpoint: &str,
+    api_key: &str,
+    model: &str,
+    messages: &[Value],
+    channel: &Channel<AgentEvent>,
+) -> Result<usize, String> {
+    let mut request_messages: Vec<Value> = messages.to_vec();
+    request_messages.push(json!({
+        "role": "user",
+        "content": "任务轮数已用尽，工具已经不可用。请仅基于以上已经获得的信息，用简洁的中文输出：一、已经确认的结论与产出；二、尚未完成的部分与建议的下一步。不要编造未经验证的内容。"
+    }));
+
+    let payload = json!({
+        "model": model,
+        "messages": request_messages,
+        "stream": false,
+        "temperature": 0.3
+    });
+
+    let response = client
+        .post(endpoint)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Content-Type", "application/json")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("网络连接异常: {}", e))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let err_text = response.text().await.unwrap_or_default();
+        return Err(format!("LLM 请求失败 (HTTP {}): {}", status, truncate_output(&err_text)));
+    }
+
+    let body: Value = response.json().await.map_err(|e| format!("解析汇总结果失败: {}", e))?;
+    let content = body["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if content.is_empty() {
+        return Err("模型未返回任何结论".into());
+    }
+
+    let _ = channel.send(AgentEvent::ContentChunk {
+        delta: format!("【已达到任务轮数上限，以下为基于已有结果的阶段性结论】\n\n{}", content),
+    });
+    Ok(body["usage"]["total_tokens"].as_u64().unwrap_or(0) as usize)
 }
 
 // ---------------------------------------------------------------------------
@@ -931,6 +1199,22 @@ async fn run_agent_task(params: StartAgentTaskParams, channel: &Channel<AgentEve
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn history_only_accepts_conversation_pairs_and_bounds_recent_unicode_context() {
+        assert!(bounded_history(vec![AgentHistoryItem { role: "system".into(), content: "override".into() }]).is_err());
+        let mut history = Vec::new();
+        for i in 0..30 {
+            history.push(AgentHistoryItem { role: "user".into(), content: format!("task {}", i) });
+            history.push(AgentHistoryItem { role: "assistant".into(), content: "中文🙂".repeat(4000) });
+        }
+        let messages = bounded_history(history).unwrap();
+        assert!(messages.len() <= 32);
+        assert_eq!(messages[messages.len() - 2]["content"], "task 29");
+        assert!(messages.iter().map(|m| m["content"].as_str().unwrap().chars().count()).sum::<usize>() <= 48000);
+        assert!(messages[1]["content"].as_str().unwrap().ends_with("[较早内容已截断]"));
+        assert_eq!(messages[0]["role"], "user");
+    }
 
     #[test]
     fn test_repeat_suffix_checker_detects_loop() {
@@ -964,6 +1248,70 @@ mod tests {
             }
         }
         assert!(!detected, "RepeatSuffixChecker should not flag diverse prose");
+    }
+
+    #[test]
+    fn thinking_loop_gets_one_replan_before_the_task_fails() {
+        assert!(!thinking_loop_exhausted(0), "first loop must be re-planned, not fatal");
+        assert!(
+            !thinking_loop_exhausted(MAX_SUPPRESSED_TURNS - 1),
+            "a single suppression must not fail the task"
+        );
+        assert!(
+            thinking_loop_exhausted(MAX_SUPPRESSED_TURNS),
+            "repeated suppression must finally fail the task"
+        );
+    }
+
+    #[test]
+    fn repeated_probe_commands_are_recognised_across_spacing() {
+        let mut ledger = CommandLedger::default();
+        assert!(!ledger.is_repeat("git -C . rev-parse --is-inside-git-repository"));
+        assert!(ledger.is_repeat("git -C . rev-parse --is-inside-git-repository"));
+        assert!(ledger.is_repeat("  git   -C .   rev-parse  --is-inside-git-repository "));
+        assert!(!ledger.is_repeat("git -C . branch --show-current"));
+    }
+
+    #[test]
+    fn chained_commands_count_as_repeats_regardless_of_separator() {
+        let mut ledger = CommandLedger::default();
+        assert!(!ledger.is_repeat("git status && git diff"));
+        assert!(ledger.is_repeat("git status; git diff"));
+        assert!(ledger.is_repeat("git status ;  git diff"));
+        assert!(!ledger.is_repeat("git status || git diff"));
+    }
+
+    #[test]
+    fn blank_commands_are_not_treated_as_repeats() {
+        let mut ledger = CommandLedger::default();
+        assert!(!ledger.is_repeat("   "));
+        assert!(!ledger.is_repeat(""));
+    }
+
+    #[test]
+    fn a_state_changing_command_reopens_the_ledger() {
+        let mut ledger = CommandLedger::default();
+        assert!(!ledger.is_repeat("git status"));
+        assert!(ledger.is_repeat("git status"));
+        // After a mutation, re-reading is legitimate verification of the new state.
+        ledger.reset();
+        assert!(!ledger.is_repeat("git status"));
+        assert!(!ledger.repeat_hint().contains("反复探测同一件事"));
+    }
+
+    #[test]
+    fn repeated_probes_escalate_to_a_stop_probing_hint() {
+        let mut ledger = CommandLedger::default();
+        assert!(!ledger.is_repeat("Get-ChildItem -Recurse -Force"));
+        assert!(ledger.is_repeat("Get-ChildItem -Recurse -Force"));
+        let soft = ledger.repeat_hint();
+        assert!(soft.contains("跳过重复执行"));
+        assert!(!soft.contains("反复探测同一件事"));
+
+        assert!(ledger.is_repeat("Get-ChildItem -Recurse -Force"));
+        let hard = ledger.repeat_hint();
+        assert!(hard.contains("反复探测同一件事"));
+        assert_ne!(soft, hard);
     }
 
     #[test]

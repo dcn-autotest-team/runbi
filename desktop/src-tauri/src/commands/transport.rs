@@ -413,6 +413,11 @@ pub async fn test_llm_connection(
 
 #[tauri::command]
 pub fn hide_window(window: WebviewWindow, only_if_unfocused: Option<bool>) -> Result<bool, String> {
+    // The pin guard lives in Rust, not only in the frontend: several callers reach this command, and
+    // a pinned window must not disappear because one of them forgot to check.
+    if crate::commands::mouse_hook::window_pinned() {
+        return Ok(false);
+    }
     if only_if_unfocused.unwrap_or(false) {
         #[cfg(windows)]
         {

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Runbi",
-  "version": "1.0.23",
+  "version": "1.0.24",
   "identifier": "com.runbi.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -15,8 +15,8 @@
       {
         "title": "Runbi 润笔",
         "label": "main",
-        "width": 700,
-        "height": 580,
+        "width": 860,
+        "height": 640,
         "minWidth": 560,
         "minHeight": 420,
         "resizable": true,

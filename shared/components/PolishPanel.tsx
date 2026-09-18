@@ -59,6 +59,8 @@ export interface PolishPanelProps {
   /** Optional clipboard text reference */
   clipboardReference?: string | null;
   onAttachClipboard?: () => void;
+  /** Clear the accumulated cross-screen chat context for the current chat (reply mode). */
+  onClearChatMemory?: () => void;
   /** Active industry pack name, shown in the reply context badge. */
   packName?: string;
   /** Industry-pack intents + user-defined actions, always shown as chips in reply mode. */
@@ -136,6 +138,7 @@ export const PolishPanel: React.FC<PolishPanelProps> = ({
   onRemoveFile,
   clipboardReference,
   onAttachClipboard,
+  onClearChatMemory,
   packName,
   replyQuickTags,
   extraIntentChips,
@@ -379,15 +382,27 @@ export const PolishPanel: React.FC<PolishPanelProps> = ({
                     </span>
                   )}
                 </div>
-                {screenReplyAnalysis.conversation && screenReplyAnalysis.conversation.length > 1 && (
-                  <button
-                    type="button"
-                    onClick={() => setShowConvSummary((prev) => !prev)}
-                    className="text-[11px] text-slate-400 hover:text-teal-600 dark:hover:text-teal-300 cursor-pointer transition-colors shrink-0 ml-2"
-                  >
-                    {showConvSummary ? '收起记录 ▴' : `展开记录(${screenReplyAnalysis.conversation.length}) ▾`}
-                  </button>
-                )}
+                <div className="flex items-center gap-2 shrink-0 ml-2">
+                  {onClearChatMemory && (
+                    <button
+                      type="button"
+                      onClick={onClearChatMemory}
+                      className="text-[11px] text-slate-400 hover:text-rose-500 dark:hover:text-rose-400 cursor-pointer transition-colors shrink-0"
+                      title="清空已累积的聊天上下文，下一轮从当前屏幕重新开始"
+                    >
+                      清空记忆
+                    </button>
+                  )}
+                  {screenReplyAnalysis.conversation && screenReplyAnalysis.conversation.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => setShowConvSummary((prev) => !prev)}
+                      className="text-[11px] text-slate-400 hover:text-teal-600 dark:hover:text-teal-300 cursor-pointer transition-colors shrink-0"
+                    >
+                      {showConvSummary ? '收起记录 ▴' : `展开记录(${screenReplyAnalysis.conversation.length}) ▾`}
+                    </button>
+                  )}
+                </div>
               </div>
 
               {showConvSummary && screenReplyAnalysis.conversation && screenReplyAnalysis.conversation.length > 1 && (

@@ -15,6 +15,14 @@ import { LogicalSize } from '@tauri-apps/api/dpi';
 import { readText as readClipboard } from '@tauri-apps/plugin-clipboard-manager';
 import { createDesktopAdapters } from './adapters';
 
+// ---- 面板窗口尺寸的唯一基准 ----
+// 润色／回复／翻译／智能体四个 tab 共用同一套窗口几何（数值取自「智能体」面板）。
+// 切 tab 只换内容、不碰窗口尺寸；只有并行对比会临时改大。
+// 必须与 Rust 侧 position.rs 的 PANEL_WIDTH / PANEL_HEIGHT 保持一致 —— 那边负责
+// 定位与"只 show 不定位"的显示路径，两边数值不同就会互相纠正成来回跳变。
+const PANEL_WINDOW_WIDTH = 860;
+const PANEL_WINDOW_HEIGHT = 640;
+
 // ---- Boot + crash diagnostics (writes to runbi.log via Rust) ----
 // The desktop App.tsx is not covered by unit tests, so a runtime crash here
 // would previously white-screen silently. These lines make it observable.
@@ -50,6 +58,8 @@ import {
   TRANSLATE_TARGETS,
   parseModelJson,
   resolveEndpoint,
+  globalChatMemory,
+  buildChatMemoryKey,
   type ScreenReplyAnalysis,
   type TranslateTargetId,
 } from '@runbi/shared/core';
@@ -89,7 +99,7 @@ interface CapsuleInfo {
   generation?: number;
 }
 
-type CapsuleAction = 'search' | 'polish' | 'reply' | 'translate' | 'copy';
+type CapsuleAction = 'agent' | 'polish' | 'reply' | 'translate' | 'copy' | 'search';
 
 
 const SettingsToggle: React.FC<{
@@ -248,6 +258,7 @@ export const App: React.FC = () => {
   const [showHistory, setShowHistory] = useState<boolean>(false);
   const [showOnboarding, setShowOnboarding] = useState<boolean>(false);
   const [showAgent, setShowAgent] = useState<boolean>(false);
+  const [agentInitialPrompt, setAgentInitialPrompt] = useState<string>('');
   const [settingsTab, setSettingsTab] = useState<'model' | 'desktop' | 'persona' | 'about'>('model');
   const [recoverableDraft, setRecoverableDraft] = useState<DraftSnapshot | null>(null);
   const [lastReplacement, setLastReplacement] = useState<LastReplacementSnapshot | null>(null);
@@ -384,6 +395,7 @@ export const App: React.FC = () => {
     autoMode: true,
     translateTarget: 'en' as TranslateTargetId,
     lastChatApp: '',
+    lastChatWindow: '',
     recaptureForceVision: false,
     dragging: false,
     uiMode: 'panel' as 'panel' | 'capsule',
@@ -394,6 +406,7 @@ export const App: React.FC = () => {
     activateTranslate: (_t: string, _img?: string | null, _target?: TranslateTargetId, _preserveAutoMode?: boolean) => {},
     handleStartScreenReplyAnalysis: (_hint?: string) => {},
     handleStartTextReplyAnalysis: (_msg: string, _k?: string) => {},
+    handleSwitchToAgent: () => {},
     handleRecapture: () => {},
   });
   stateRef.current.apiKey = apiKey;
@@ -437,6 +450,54 @@ export const App: React.FC = () => {
     resultCacheRef.current.set(key, entry);
   }, []);
   const resultCacheClear = useCallback(() => { resultCacheRef.current.clear(); }, []);
+
+  // —— 聊天上下文记忆：按「聊天对象」累积每次解析出的对话，让跨屏/跨次截图的上下文接得上 ——
+  // 记忆的 key 由 前台应用 + 窗口标题 推导（微信这类标题不变的应用只能整体共享，见 buildChatMemoryKey）。
+  // 解析成功时用 rememberConversation() 合并，返回值（累计全量）回填进 screenReplyAnalysis.conversation，
+  // 下游所有 refine 调用点无需改动即可拿到完整上下文；贴回/复制时用 rememberSentReply() 记录「我」的回复。
+  const chatMemorySaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const chatMemoryKey = useCallback(
+    () => buildChatMemoryKey(stateRef.current.lastChatApp, stateRef.current.lastChatWindow),
+    []
+  );
+
+  // 去抖写盘：一次截图分析可能连着合并多轮，不必每次都落盘。
+  const persistChatMemory = useCallback(() => {
+    if (chatMemorySaveTimerRef.current) clearTimeout(chatMemorySaveTimerRef.current);
+    chatMemorySaveTimerRef.current = setTimeout(() => {
+      chatMemorySaveTimerRef.current = null;
+      void adapters.storageProvider.set('chatMemory', globalChatMemory.serialize()).catch(() => {});
+    }, 400);
+  }, [adapters]);
+
+  useEffect(() => () => {
+    if (chatMemorySaveTimerRef.current) clearTimeout(chatMemorySaveTimerRef.current);
+  }, []);
+
+  const rememberConversation = useCallback(
+    (analysis: ScreenReplyAnalysis): ScreenReplyAnalysis => {
+      const key = chatMemoryKey();
+      if (!key) return analysis;
+      const merged = globalChatMemory.mergeConversation(key, analysis.conversation);
+      persistChatMemory();
+      if (merged.length === 0) return analysis;
+      // 记忆内部用 role，ScreenReplyAnalysis 用 sender，回填时换个字段名
+      return { ...analysis, conversation: merged.map((m) => ({ sender: m.role, text: m.text })) };
+    },
+    [chatMemoryKey, persistChatMemory]
+  );
+
+  const rememberSentReply = useCallback(
+    (text: string) => {
+      const key = chatMemoryKey();
+      const trimmed = text.trim();
+      if (!key || !trimmed) return;
+      globalChatMemory.recordSentMessage(key, trimmed);
+      persistChatMemory();
+    },
+    [chatMemoryKey, persistChatMemory]
+  );
 
   // Show Toast
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -614,7 +675,7 @@ export const App: React.FC = () => {
 
   // 点击胶囊 → 窗口复原为完整面板并重放现有润色/回复流程(不自动生成以外的额外请求)
   const expandCapsule = useCallback(
-    async (mode: 'polish' | 'reply' | 'translate') => {
+    async (mode: 'agent' | 'polish' | 'reply' | 'translate') => {
       const info = capsuleInfoRef.current;
       invoke('append_log', {
         msg: `frontend: capsule action mode=${mode} info=${Boolean(info)} ts=${info ? info.ts : "-"} head=${info ? info.text.slice(0, 20) : "-"} action=${capsuleActionRef.current ?? 'none'} ui=${stateRef.current.uiMode}`,
@@ -665,7 +726,19 @@ export const App: React.FC = () => {
       // the native window. Never let the old request overwrite the new capsule.
       if (revision !== capsuleRevisionRef.current) return;
       capsuleActionRef.current = null;
-      if (mode === 'reply') {
+      if (mode === 'agent') {
+        setUiMode('panel');
+        setCapsule(null);
+        setShowEpoch((n) => n + 1);
+        setCurrentScreenshot(info.screenshot);
+        stateRef.current.currentScreenshot = info.screenshot;
+        setScreenReplyAnalysis(null);
+        stateRef.current.screenReplyAnalysis = null;
+        setOriginalText(info.text);
+        stateRef.current.originalText = info.text;
+        setAgentInitialPrompt(info.text);
+        stateRef.current.handleSwitchToAgent();
+      } else if (mode === 'reply') {
         // The expanded capsule is the same main window as the shortcut panel.
         setUiMode('panel');
         setCapsule(null);
@@ -1238,7 +1311,7 @@ export const App: React.FC = () => {
           draft_reply: '周五前给你，主体已经跑通了',
           clarify_options: packChips(['积极承诺（周五准时交付）', '委婉缓冲（周五给初稿）', '追问细节（对齐确认清单）']),
         };
-        setScreenReplyAnalysis(mockAnalysis);
+        setScreenReplyAnalysis(rememberConversation(mockAnalysis));
         setPolishedText(mockAnalysis.draft_reply);
         setOriginalText(mockAnalysis.last_message_from_other);
         stateRef.current.originalText = mockAnalysis.last_message_from_other;
@@ -1317,7 +1390,7 @@ export const App: React.FC = () => {
                 return;
               }
 
-              setScreenReplyAnalysis(parsed);
+              setScreenReplyAnalysis(rememberConversation(parsed));
               const draft = parsed.draft_reply || rawOutput.trim();
               setPolishedText(draft);
               const targetMsg = parsed.last_message_from_other || existingHint?.trim() || '屏幕聊天历史';
@@ -1367,7 +1440,7 @@ export const App: React.FC = () => {
         setError(String(e?.message || e));
       }
     }
-  }, [adapters, apiKey, endpoint, model, showToast, handleStartPolish]);
+  }, [adapters, apiKey, endpoint, model, showToast, handleStartPolish, rememberConversation]);
 
   stateRef.current.handleStartScreenReplyAnalysis = handleStartScreenReplyAnalysis;
 
@@ -1402,7 +1475,7 @@ export const App: React.FC = () => {
           draft_reply: '好，这个我来推进，有进展同步你',
           clarify_options: packChips(['积极推进（全力落实）', '严谨对齐（确认排期）', '委婉缓冲（稍后答复）']),
         };
-        setScreenReplyAnalysis(mockAnalysis);
+        setScreenReplyAnalysis(rememberConversation(mockAnalysis));
         setPolishedText(mockAnalysis.draft_reply);
         setOriginalText(targetMsg);
         stateRef.current.originalText = targetMsg;
@@ -1453,7 +1526,7 @@ export const App: React.FC = () => {
             }
 
             if (parsed) {
-              setScreenReplyAnalysis(parsed);
+              setScreenReplyAnalysis(rememberConversation(parsed));
               const draft = parsed.draft_reply || rawOutput.trim();
               setPolishedText(draft);
               if (cacheKey) resultCacheSet(cacheKey, { text: draft, screenReplyAnalysis: parsed });
@@ -1495,7 +1568,7 @@ export const App: React.FC = () => {
         setError(String(e?.message || e));
       }
     }
-  }, [adapters, apiKey, endpoint, model]);
+  }, [adapters, apiKey, endpoint, model, rememberConversation]);
 
   stateRef.current.handleStartTextReplyAnalysis = handleStartTextReplyAnalysis;
 
@@ -1699,6 +1772,8 @@ export const App: React.FC = () => {
       const savedPack = rawPack === 'general' ? 'auto' : rawPack;
       const savedCustomActions = Array.isArray(config.customActions) ? (config.customActions as CustomAction[]) : [];
       const savedGlossary = Array.isArray(config.glossary) ? (config.glossary as GlossaryRule[]) : [];
+      // 恢复聊天上下文记忆（与 rememberConversation 的去抖写盘配对）。快照损坏时内部会静默丢弃。
+      globalChatMemory.hydrate(config.chatMemory);
       const savedStyleSamples = Array.isArray(config.styleSamples) ? (config.styleSamples as string[]) : [];
       const savedOpacity = Number(config.windowOpacity ?? 1);
       // 兼容旧皮肤值：jade→dark, redwhite→light
@@ -1944,9 +2019,11 @@ export const App: React.FC = () => {
         const isSensitiveBlocked = event?.payload?.trigger === 'sensitive-blocked';
         const isScreenReply = isScreenReplyPayload(event?.payload);
         stateRef.current.hasScreenshot = isScreenReply;
-        // 记住最近的聊天应用，供面板内“重新抓取”后台截图使用
+        // 记住最近的聊天应用与窗口标题，供面板内「重新抓取」后台截图使用，
+        // 同时作为聊天上下文记忆的会话 key（应用 + 窗口标题 = 和谁在聊）
         if (event?.payload?.sourceApp && event.payload.sourceApp !== 'runbi-desktop.exe') {
           stateRef.current.lastChatApp = String(event.payload.sourceApp);
+          stateRef.current.lastChatWindow = String(event.payload.windowTitle || '');
         }
         invoke('append_log', { msg: `frontend: flags computed sr=${isScreenReply} sens=${isSensitiveBlocked} rcs=${stateRef.current.readChatScreenshot}` }).catch(() => {});
 
@@ -2018,7 +2095,10 @@ export const App: React.FC = () => {
           }
 
           const capsuleAction = event?.payload?.capsuleAction;
-          if (capsuleAction === 'reply') {
+          if (capsuleAction === 'agent') {
+            setAgentInitialPrompt(captured);
+            stateRef.current.handleSwitchToAgent();
+          } else if (capsuleAction === 'reply') {
             setActiveStyle('reply');
             stateRef.current.activeStyle = 'reply';
             stateRef.current.handleStartTextReplyAnalysis(captured);
@@ -2307,10 +2387,10 @@ export const App: React.FC = () => {
   const handleSwitchToPolish = useCallback(() => {
     const wasAgent = stateRef.current.showAgent;
     if (wasAgent) {
+      // 只切内容:四个 tab 共用同一套窗口几何,切 tab 不改窗口尺寸(改尺寸由 Rust
+      // 的 PANEL_SIZE 统一负责)。以前这里会把窗口缩回 560×520,于是点一下 tab
+      // 窗口就跳一次大小。
       setShowAgent(false);
-      if (isTauri) {
-        getCurrentWindow().setSize(new LogicalSize(560, 520)).catch(() => {});
-      }
     }
     if (!wasAgent && stateRef.current.activeStyle !== 'reply' && stateRef.current.activeStyle !== 'translate' && !stateRef.current.screenReplyAnalysis) return;
     translationPanelRef.current = false;
@@ -2345,10 +2425,8 @@ export const App: React.FC = () => {
 
   const handleSwitchToReply = useCallback(() => {
     if (stateRef.current.showAgent) {
+      // 同 handleSwitchToPolish:切 tab 不改窗口尺寸。
       setShowAgent(false);
-      if (isTauri) {
-        getCurrentWindow().setSize(new LogicalSize(560, 520)).catch(() => {});
-      }
     } else if (stateRef.current.activeStyle === 'reply') {
       return;
     }
@@ -2372,10 +2450,8 @@ export const App: React.FC = () => {
 
   const handleSwitchToTranslate = useCallback(() => {
     if (stateRef.current.showAgent) {
+      // 同 handleSwitchToPolish:切 tab 不改窗口尺寸。
       setShowAgent(false);
-      if (isTauri) {
-        getCurrentWindow().setSize(new LogicalSize(560, 520)).catch(() => {});
-      }
     }
     const text = stateRef.current.originalText;
     if (text.trim()) {
@@ -2399,10 +2475,15 @@ export const App: React.FC = () => {
   }, [activateTranslate, isTauri, resultCacheGet, resultCacheKey]);
 
   // ---- 多专家并行：同一输入并发发给 2-4 位专家，各自独立流式 ----
+  // 并行对比是唯一会临时改窗口尺寸的模式（要横向铺 2-4 列）；退出时回到基准尺寸。
   const applyParallelWindowSize = useCallback((wide: boolean) => {
     if (!isTauri) return;
     getCurrentWindow()
-      .setSize(new LogicalSize(wide ? 1000 : 560, wide ? 660 : 520))
+      .setSize(
+        wide
+          ? new LogicalSize(1000, 660)
+          : new LogicalSize(PANEL_WINDOW_WIDTH, PANEL_WINDOW_HEIGHT)
+      )
       .catch((e) => console.warn('set window size failed:', e));
   }, [isTauri]);
 
@@ -2433,13 +2514,14 @@ export const App: React.FC = () => {
     setShowSettings(false);
     setShowHistory(false);
     setShowOnboarding(false);
-    closeParallel();
-    if (isTauri) {
-      getCurrentWindow()
-        .setSize(new LogicalSize(860, 640))
-        .catch(() => {});
+    if (stateRef.current.originalText?.trim()) {
+      setAgentInitialPrompt(stateRef.current.originalText);
     }
-  }, [closeParallel, isTauri]);
+    // 智能体尺寸即基准尺寸，所以这里不需要改窗口几何；只有在并行对比
+    // (1000×660) 里点进来时才要靠 closeParallel 收回基准尺寸。
+    closeParallel();
+  }, [closeParallel]);
+  stateRef.current.handleSwitchToAgent = handleSwitchToAgent;
 
   const handleStartParallel = useCallback(
     (experts: ExpertAgent[]) => {
@@ -2696,6 +2778,10 @@ export const App: React.FC = () => {
     const textToCopy = polishedText || originalText;
     const ok = await adapters.textReplacer.copyToClipboard(textToCopy);
     if (ok) {
+      // 回复场景复制的就是要发给对方的话，同步进聊天记忆，下次截图不会把它当"对方说的"
+      if (stateRef.current.screenReplyAnalysis || stateRef.current.activeStyle === 'reply') {
+        rememberSentReply(textToCopy);
+      }
       showToast('已复制到剪贴板');
     }
   };
@@ -2707,6 +2793,10 @@ export const App: React.FC = () => {
     const autoSend = stateRef.current.activeStyle === 'reply' || Boolean(stateRef.current.screenReplyAnalysis);
     const res = await (adapters.textReplacer as any).replaceText(textToInsert, null, shouldHide, autoSend);
     if (res.success) {
+      // 回复已经发出去了，同步进聊天记忆，后续轮次把它当"我说过的话"
+      if (autoSend) {
+        rememberSentReply(textToInsert);
+      }
       setAttachedFiles([]);
       setClipboardRef(null);
       showToast(
@@ -2726,6 +2816,21 @@ export const App: React.FC = () => {
     }
   };
 
+  // 清空当前聊天对象的上下文记忆（面板上「清空记忆」）
+  const handleClearChatMemory = useCallback(() => {
+    const key = chatMemoryKey();
+    if (key) {
+      globalChatMemory.clearSession(key);
+      persistChatMemory();
+    }
+    // ref 与 state 都清掉：ref 供下游 refine 立即读到，state 驱动界面上的记录列表
+    if (stateRef.current.screenReplyAnalysis) {
+      stateRef.current.screenReplyAnalysis = { ...stateRef.current.screenReplyAnalysis, conversation: [] };
+    }
+    setScreenReplyAnalysis((prev) => (prev ? { ...prev, conversation: [] } : prev));
+    showToast('已清空当前会话的聊天上下文');
+  }, [chatMemoryKey, persistChatMemory, showToast]);
+
   // Close / Hide Window
   const handleClose = () => {
     if (stateRef.current.isPinned) {
@@ -2736,10 +2841,9 @@ export const App: React.FC = () => {
     setShowHistory(false);
     setShowOnboarding(false);
     if (stateRef.current.showAgent) {
+      // 退出智能体只需恢复内容状态:窗口尺寸本来就是基准尺寸，不再缩回 560×520，
+      // 否则下次唤出面板时窗口会以上一次的尺寸出现。
       setShowAgent(false);
-      if (isTauri) {
-        getCurrentWindow().setSize(new LogicalSize(560, 520)).catch(() => {});
-      }
     }
     setAttachedFiles([]);
     setClipboardRef(null);
@@ -2778,10 +2882,12 @@ export const App: React.FC = () => {
     setIsPinned(nextPinned);
     if (isTauri) {
       try {
-        await getCurrentWindow().setAlwaysOnTop(nextPinned);
+        // Rust owns always-on-top: it has to survive the capsule/panel mode flips that rewrite the
+        // flag, and the native hide paths consult the same flag before taking the window away.
+        await invoke('set_window_pinned', { pinned: nextPinned });
         showToast(nextPinned ? '已开启始终置顶' : '已取消置顶');
       } catch (e) {
-        console.warn('setAlwaysOnTop failed:', e);
+        console.warn('set_window_pinned failed:', e);
       }
     }
   };
@@ -2822,10 +2928,8 @@ export const App: React.FC = () => {
           return;
         }
         if (s.showAgent) {
+          // 同 handleClose:退出智能体不再改窗口尺寸(基准尺寸统一由 Rust 负责)。
           setShowAgent(false);
-          if (isTauri) {
-            getCurrentWindow().setSize(new LogicalSize(560, 520)).catch(() => {});
-          }
           return;
         }
         if (s.showParallel) {
@@ -2964,7 +3068,7 @@ export const App: React.FC = () => {
   // stale activeStyle value after the translation click.
   const renderedPanelStyle: PolishStyle = translationPanelRef.current ? 'translate' : activeStyle;
 
-  // 缺陷2 微胶囊:独占整棵渲染树。窗口只有 196×44,若把胶囊塞进面板容器树,
+  // 缺陷2 微胶囊:独占整棵渲染树。窗口只有 236×44,若把胶囊塞进面板容器树,
   // 标题栏(shrink-0)先占满高度,胶囊被 overflow-hidden 裁出可视区——
   // 实测表现为"窗口存在且置顶,但胶囊永远看不见"。
   if (uiMode === 'capsule' && capsule) {
@@ -2974,11 +3078,12 @@ export const App: React.FC = () => {
           key={capsule.ts}
           visible={capsuleVisible}
           copied={capsuleCopied}
-          onSearch={handleCapsuleSearch}
+          onAgent={() => { void expandCapsule('agent'); }}
           onPolish={() => { void expandCapsule('polish'); }}
           onReply={() => { void expandCapsule('reply'); }}
           onTranslate={() => { void expandCapsule('translate'); }}
           onCopy={handleCapsuleCopy}
+          onSearch={handleCapsuleSearch}
           onHoverChange={handleCapsuleHover}
         />
       </div>
@@ -2988,7 +3093,10 @@ export const App: React.FC = () => {
   return (
     <div className="flex h-screen w-screen flex-col items-center justify-start overflow-hidden bg-transparent p-3 font-sans select-none">
       {/* Raycast Container (keyed by showEpoch so enter animation replays on each summon) */}
-      <div key={showEpoch} className={`runbi-window runbi-enter relative flex h-full min-h-0 w-full flex-col overflow-hidden rounded-2xl backdrop-blur-xl ${showParallel || showAgent ? 'max-w-[1000px]' : 'max-w-[540px]'}`}>
+      {/* 面板宽度不再分模式收紧:四个 tab 与并行对比现在共用同一套窗口几何,
+          若这里还按模式给 540px 上限,宽窗口下窄面板会浮在中间、两侧留出透明空隙。
+          上限只用来兜住 1000px 的并行窗口,实际宽度始终由窗口决定。 */}
+      <div key={showEpoch} className="runbi-window runbi-enter relative flex h-full min-h-0 w-full max-w-[1000px] flex-col overflow-hidden rounded-2xl backdrop-blur-xl">
         
         {/* Title & Drag Region */}
         <div
@@ -3788,10 +3896,17 @@ export const App: React.FC = () => {
           <AgentPanel
             endpoint={resolveEndpoint(endpoint)}
             apiKey={apiKey}
-            model={model || 'deepseek-chat'}
-            onModelChange={setModel}
+            model={model}
+            onModelChange={(newModel) => {
+              setModel(newModel);
+              void adapters.storageProvider.set('model', newModel).catch(() => showToast('模型已切换，但保存失败，请重试'));
+            }}
             modelList={modelList}
+            onRefreshModels={handleFetchModels}
+            modelsLoading={modelsLoading}
+            modelListError={modelListError}
             onToast={showToast}
+            initialPrompt={agentInitialPrompt}
           />
         ) : (
           /* Main Polish Panel Component */
@@ -3834,6 +3949,7 @@ export const App: React.FC = () => {
             onRegenerate={handleRegenerate}
             onCopy={handleCopy}
             onReplace={handleReplace}
+            onClearChatMemory={handleClearChatMemory}
             attachedFiles={attachedFiles}
             onAttachFile={(f) => setAttachedFiles((prev) => [...prev, f])}
             onRemoveFile={(idx) => setAttachedFiles((prev) => prev.filter((_, i) => i !== idx))}
