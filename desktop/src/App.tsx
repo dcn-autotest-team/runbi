@@ -258,7 +258,11 @@ export const App: React.FC = () => {
   const [showHistory, setShowHistory] = useState<boolean>(false);
   const [showOnboarding, setShowOnboarding] = useState<boolean>(false);
   const [showAgent, setShowAgent] = useState<boolean>(false);
+  const [agentOpened, setAgentOpened] = useState(false);
   const [agentInitialPrompt, setAgentInitialPrompt] = useState<string>('');
+  useEffect(() => {
+    if (showAgent) setAgentOpened(true);
+  }, [showAgent]);
   const [settingsTab, setSettingsTab] = useState<'model' | 'desktop' | 'persona' | 'about'>('model');
   const [recoverableDraft, setRecoverableDraft] = useState<DraftSnapshot | null>(null);
   const [lastReplacement, setLastReplacement] = useState<LastReplacementSnapshot | null>(null);
@@ -3892,23 +3896,7 @@ export const App: React.FC = () => {
               );
             }}
           />
-        ) : showAgent ? (
-          <AgentPanel
-            endpoint={resolveEndpoint(endpoint)}
-            apiKey={apiKey}
-            model={model}
-            onModelChange={(newModel) => {
-              setModel(newModel);
-              void adapters.storageProvider.set('model', newModel).catch(() => showToast('模型已切换，但保存失败，请重试'));
-            }}
-            modelList={modelList}
-            onRefreshModels={handleFetchModels}
-            modelsLoading={modelsLoading}
-            modelListError={modelListError}
-            onToast={showToast}
-            initialPrompt={agentInitialPrompt}
-          />
-        ) : (
+        ) : showAgent ? null : (
           /* Main Polish Panel Component */
           <PolishPanel
             embedded
@@ -3983,6 +3971,30 @@ export const App: React.FC = () => {
             }
           />
         )}
+
+        {/* Keep the agent stream mounted while other tabs are shown. */}
+        {(showAgent || agentOpened) && <div
+          className="min-h-0 flex-1"
+          style={{ display: showAgent && !showSettings && !showOnboarding && !showHistory && !showParallel ? 'flex' : 'none' }}
+          aria-hidden={!showAgent || showSettings || showOnboarding || showHistory || showParallel}
+        >
+          <AgentPanel
+            visible={showAgent && !showSettings && !showOnboarding && !showHistory && !showParallel}
+            endpoint={resolveEndpoint(endpoint)}
+            apiKey={apiKey}
+            model={model}
+            onModelChange={(newModel) => {
+              setModel(newModel);
+              void adapters.storageProvider.set('model', newModel).catch(() => showToast('模型已切换，但保存失败，请重试'));
+            }}
+            modelList={modelList}
+            onRefreshModels={handleFetchModels}
+            modelsLoading={modelsLoading}
+            modelListError={modelListError}
+            onToast={showToast}
+            initialPrompt={agentInitialPrompt}
+          />
+        </div>}
 
         {/* 内置库浮层：话术模板库 / 专家提示词库 */}
         {showScriptLibrary && (

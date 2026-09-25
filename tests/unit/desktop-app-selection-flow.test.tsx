@@ -88,6 +88,48 @@ describe('Desktop selection-to-polish flow', () => {
     expect(invoke.mock.calls.some(([cmd]: [string]) => cmd === 'hide_window')).toBe(false);
   });
 
+  it('keeps an executing agent and its stream alive across tab switches', async () => {
+    let streamMessage: ((message: any) => void) | undefined;
+    (window as any).__TAURI_INTERNALS__.transformCallback = (callback: (message: any) => void) => {
+      streamMessage = callback;
+      return 1;
+    };
+    const invoke = (window as any).__TAURI_INTERNALS__.invoke;
+    invoke.mockImplementation((command: string) => command === 'start_agent_task'
+      ? new Promise<void>(() => {})
+      : Promise.resolve(null));
+
+    await act(async () => root.render(<App />));
+    const tab = (name: string) => Array.from(host.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
+      .find((item) => item.textContent?.includes(name))!;
+    await act(async () => tab('智能体').click());
+    const agent = host.querySelector('.runbi-agent')!;
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="选择模型"]')!.click());
+    const modelInput = host.querySelector<HTMLInputElement>('.agent-model-menu input')!;
+    await act(async () => {
+      modelInput.value = 'test-model';
+      modelInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    });
+    const input = host.querySelector<HTMLTextAreaElement>('.agent-input')!;
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!;
+      setter.call(input, '继续执行');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="执行任务"]')!.click());
+    expect(invoke.mock.calls.some(([cmd]: [string]) => cmd === 'start_agent_task')).toBe(true);
+
+    await act(async () => tab('润色').click());
+    expect(host.querySelector('.runbi-agent')).toBe(agent);
+    expect(agent.parentElement?.style.display).toBe('none');
+    expect(invoke.mock.calls.some(([cmd]: [string]) => cmd === 'abort_agent_task')).toBe(false);
+    await act(async () => streamMessage?.({ index: 0, message: { type: 'ContentChunk', payload: { delta: '任务仍在运行' } } }));
+    await act(async () => tab('智能体').click());
+    expect(host.querySelector('.runbi-agent')).toBe(agent);
+    expect(host.textContent).toContain('任务仍在运行');
+    expect(host.querySelector('.agent-output-speed')?.textContent).toContain('tokens/s');
+  });
+
   it('shows an available update once without remounting the auto-checker', async () => {
     updaterMocks.check
       .mockResolvedValueOnce({

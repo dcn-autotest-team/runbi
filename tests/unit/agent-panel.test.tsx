@@ -24,12 +24,14 @@ vi.mock('@tauri-apps/api/core', () => {
 });
 
 import { AgentPanel } from '../../desktop/src/components/AgentPanel';
+import { STORAGE_KEY_SESSIONS, STORAGE_KEY_ACTIVE_ID } from '../../desktop/src/components/agentSessionStorage';
 
 describe('Autonomous AgentPanel', () => {
   let host: HTMLDivElement;
   let root: Root;
 
   beforeEach(() => {
+    window.localStorage.clear();
     invokeMock.mockReset();
     lastCreatedChannel = null;
     host = document.createElement('div');
@@ -40,6 +42,47 @@ describe('Autonomous AgentPanel', () => {
   afterEach(() => {
     act(() => root.unmount());
     host.remove();
+    window.localStorage.clear();
+  });
+
+  it('updates estimated output speed on a timer, excludes tool waits, and freezes when done', async () => {
+    vi.useFakeTimers();
+    let now = 0;
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => now);
+    let finishTask!: () => void;
+    invokeMock.mockImplementation(() => new Promise<void>((resolve) => { finishTask = resolve; }));
+    try {
+      act(() => root.render(<AgentPanel endpoint="http://localhost/v1" apiKey="key" model="test" initialPrompt="test speed" />));
+      await act(async () => { Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.includes('执行'))!.click(); });
+      expect(host.textContent).toContain('— tokens/s');
+      expect(host.querySelector('.agent-composer-wrap > .agent-output-speed')).not.toBeNull();
+      expect(host.querySelector('.agent-response .agent-output-speed')).toBeNull();
+      const emit = (type: string, payload: object) => act(() => lastCreatedChannel.onmessage({ type, payload }));
+      emit('ThinkingChunk', { delta: '中'.repeat(15) });
+      now = 1000;
+      act(() => vi.advanceTimersByTime(1000));
+      expect(host.textContent).toContain('10.0 tokens/s');
+      expect(host.textContent).toContain('实时均速');
+      emit('ToolProposed', { call_id: 'tool', name: 'run_cli', command: 'pwd', requires_approval: true });
+      now = 11000;
+      act(() => vi.advanceTimersByTime(10000));
+      expect(host.textContent).toContain('10.0 tokens/s');
+      emit('ContentChunk', { delta: '中'.repeat(15) });
+      now = 12000;
+      act(() => vi.advanceTimersByTime(1000));
+      expect(host.textContent).toContain('10.0 tokens/s');
+      expect(host.textContent).toContain('约 20 tokens');
+      emit('Done', { success: true, total_tokens: 999 });
+      await act(async () => finishTask());
+      expect(host.textContent).toContain('平均速度');
+      now = 22000;
+      act(() => vi.advanceTimersByTime(10000));
+      expect(host.textContent).toContain('10.0 tokens/s');
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      clock.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it('renders initial agent panel with goal input and start button', () => {
@@ -295,5 +338,309 @@ describe('Autonomous AgentPanel', () => {
     act(() => host.querySelector('.agent-model-menu input')!.dispatchEvent(escape));
     expect(escape.defaultPrevented).toBe(true);
     expect(host.querySelector('.agent-model-menu')).toBeNull();
+  });
+
+  it('loads historical sessions from storage, opens history drawer, and switches session', async () => {
+    const mockSessions = [
+      {
+        id: 'sess-1',
+        title: '历史排查任务',
+        createdAt: 1000,
+        updatedAt: 2000,
+        projectDir: 'D:/test-proj',
+        turns: [
+          {
+            id: 'turn-1',
+            prompt: '分析内存泄漏',
+            projectDir: 'D:/test-proj',
+            status: 'done' as const,
+            thinking: '分析中...',
+            toolCalls: [],
+            finalContent: '发现句柄未释放',
+            statusMessage: '任务已完成',
+          },
+        ],
+      },
+      {
+        id: 'sess-2',
+        title: '构建优化任务',
+        createdAt: 500,
+        updatedAt: 1500,
+        projectDir: 'D:/build-proj',
+        turns: [
+          {
+            id: 'turn-2',
+            prompt: '优化打包速度',
+            projectDir: 'D:/build-proj',
+            status: 'done' as const,
+            thinking: '',
+            toolCalls: [],
+            finalContent: '优化完成，耗时减少40%',
+            statusMessage: '任务已完成',
+          },
+        ],
+      },
+    ];
+    window.localStorage.setItem(STORAGE_KEY_SESSIONS, JSON.stringify(mockSessions));
+    window.localStorage.setItem(STORAGE_KEY_ACTIVE_ID, 'sess-1');
+
+    act(() => {
+      root.render(
+        <AgentPanel endpoint="http://localhost:8000/v1" apiKey="key" model="deepseek-chat" />
+      );
+    });
+
+    // Header displays active session title & count badge
+    expect(host.textContent).toContain('历史排查任务');
+    expect(host.textContent).toContain('1 轮对话');
+    expect(host.textContent).toContain('分析内存泄漏');
+    expect(host.textContent).toContain('发现句柄未释放');
+
+    // Click [历史会话] button to open drawer
+    const historyBtn = host.querySelector<HTMLButtonElement>('[aria-label="历史会话"]')!;
+    expect(historyBtn).not.toBeNull();
+    expect(historyBtn.textContent).toContain('2'); // badge count
+    act(() => {
+      historyBtn.click();
+    });
+
+    // Drawer is rendered
+    const drawer = host.querySelector('.agent-history-drawer');
+    expect(drawer).not.toBeNull();
+    const items = host.querySelectorAll('.agent-history-item');
+    expect(items.length).toBe(2);
+
+    // Switch to sess-2
+    act(() => {
+      (items[1] as HTMLElement).click();
+    });
+
+    // Now sess-2 is active
+    expect(host.textContent).toContain('构建优化任务');
+    expect(host.textContent).toContain('优化打包速度');
+    expect(host.textContent).toContain('优化完成，耗时减少40%');
+    expect(host.querySelector<HTMLInputElement>('input[aria-label="工作目录"]')!.value).toBe('D:/build-proj');
+  });
+
+  it('continues conversation in a historical session and carries prior turns into start_agent_task history', async () => {
+    const mockSessions = [
+      {
+        id: 'sess-continue',
+        title: '代码重构会话',
+        createdAt: 1000,
+        updatedAt: 2000,
+        projectDir: '.',
+        turns: [
+          {
+            id: 'turn-c1',
+            prompt: '查看 package.json 并分析依赖',
+            projectDir: '.',
+            status: 'done' as const,
+            thinking: '',
+            toolCalls: [
+              {
+                callId: 'call-1',
+                name: 'run_cli',
+                command: 'cat package.json',
+                requiresApproval: false,
+                pendingApproval: false,
+                output: '{"dependencies": {"react": "^18.0.0"}}',
+                exitCode: 0,
+              },
+            ],
+            finalContent: '项目包含 React 18 依赖',
+            statusMessage: '任务已完成',
+          },
+        ],
+      },
+    ];
+    window.localStorage.setItem(STORAGE_KEY_SESSIONS, JSON.stringify(mockSessions));
+    window.localStorage.setItem(STORAGE_KEY_ACTIVE_ID, 'sess-continue');
+
+    let finishTask!: () => void;
+    invokeMock.mockImplementation((command) =>
+      command === 'start_agent_task'
+        ? new Promise<void>((resolve) => {
+            finishTask = resolve;
+          })
+        : Promise.resolve()
+    );
+
+    act(() => {
+      root.render(
+        <AgentPanel endpoint="http://localhost:8000/v1" apiKey="key" model="deepseek-chat" />
+      );
+    });
+
+    // Verify existing turn is in DOM
+    expect(host.textContent).toContain('查看 package.json 并分析依赖');
+    expect(host.textContent).toContain('项目包含 React 18 依赖');
+
+    // Type the continuation prompt
+    const textarea = host.querySelector('textarea')!;
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!;
+      setter.call(textarea, '根据上面的依赖，分析是否存在已知的安全风险');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+
+    // Press Enter to send
+    await act(async () => {
+      textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    });
+
+    // Verify invokeMock was called with previous turn carried into history!
+    expect(invokeMock).toHaveBeenCalledWith(
+      'start_agent_task',
+      expect.objectContaining({
+        params: expect.objectContaining({
+          prompt: '根据上面的依赖，分析是否存在已知的安全风险',
+          history: expect.arrayContaining([
+            expect.objectContaining({
+              role: 'user',
+              content: '查看 package.json 并分析依赖',
+            }),
+            expect.objectContaining({
+              role: 'assistant',
+              content: expect.stringContaining('项目包含 React 18 依赖'),
+            }),
+          ]),
+        }),
+      })
+    );
+
+    // Stream the new turn's response and finish
+    await act(async () => {
+      lastCreatedChannel.onmessage({
+        type: 'ContentChunk',
+        payload: { delta: 'React 18 无重大已知漏洞' },
+      });
+      lastCreatedChannel.onmessage({
+        type: 'Done',
+        payload: { success: true },
+      });
+      finishTask();
+    });
+
+    // Verify updated session is persisted in localStorage with 2 turns
+    const rawSaved = window.localStorage.getItem(STORAGE_KEY_SESSIONS);
+    expect(rawSaved).not.toBeNull();
+    const parsed = JSON.parse(rawSaved!);
+    const session = parsed.find((s: any) => s.id === 'sess-continue');
+    expect(session).toBeDefined();
+    expect(session.turns).toHaveLength(2);
+    expect(session.turns[1].prompt).toBe('根据上面的依赖，分析是否存在已知的安全风险');
+    expect(session.turns[1].finalContent).toBe('React 18 无重大已知漏洞');
+    expect(session.turns[1].status).toBe('done');
+  });
+
+  it('deletes a historical session from drawer and updates local storage', () => {
+    const mockSessions = [
+      {
+        id: 'sess-to-del',
+        title: '待删除会话',
+        createdAt: 1000,
+        updatedAt: 2000,
+        projectDir: '.',
+        turns: [
+          {
+            id: 't-del',
+            prompt: '临时测试',
+            projectDir: '.',
+            status: 'done' as const,
+            thinking: '',
+            toolCalls: [],
+            finalContent: '测试完成',
+          },
+        ],
+      },
+      {
+        id: 'sess-keep',
+        title: '保留的会话',
+        createdAt: 500,
+        updatedAt: 1500,
+        projectDir: '.',
+        turns: [],
+      },
+    ];
+    window.localStorage.setItem(STORAGE_KEY_SESSIONS, JSON.stringify(mockSessions));
+    window.localStorage.setItem(STORAGE_KEY_ACTIVE_ID, 'sess-to-del');
+
+    act(() => {
+      root.render(
+        <AgentPanel endpoint="http://localhost:8000/v1" apiKey="key" model="deepseek-chat" />
+      );
+    });
+
+    // Open history drawer
+    act(() => {
+      host.querySelector<HTMLButtonElement>('[aria-label="历史会话"]')!.click();
+    });
+
+    // Find delete button on sess-to-del
+    const delButtons = host.querySelectorAll<HTMLButtonElement>('.agent-history-item-del');
+    expect(delButtons.length).toBe(2);
+    act(() => {
+      delButtons[0].click();
+    });
+
+    // Verify localStorage only has sess-keep now
+    const raw = window.localStorage.getItem(STORAGE_KEY_SESSIONS);
+    const parsed = JSON.parse(raw!);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].id).toBe('sess-keep');
+    expect(window.localStorage.getItem(STORAGE_KEY_ACTIVE_ID)).toBeNull();
+
+    // Verify active view was cleared to empty state
+    expect(host.textContent).not.toContain('临时测试');
+  });
+
+  it('resets current view on new session while preserving previous session in history', () => {
+    const mockSessions = [
+      {
+        id: 'sess-persisted',
+        title: '保留的历史会话',
+        createdAt: 1000,
+        updatedAt: 2000,
+        projectDir: '.',
+        turns: [
+          {
+            id: 't-1',
+            prompt: '第一条指令',
+            projectDir: '.',
+            status: 'done' as const,
+            thinking: '',
+            toolCalls: [],
+            finalContent: '指令已执行',
+          },
+        ],
+      },
+    ];
+    window.localStorage.setItem(STORAGE_KEY_SESSIONS, JSON.stringify(mockSessions));
+    window.localStorage.setItem(STORAGE_KEY_ACTIVE_ID, 'sess-persisted');
+
+    act(() => {
+      root.render(
+        <AgentPanel endpoint="http://localhost:8000/v1" apiKey="key" model="deepseek-chat" />
+      );
+    });
+
+    expect(host.textContent).toContain('第一条指令');
+
+    // Click [新会话]
+    const newBtn = host.querySelector<HTMLButtonElement>('[title="开启全新会话"]')!;
+    act(() => {
+      newBtn.click();
+    });
+
+    // Content resets to welcome state
+    expect(host.textContent).not.toContain('第一条指令');
+    expect(host.textContent).toContain('把任务交给润笔');
+
+    // Check drawer: sess-persisted is still in history
+    act(() => {
+      host.querySelector<HTMLButtonElement>('[aria-label="历史会话"]')!.click();
+    });
+    expect(host.textContent).toContain('保留的历史会话');
   });
 });

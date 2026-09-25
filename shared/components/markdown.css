@@ -1,0 +1,44 @@
+.runbi-markdown {
+  --markdown-border: var(--runbi-border, rgba(127, 127, 127, .25));
+  --markdown-surface: var(--runbi-surface-raised, rgba(127, 127, 127, .08));
+  min-width: 0;
+  max-width: 100%;
+  color: inherit;
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.runbi-markdown > * + * { margin-top: .8em; }
+.runbi-markdown :is(h1, h2, h3, h4, h5, h6) { color: inherit; font-weight: 650; line-height: 1.5; margin: 1.2em 0 .5em; }
+.runbi-markdown > :first-child { margin-top: 0; }
+.runbi-markdown h1 { font-size: 1.5em; }
+.runbi-markdown h2 { font-size: 1.3em; }
+.runbi-markdown h3 { font-size: 1.15em; }
+.runbi-markdown :is(h4, h5, h6) { font-size: 1em; }
+.runbi-markdown :is(strong, em) { color: inherit; }
+.runbi-markdown strong { font-weight: 650; }
+.runbi-markdown em { font-style: italic; }
+.runbi-markdown p { margin-bottom: .5em; white-space: pre-line; }
+.runbi-markdown ul { list-style: disc; padding-left: 1.6em; }
+.runbi-markdown ol { list-style: decimal; padding-left: 1.6em; }
+.runbi-markdown li { margin: .25em 0; }
+.runbi-markdown li > :is(ul, ol) { margin-top: .25em; }
+.runbi-markdown li > p { margin: .4em 0; }
+.runbi-markdown .contains-task-list { list-style: none; padding-left: .25em; }
+.runbi-markdown input[type="checkbox"] { margin-right: .5em; vertical-align: middle; }
+.runbi-markdown blockquote { margin-left: 0; padding: .25em 1em; border-left: 3px solid var(--markdown-border); }
+.runbi-markdown a { color: inherit; text-decoration: underline; text-underline-offset: 3px; }
+.runbi-markdown a:hover { opacity: .8; }
+.runbi-markdown :is(a, pre, .runbi-markdown-table):focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.runbi-markdown code { font-family: ui-monospace, 'Cascadia Code', Consolas, monospace; font-size: .92em; background: var(--markdown-surface); padding: .15em .35em; border-radius: 4px; color: inherit; }
+.runbi-markdown-code { border: 1px solid var(--markdown-border); border-radius: 10px; overflow: hidden; background: var(--markdown-surface); }
+.runbi-markdown-code-label { padding: 6px 12px; border-bottom: 1px solid var(--markdown-border); font-family: ui-monospace, monospace; font-size: .85em; }
+.runbi-markdown pre { margin: 0; padding: 12px 14px; max-width: 100%; overflow-x: auto; white-space: pre; line-height: 1.65; }
+.runbi-markdown pre code { border: 0; border-radius: 0; background: transparent; padding: 0; white-space: inherit; overflow-wrap: normal; }
+.runbi-markdown-table { max-width: 100%; overflow-x: auto; border: 1px solid var(--markdown-border); border-radius: 8px; }
+.runbi-markdown table { width: 100%; border-collapse: collapse; font-size: .95em; }
+.runbi-markdown :is(th, td) { padding: 8px 12px; border-bottom: 1px solid var(--markdown-border); min-width: 5em; text-align: left; }
+.runbi-markdown th { background: var(--markdown-surface); font-weight: 600; }
+.runbi-markdown tr:last-child td { border-bottom: 0; }
+.runbi-markdown hr { border: 0; border-top: 1px solid var(--markdown-border); margin: 1.2em 0; }
+.runbi-markdown-cursor { display: inline-block; width: .4em; height: 1em; margin-left: .2em; vertical-align: middle; background: currentColor; border-radius: 2px; }

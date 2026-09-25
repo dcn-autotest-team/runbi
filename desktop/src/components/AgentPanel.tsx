@@ -24,10 +24,26 @@ import {
   Sparkles,
   FileText,
   GitBranch,
+  History,
+  Trash2,
+  X,
+  Clock,
+  MessageSquare,
 } from 'lucide-react';
 import { MarkdownRenderer } from '@runbi/shared/components';
+import { estimateTokens } from '@runbi/shared/types';
+import {
+  AgentSession,
+  loadSavedSessions,
+  saveSessions,
+  loadActiveSessionId,
+  saveActiveSessionId,
+  formatSessionTime,
+} from './agentSessionStorage';
+
 
 export interface AgentPanelProps {
+  visible?: boolean;
   endpoint: string;
   apiKey: string;
   model: string;
@@ -61,9 +77,11 @@ export interface AgentTurn {
   finalContent: string;
   compactionNote?: string;
   statusMessage?: string;
+  outputStats?: { tokens: number; elapsedMs: number; streaming: boolean };
 }
 
 export const AgentPanel: React.FC<AgentPanelProps> = ({
+  visible = true,
   endpoint,
   apiKey,
   model,
@@ -89,8 +107,36 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
   const [allowAllCli, setAllowAllCli] = useState(false);
   const [isBrowsingFolder, setIsBrowsingFolder] = useState(false);
 
+  // Session storage & multi-turn memory
+  const [sessions, setSessions] = useState<AgentSession[]>(() => loadSavedSessions());
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(() => loadActiveSessionId());
+  const [showHistory, setShowHistory] = useState(false);
+  const activeSessionIdRef = useRef<string | null>(activeSessionId);
+  useEffect(() => {
+    activeSessionIdRef.current = activeSessionId;
+  }, [activeSessionId]);
+
   // Session history (multi-turn memory)
   const [turns, setTurns] = useState<AgentTurn[]>([]);
+  const turnsRef = useRef<AgentTurn[]>(turns);
+  useEffect(() => {
+    turnsRef.current = turns;
+  }, [turns]);
+
+  // Restore active session turns on mount if present
+  useEffect(() => {
+    const savedActiveId = loadActiveSessionId();
+    if (savedActiveId) {
+      const active = sessions.find((s) => s.id === savedActiveId);
+      if (active) {
+        setTurns(active.turns);
+        turnsRef.current = active.turns;
+        if (active.projectDir && active.projectDir !== '.') {
+          setProjectDir(active.projectDir);
+        }
+      }
+    }
+  }, []);
 
   const [isRunning, setIsRunning] = useState(false);
   const [showModelDropdown, setShowModelDropdown] = useState(false);
@@ -102,21 +148,23 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
   const currentTaskRef = useRef('');
   const browsingRef = useRef(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const speedTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      if (speedTimerRef.current !== null) clearInterval(speedTimerRef.current);
       if (runningRef.current) void invoke('abort_agent_task').catch(() => {});
     };
   }, []);
 
   // Auto-scroll on content updates
   useEffect(() => {
-    if (scrollRef.current && followOutput.current) {
+    if (visible && scrollRef.current && followOutput.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [turns]);
+  }, [turns, visible]);
 
   // Click outside to close model dropdown
   useEffect(() => {
@@ -169,7 +217,27 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
       browsingRef.current = false;
       if (mountedRef.current) setIsBrowsingFolder(false);
     }
-  }, [isRunning, projectDir, onToast]);
+  }, [projectDir, onToast]);
+
+  const persistSession = useCallback((sessionId: string, currentTurns: AgentTurn[], overrideTitle?: string, dir?: string) => {
+    setSessions((prevList) => {
+      const existingIdx = prevList.findIndex((s) => s.id === sessionId);
+      const title = overrideTitle || (existingIdx >= 0 ? prevList[existingIdx].title : (currentTurns[0]?.prompt?.slice(0, 28) || '新任务'));
+      const projectPath = dir ?? (existingIdx >= 0 ? prevList[existingIdx].projectDir : projectDir);
+      const updatedSession: AgentSession = {
+        id: sessionId,
+        title,
+        createdAt: existingIdx >= 0 ? prevList[existingIdx].createdAt : Date.now(),
+        updatedAt: Date.now(),
+        projectDir: projectPath,
+        turns: currentTurns,
+      };
+
+      const nextList = [updatedSession, ...prevList.filter((s) => s.id !== sessionId)];
+      saveSessions(nextList);
+      return nextList;
+    });
+  }, [projectDir]);
 
   const handleNewSession = useCallback(() => {
     if (runningRef.current) {
@@ -177,11 +245,51 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
       return;
     }
     setTurns([]);
+    turnsRef.current = [];
     currentTaskRef.current = '';
     setTaskPrompt('');
+    setActiveSessionId(null);
+    activeSessionIdRef.current = null;
+    saveActiveSessionId(null);
     inputRef.current?.focus();
     onToast?.('已开启新会话，上下文已重置');
-  }, [isRunning, onToast]);
+  }, [onToast]);
+
+  const handleSwitchSession = useCallback((sessionId: string) => {
+    if (runningRef.current) {
+      onToast?.('请先停止当前正在运行的任务再切换会话');
+      return;
+    }
+    const target = sessions.find((s) => s.id === sessionId);
+    if (!target) return;
+    setActiveSessionId(target.id);
+    activeSessionIdRef.current = target.id;
+    saveActiveSessionId(target.id);
+    setTurns(target.turns);
+    turnsRef.current = target.turns;
+    if (target.projectDir && target.projectDir !== '.') {
+      setProjectDir(target.projectDir);
+    }
+    setShowHistory(false);
+    onToast?.(`已切换至: ${target.title}`);
+  }, [sessions, onToast]);
+
+  const handleDeleteSession = useCallback((sessionId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSessions((prevList) => {
+      const nextList = prevList.filter((s) => s.id !== sessionId);
+      saveSessions(nextList);
+      return nextList;
+    });
+    if (activeSessionIdRef.current === sessionId) {
+      setActiveSessionId(null);
+      activeSessionIdRef.current = null;
+      saveActiveSessionId(null);
+      setTurns([]);
+      turnsRef.current = [];
+    }
+    onToast?.('会话已删除');
+  }, [onToast]);
 
   const handleStartTask = useCallback(async () => {
     if (runningRef.current || browsingRef.current) return;
@@ -193,7 +301,7 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
     }
     const directory = projectDir.trim() || '.';
     // ponytail: retain 16 recent turns; backend also bounds history size. Longer memory needs explicit summarization.
-    const history = turns.filter((t) => t.projectDir === directory && t.status !== 'running').slice(-16).flatMap((t) => [
+    const history = turns.filter((t) => (t.projectDir === directory || !t.projectDir) && t.status !== 'running').slice(-16).flatMap((t) => [
       { role: 'user', content: t.prompt },
       { role: 'assistant', content: [
         `任务状态：${t.statusMessage || t.status}`,
@@ -201,54 +309,139 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
         ...t.toolCalls.map((call) => `[命令] ${call.command}\n[结果] ${call.output ?? '未收到执行结果，不能确认是否完成'}`),
       ].filter(Boolean).join('\n\n') },
     ]);
+
+    let currentSessionId = activeSessionIdRef.current;
+    const isNew = !currentSessionId || !sessions.some((s) => s.id === currentSessionId);
+    if (isNew) {
+      currentSessionId = crypto.randomUUID();
+      activeSessionIdRef.current = currentSessionId;
+      setActiveSessionId(currentSessionId);
+      saveActiveSessionId(currentSessionId);
+    }
+    const sessionTitle = trimmed.length > 28 ? `${trimmed.slice(0, 28)}…` : trimmed;
+
     const id = crypto.randomUUID();
     currentTaskRef.current = id;
     let terminal = false;
+
+    const activeTurn: AgentTurn = {
+      id,
+      projectDir: directory,
+      prompt: trimmed,
+      status: 'running',
+      thinking: '',
+      isThinkingExpanded: false,
+      toolCalls: [],
+      finalContent: '',
+      statusMessage: '正在准备任务…',
+    };
+    const priorTurns = turnsRef.current;
+
+    const syncPersist = () => {
+      if (currentSessionId) {
+        const allTurns = [...priorTurns.filter((t) => t.id !== id), { ...activeTurn }];
+        persistSession(currentSessionId, allTurns, isNew ? sessionTitle : undefined, directory);
+      }
+    };
+
     const update = (change: (turn: AgentTurn) => AgentTurn) => {
       if (!mountedRef.current || currentTaskRef.current !== id) return;
-      setTurns((list) => list.map((turn) => turn.id === id ? change(turn) : turn));
+      setTurns((list) => {
+        const next = list.map((turn) => (turn.id === id ? change(turn) : turn));
+        turnsRef.current = next;
+        return next;
+      });
     };
+
+    let outputStartedAt: number | null = null;
+    let outputElapsedMs = 0;
+    const refreshSpeed = () => {
+      activeTurn.outputStats = {
+        tokens: estimateTokens(activeTurn.thinking + activeTurn.finalContent),
+        elapsedMs: outputElapsedMs + (outputStartedAt === null ? 0 : performance.now() - outputStartedAt),
+        streaming: outputStartedAt !== null,
+      };
+      update((turn) => ({ ...turn, outputStats: activeTurn.outputStats }));
+    };
+    const pauseSpeed = () => {
+      if (outputStartedAt !== null) outputElapsedMs += performance.now() - outputStartedAt;
+      outputStartedAt = null;
+      if (speedTimerRef.current !== null) clearInterval(speedTimerRef.current);
+      speedTimerRef.current = null;
+      if (activeTurn.thinking || activeTurn.finalContent) refreshSpeed();
+    };
+    const resumeSpeed = () => {
+      if (outputStartedAt === null) {
+        outputStartedAt = performance.now();
+        speedTimerRef.current = setInterval(refreshSpeed, 500);
+      }
+    };
+
     const finish = (status: AgentTurn['status'], message: string) => {
       if (terminal) return;
+      pauseSpeed();
       terminal = true;
-      update((turn) => ({ ...turn, status, statusMessage: message,
-        toolCalls: turn.toolCalls.map((tool) => ({ ...tool, pendingApproval: false })),
-      }));
+      activeTurn.status = status;
+      activeTurn.statusMessage = message;
+      activeTurn.toolCalls = activeTurn.toolCalls.map((tool) => ({ ...tool, pendingApproval: false }));
+      update(() => ({ ...activeTurn }));
+      syncPersist();
     };
+
     runningRef.current = true;
     followOutput.current = true;
     setShowModelDropdown(false);
     setTaskPrompt('');
     setIsRunning(true);
-    setTurns((list) => [...list, { id, projectDir: directory, prompt: trimmed, status: 'running',
-      thinking: '', isThinkingExpanded: false, toolCalls: [], finalContent: '', statusMessage: '正在准备任务…',
-    }]);
+    setTurns((list) => {
+      const next = [...list, { ...activeTurn }];
+      turnsRef.current = next;
+      return next;
+    });
+
     try {
       const channel = new Channel();
       channel.onmessage = (event: any) => {
         if (!mountedRef.current || currentTaskRef.current !== id || terminal || !event?.payload) return;
         const payload = event.payload;
+        if ((event.type === 'ThinkingChunk' || event.type === 'ContentChunk') && payload.delta) resumeSpeed();
+        else if (event.type === 'ToolProposed' || event.type === 'Status') pauseSpeed();
         switch (event.type) {
           case 'ThinkingChunk':
-            update((turn) => ({ ...turn, thinking: turn.thinking + payload.delta }));
+            activeTurn.thinking += payload.delta;
+            update((turn) => ({ ...turn, thinking: activeTurn.thinking }));
             break;
           case 'ContentChunk':
-            update((turn) => ({ ...turn, finalContent: turn.finalContent + payload.delta }));
+            activeTurn.finalContent += payload.delta;
+            update((turn) => ({ ...turn, finalContent: activeTurn.finalContent }));
             break;
           case 'ToolProposed':
-            update((turn) => ({ ...turn, toolCalls: [...turn.toolCalls, {
-              callId: payload.call_id, name: payload.name, command: payload.command,
-              requiresApproval: payload.requires_approval, pendingApproval: payload.requires_approval,
-            }] }));
+            activeTurn.toolCalls = [
+              ...activeTurn.toolCalls,
+              {
+                callId: payload.call_id,
+                name: payload.name,
+                command: payload.command,
+                requiresApproval: payload.requires_approval,
+                pendingApproval: payload.requires_approval,
+              },
+            ];
+            update((turn) => ({ ...turn, toolCalls: activeTurn.toolCalls }));
             break;
           case 'ToolExecuted':
-            update((turn) => ({ ...turn, toolCalls: turn.toolCalls.map((tool) => tool.callId === payload.call_id
-              ? { ...tool, output: payload.output, exitCode: payload.exit_code, pendingApproval: false } : tool) }));
+            activeTurn.toolCalls = activeTurn.toolCalls.map((tool) =>
+              tool.callId === payload.call_id
+                ? { ...tool, output: payload.output, exitCode: payload.exit_code, pendingApproval: false }
+                : tool
+            );
+            update((turn) => ({ ...turn, toolCalls: activeTurn.toolCalls }));
             break;
           case 'MemoryCompacted':
-            update((turn) => ({ ...turn, compactionNote: '已保存项目记忆' }));
+            activeTurn.compactionNote = '已保存项目记忆';
+            update((turn) => ({ ...turn, compactionNote: activeTurn.compactionNote }));
             break;
           case 'Status':
+            activeTurn.statusMessage = payload.message;
             update((turn) => ({ ...turn, statusMessage: payload.message }));
             break;
           case 'Done':
@@ -261,10 +454,19 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
             break;
         }
       };
-      await invoke('start_agent_task', { params: {
-        endpoint, api_key: apiKey, model, prompt: trimmed,
-        history: history.length ? history : undefined, project_dir: directory, allow_all: allowAllCli, max_turns: 15,
-      }, channel });
+      await invoke('start_agent_task', {
+        params: {
+          endpoint,
+          api_key: apiKey,
+          model,
+          prompt: trimmed,
+          history: history.length ? history : undefined,
+          project_dir: directory,
+          allow_all: allowAllCli,
+          max_turns: 15,
+        },
+        channel,
+      });
       if (!terminal) finish('error', '任务连接已结束，但未收到完成确认，请检查执行结果');
     } catch (err: any) {
       if (!mountedRef.current) return;
@@ -272,10 +474,12 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
       finish('error', `任务失败: ${err?.message || err}`);
       onToast?.(`任务失败: ${err?.message || err}`);
     } finally {
+      pauseSpeed();
       runningRef.current = false;
       if (mountedRef.current) setIsRunning(false);
+      syncPersist();
     }
-  }, [taskPrompt, projectDir, allowAllCli, endpoint, apiKey, model, turns, onToast]);
+  }, [taskPrompt, projectDir, allowAllCli, endpoint, apiKey, model, turns, sessions, persistSession, onToast]);
 
   const handleAbort = useCallback(async () => {
     const id = currentTaskRef.current;
@@ -351,12 +555,51 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
     </article>
   );
 
+  const currentSession = useMemo(() => {
+    return sessions.find((s) => s.id === activeSessionId);
+  }, [sessions, activeSessionId]);
+
   const hasContent = turns.length > 0;
+  const latestTurn = turns[turns.length - 1];
 
   return (
-    <div className="runbi-agent flex min-h-0 w-full flex-1 flex-col font-sans">
-      <header className="agent-header"><div><span className="agent-presence" /><span>{isRunning ? '正在执行' : '工作空间'}</span><span className="agent-header-count">{turns.length ? `${turns.length} 轮对话` : '准备就绪'}</span></div>
-        <button type="button" className="agent-button" disabled={isRunning} onClick={handleNewSession}><Plus size={14} />新会话</button>
+    <div
+      className="runbi-agent relative overflow-hidden flex min-h-0 w-full flex-1 flex-col font-sans"
+      onKeyDown={(e) => {
+        if (e.key === 'Escape' && showHistory) {
+          e.preventDefault();
+          setShowHistory(false);
+        }
+      }}
+    >
+      <header className="agent-header">
+        <div>
+          <span className="agent-presence" />
+          <span>{isRunning ? '正在执行' : (currentSession?.title || '工作空间')}</span>
+          <span className="agent-header-count">{turns.length ? `${turns.length} 轮对话` : '准备就绪'}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="agent-button"
+            disabled={isRunning}
+            onClick={handleNewSession}
+            title="开启全新会话"
+          >
+            <Plus size={14} />新会话
+          </button>
+          <button
+            type="button"
+            className={`agent-button ${showHistory ? 'agent-button-active' : ''}`}
+            onClick={() => setShowHistory((v) => !v)}
+            title="查看历史会话"
+            aria-label="历史会话"
+          >
+            <History size={14} />
+            <span>历史会话</span>
+            {sessions.length > 0 && <span className="agent-header-badge">{sessions.length}</span>}
+          </button>
+        </div>
       </header>
       {/* Main Execution Log View */}
       <div
@@ -394,6 +637,16 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
 
       {/* Bottom Task Input Box (Codex-style integrated console) */}
       <div className="agent-composer-wrap shrink-0">
+        {latestTurn && (latestTurn.status === 'running' || latestTurn.outputStats) && <div className="agent-output-speed" title="根据思考和回复文本估算 token；平均速度不包含首字等待、工具执行和批准等待时间。不同模型的实际 token 数可能不同。">
+          <Cpu size={12} />
+          <span>{latestTurn.outputStats && latestTurn.outputStats.elapsedMs >= 500
+            ? `≈ ${(latestTurn.outputStats.tokens / (latestTurn.outputStats.elapsedMs / 1000)).toFixed(1)} tokens/s`
+            : '— tokens/s'}</span>
+          <span>{latestTurn.status === 'running'
+            ? latestTurn.outputStats?.streaming ? '实时均速 · 估算' : '等待输出 · 估算'
+            : '平均速度 · 估算'}</span>
+          {!!latestTurn.outputStats?.tokens && <span>约 {latestTurn.outputStats.tokens.toLocaleString()} tokens</span>}
+        </div>}
         <div className="agent-composer">
           {/* Prompt textarea */}
           <textarea
@@ -581,6 +834,86 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
         </div>
         <div className="agent-composer-hint"><span>{isRunning ? '可以先准备下一条指令' : 'Enter 发送 · Shift + Enter 换行'}</span><span>操作过程，由你掌控</span></div>
       </div>
+
+      {/* History Drawer Slide-over */}
+      {showHistory && (
+        <>
+          <div
+            className="agent-history-backdrop"
+            onClick={() => setShowHistory(false)}
+            aria-hidden="true"
+          />
+          <aside className="agent-history-drawer" aria-label="历史会话列表">
+            <div className="agent-history-header">
+              <div className="flex items-center gap-2">
+                <History size={15} className="text-teal-400" />
+                <span>历史会话</span>
+                <span className="agent-header-badge">{sessions.length}</span>
+              </div>
+              <button
+                type="button"
+                className="agent-button p-1 hover:text-white"
+                onClick={() => setShowHistory(false)}
+                aria-label="关闭历史记录"
+                title="关闭"
+              >
+                <X size={15} />
+              </button>
+            </div>
+
+            <div className="agent-history-list runbi-settings-scroll">
+              {sessions.length === 0 ? (
+                <div className="agent-history-empty">
+                  <MessageSquare size={28} strokeWidth={1.5} className="opacity-40" />
+                  <p>暂无历史会话</p>
+                  <span className="text-[11px] opacity-60">发起对话后会自动保存在这里</span>
+                </div>
+              ) : (
+                sessions.map((sess) => {
+                  const isActive = sess.id === activeSessionId;
+                  return (
+                    <div
+                      key={sess.id}
+                      role="button"
+                      tabIndex={0}
+                      className={`agent-history-item ${isActive ? 'is-active' : ''}`}
+                      onClick={() => handleSwitchSession(sess.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          handleSwitchSession(sess.id);
+                        }
+                      }}
+                      title={`${sess.title}\n目录: ${sess.projectDir}\n时间: ${formatSessionTime(sess.updatedAt)}`}
+                    >
+                      <div className="agent-history-item-title">
+                        {sess.title}
+                      </div>
+                      <div className="agent-history-item-meta">
+                        <span className="flex items-center gap-1">
+                          <Clock size={11} className="shrink-0" />
+                          {formatSessionTime(sess.updatedAt)}
+                        </span>
+                        <span>·</span>
+                        <span>{sess.turns.length} 轮问答</span>
+                      </div>
+                      <button
+                        type="button"
+                        className="agent-history-item-del"
+                        onClick={(e) => handleDeleteSession(sess.id, e)}
+                        title="删除此会话"
+                        aria-label={`删除会话 ${sess.title}`}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </aside>
+        </>
+      )}
     </div>
   );
 };
