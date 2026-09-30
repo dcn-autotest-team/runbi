@@ -80,6 +80,29 @@ export interface AgentTurn {
   outputStats?: { tokens: number; elapsedMs: number; streaming: boolean };
 }
 
+/**
+ * Collapses degenerate consecutive repeated lines from model output or contaminated sessions.
+ */
+export function sanitizeTurnContent(text: string): string {
+  if (!text) return '';
+  const lines = text.split('\n');
+  const cleaned: string[] = [];
+  let prev = '';
+  let repeatCount = 0;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed && trimmed === prev) {
+      repeatCount++;
+      if (repeatCount >= 2) continue;
+    } else {
+      prev = trimmed;
+      repeatCount = 0;
+    }
+    cleaned.push(line);
+  }
+  return cleaned.join('\n').trim();
+}
+
 export const AgentPanel: React.FC<AgentPanelProps> = ({
   visible = true,
   endpoint,
@@ -301,14 +324,18 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
     }
     const directory = projectDir.trim() || '.';
     // ponytail: retain 16 recent turns; backend also bounds history size. Longer memory needs explicit summarization.
-    const history = turns.filter((t) => (t.projectDir === directory || !t.projectDir) && t.status !== 'running').slice(-16).flatMap((t) => [
-      { role: 'user', content: t.prompt },
-      { role: 'assistant', content: [
-        `任务状态：${t.statusMessage || t.status}`,
-        t.finalContent,
+    const history = turns.filter((t) => (t.projectDir === directory || !t.projectDir) && t.status !== 'running').slice(-16).flatMap((t) => {
+      const cleanContent = sanitizeTurnContent(t.finalContent);
+      const text = cleanContent || (t.toolCalls.length ? '已执行相关操作。' : '');
+      const parts = [
+        text,
         ...t.toolCalls.map((call) => `[命令] ${call.command}\n[结果] ${call.output ?? '未收到执行结果，不能确认是否完成'}`),
-      ].filter(Boolean).join('\n\n') },
-    ]);
+      ].filter(Boolean);
+      return [
+        { role: 'user', content: t.prompt },
+        { role: 'assistant', content: parts.join('\n\n') },
+      ];
+    });
 
     let currentSessionId = activeSessionIdRef.current;
     const isNew = !currentSessionId || !sessions.some((s) => s.id === currentSessionId);
@@ -415,6 +442,10 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
             activeTurn.finalContent += payload.delta;
             update((turn) => ({ ...turn, finalContent: activeTurn.finalContent }));
             break;
+          case 'ContentReset':
+            activeTurn.finalContent = '';
+            update((turn) => ({ ...turn, finalContent: '' }));
+            break;
           case 'ToolProposed':
             activeTurn.toolCalls = [
               ...activeTurn.toolCalls,
@@ -440,6 +471,12 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
             activeTurn.compactionNote = '已保存项目记忆';
             update((turn) => ({ ...turn, compactionNote: activeTurn.compactionNote }));
             break;
+          case 'PersonaUpdated': {
+            const note = payload.reflection ? '💡 已自主反思更新画像: ' + payload.reflection : '💡 已自主反思更新画像';
+            activeTurn.compactionNote = note;
+            update((turn) => ({ ...turn, compactionNote: note }));
+            break;
+          }
           case 'Status':
             activeTurn.statusMessage = payload.message;
             update((turn) => ({ ...turn, statusMessage: payload.message }));
@@ -546,9 +583,9 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
           </div>}
         </div>)}
         {turn.compactionNote && <p className="agent-memory"><Check size={12} />{turn.compactionNote}</p>}
-        {turn.finalContent && <div className="agent-answer"><MarkdownRenderer content={turn.finalContent} isGenerating={isLive} /></div>}
+        {turn.finalContent && <div className="agent-answer"><MarkdownRenderer content={sanitizeTurnContent(turn.finalContent)} isGenerating={isLive} /></div>}
         {!isLive && <div className="agent-response-actions">
-          {turn.finalContent && <button type="button" onClick={() => handleCopy(turn.finalContent)} title="复制回复" aria-label="复制回复"><Copy size={13} />复制回复</button>}
+          {turn.finalContent && <button type="button" onClick={() => handleCopy(sanitizeTurnContent(turn.finalContent))} title="复制回复" aria-label="复制回复"><Copy size={13} />复制回复</button>}
           {(turn.status === 'error' || turn.status === 'aborted') && <button type="button" onClick={() => { setTaskPrompt(turn.prompt); inputRef.current?.focus(); }}><RefreshCw size={13} />重新编辑</button>}
         </div>}
       </div>

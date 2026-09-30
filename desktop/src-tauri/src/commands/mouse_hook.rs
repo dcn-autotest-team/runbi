@@ -13,6 +13,11 @@ pub struct SelectionMonitorState {
     pub enabled: Arc<AtomicBool>,
     pub auto_popup: Arc<AtomicBool>,
     pub is_internal_action: Arc<AtomicBool>,
+    // True while the expanded panel shows the agent: it shares the very same
+    // native window as the selection capsule, so an in-panel mouse selection
+    // would shrink-wrap that window into the 236x44 capsule and make the
+    // running agent panel disappear.
+    pub agent_active: Arc<AtomicBool>,
     pub last_selected_text: Arc<Mutex<String>>,
 }
 
@@ -22,6 +27,7 @@ impl Default for SelectionMonitorState {
             enabled: Arc::new(AtomicBool::new(true)),
             auto_popup: Arc::new(AtomicBool::new(true)),
             is_internal_action: Arc::new(AtomicBool::new(false)),
+            agent_active: Arc::new(AtomicBool::new(false)),
             last_selected_text: Arc::new(Mutex::new(String::new())),
         }
     }
@@ -359,6 +365,14 @@ pub fn note_internal_keyboard_activity(active: bool) {
 
 #[cfg(windows)]
 struct PendingSelectionCaptureGuard;
+
+#[cfg(windows)]
+impl PendingSelectionCaptureGuard {
+    fn new() -> Self {
+        PENDING_SELECTION_CAPTURES.fetch_add(1, Ordering::Relaxed);
+        Self
+    }
+}
 
 #[cfg(windows)]
 impl Drop for PendingSelectionCaptureGuard {
@@ -744,6 +758,7 @@ fn should_handle_selection(state: &SelectionMonitorState) -> bool {
     state.enabled.load(Ordering::Relaxed)
         && state.auto_popup.load(Ordering::Relaxed)
         && !state.is_internal_action.load(Ordering::Relaxed)
+        && !state.agent_active.load(Ordering::Relaxed)
 }
 
 #[cfg(windows)]
@@ -1020,12 +1035,15 @@ unsafe extern "system" fn low_level_mouse_proc(
         // Fallback for environments that deliver the release without the
         // corresponding low-level press: an outside release still closes the
         // visible capsule and must not become a new selection.
-        let inside_runbi_window = point_inside_capsule_bounds(pt)
-            || point_inside_runbi_window(pt)
-            || is_runbi_window(WindowFromPoint(pt));
+        // Compute the window hit-test only when its result is actually used
+        // (outside LBUTTONUP with an active capsule). Running EnumWindows on
+        // every mouse move starves the low-level hook input path and risks
+        // the OS silently removing the hook after LowLevelHooksTimeout.
         if w_param == WM_LBUTTONUP as usize
             && CAPSULE_GENERATION.load(Ordering::SeqCst) != NO_CAPSULE
-            && !inside_runbi_window
+            && !point_inside_capsule_bounds(pt)
+            && !point_inside_runbi_window(pt)
+            && !is_runbi_window(WindowFromPoint(pt))
         {
             let active_generation = CAPSULE_GENERATION.load(Ordering::SeqCst);
             let down_x = LAST_DOWN_X.load(Ordering::Relaxed);
@@ -1165,12 +1183,14 @@ unsafe extern "system" fn low_level_mouse_proc(
                         let state_clone = state.clone();
                         let generation = SELECTION_GENERATION.load(Ordering::SeqCst);
 
-                        // Trigger grab asynchronously
+                        // Trigger grab asynchronously. The pending-counter is
+                        // incremented on guard creation and decremented when dropped,
+                        // ensuring 1:1 balance without underflow or stuck states.
                         #[cfg(windows)]
-                        PENDING_SELECTION_CAPTURES.fetch_add(1, Ordering::Relaxed);
+                        let pending_capture = PendingSelectionCaptureGuard::new();
                         tauri::async_runtime::spawn(async move {
                             #[cfg(windows)]
-                            let _pending_capture = PendingSelectionCaptureGuard;
+                            let _pending_capture = pending_capture;
                             // The low-level hook sees mouse-up before the target control does.
                             // Let it commit the selection before sending Ctrl+C.
                             tokio::time::sleep(Duration::from_millis(30)).await;
@@ -1438,6 +1458,36 @@ pub fn set_auto_popup_enabled(
     Ok(enabled)
 }
 
+#[tauri::command]
+#[allow(dead_code)]
+pub fn set_agent_active(
+    state: tauri::State<SelectionMonitorState>,
+    active: bool,
+) -> Result<bool, String> {
+    state.agent_active.store(active, Ordering::SeqCst);
+    if let Some((_, app)) = MONITOR_STATE.get() {
+        let app_handle = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            crate::commands::file_log(&app_handle, &format!("set_agent_active: {active}"));
+        });
+    }
+    Ok(active)
+}
+
+pub fn is_agent_active() -> bool {
+    #[cfg(windows)]
+    {
+        MONITOR_STATE
+            .get()
+            .map(|(state, _)| state.agent_active.load(Ordering::Relaxed))
+            .unwrap_or(false)
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1589,6 +1639,27 @@ mod tests {
 
         state.is_internal_action.store(true, Ordering::Relaxed);
         assert!(!should_handle_selection(&state));
+    }
+
+    #[test]
+    fn agent_mode_suppresses_selection_popup() {
+        // 根因回归:智能体面板与划词胶囊共用同一个 main 窗口。面板开着时若钩子
+        // 仍放行划词手势,窗口会被缩成 236x44 胶囊,正在运行的智能体面板随之消失
+        // (日志:50 次 agent 任务里有 5 次任务期间被胶囊顶掉)。
+        let state = SelectionMonitorState::default();
+        assert!(should_handle_selection(&state));
+
+        state.agent_active.store(true, Ordering::Relaxed);
+        assert!(
+            !should_handle_selection(&state),
+            "an open agent panel must not arm the selection capsule"
+        );
+
+        state.agent_active.store(false, Ordering::Relaxed);
+        assert!(
+            should_handle_selection(&state),
+            "leaving agent mode must restore automatic selection popup"
+        );
     }
 
     #[test]

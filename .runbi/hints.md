@@ -1,0 +1,1 @@
+项目 = 润笔 Runbi：AI 划词润色助手，双端（Tauri 2.x+Rust 桌面端 desktop/，Chrome MV3 插件 src/），共享核心在 shared/。构建：npm 不在 PATH，需 cd desktop 后用 node ..\node_modules\@tauri-apps\cli\tauri.js build；构建前杀掉 runbi-desktop.exe。文档入口：README.md、PROJECT.md、docs/01~05、desktop/README.md、docs/agent-lessons-2026-09-15.md（接手必读）。日志：%APPDATA%\com.runbi.desktop\runbi.log。

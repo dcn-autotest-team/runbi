@@ -77,6 +77,7 @@ describe('Desktop selection-to-polish flow', () => {
     await act(async () => agentTab.click());
     expect(host.textContent).toContain('把任务交给润笔');
     const invoke = (window as any).__TAURI_INTERNALS__.invoke;
+    expect(invoke.mock.calls.some(([cmd, args]: [string, any]) => cmd === 'set_agent_active' && args?.active === true)).toBe(true);
     invoke.mockClear();
     const key = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
     await act(async () => {
@@ -581,7 +582,39 @@ describe('Desktop selection-to-polish flow', () => {
     expect(shortcutSignature.clarifyChips).toBeGreaterThanOrEqual(1);
     expect(shortcutSignature.hasScriptLibraryButton).toBe(true);
 
-    // 2. Selection capsule click path (clicking Sparkles or clicking capsule body)
+    // 2. Selection capsule click path (clicking Reply button)
+    await act(async () => {
+      onSelection({
+        payload: {
+          text: '周五下班前能交付这版方案吗？',
+          sourceApp: 'WeChat.exe',
+          windowTitle: '微信',
+          trigger: 'selection',
+          capsule: true,
+        },
+      });
+      await Promise.resolve();
+    });
+
+    const capsuleReplyButton = host.querySelector('button[aria-label="智能回复选中文本"]') as HTMLButtonElement;
+    expect(capsuleReplyButton).not.toBeNull();
+    await act(async () => {
+      capsuleReplyButton.click();
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+
+    const capsuleSignature = replySignature();
+    expect(capsuleSignature).toEqual(shortcutSignature);
+  });
+
+  it('capsule polish button opens the polish panel even for chat selections', async () => {
+    await act(async () => {
+      root.render(<App />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const onSelection = eventMocks.listeners.get('runbi://captured-selection')!;
     await act(async () => {
       onSelection({
         payload: {
@@ -602,8 +635,8 @@ describe('Desktop selection-to-polish flow', () => {
       await vi.advanceTimersByTimeAsync(3000);
     });
 
-    const capsuleSignature = replySignature();
-    expect(capsuleSignature).toEqual(shortcutSignature);
+    const activeTab = (Array.from(host.querySelectorAll('button[role="tab"]')).find(b => b.getAttribute('aria-selected') === 'true') as HTMLElement)?.textContent?.trim();
+    expect(activeTab).toBe('润色');
   });
 
   it('clears stale screen-reply context before a capsule translation', async () => {

@@ -260,6 +260,10 @@ pub fn handle_clipboard_change(app: &AppHandle, state: &ClipboardMonitorState) {
         return;
     }
 
+    if crate::commands::mouse_hook::is_agent_active() {
+        return;
+    }
+
     let current_clip = read_system_clipboard().or_else(|| app.clipboard().read_text().ok());
     let Some(text) = current_clip else { return };
     let trimmed = text.trim();
@@ -351,7 +355,7 @@ pub fn start_clipboard_monitor(app: &AppHandle, state: ClipboardMonitorState) {
 
     #[cfg(windows)]
     {
-        use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+        use windows_sys::Win32::Foundation::{GetLastError, HWND, LPARAM, LRESULT, WPARAM};
         use windows_sys::Win32::System::DataExchange::{
             AddClipboardFormatListener, RemoveClipboardFormatListener,
         };
@@ -404,7 +408,12 @@ pub fn start_clipboard_monitor(app: &AppHandle, state: ClipboardMonitorState) {
                 lpszClassName: class_name.as_ptr(),
             };
 
-            RegisterClassW(&wc);
+            if RegisterClassW(&wc) == 0 {
+                // 0 means registration failed (e.g. class already exists from
+                // a race). Log it: without this the listener dies silently
+                // and the failure is impossible to diagnose from the log.
+                eprintln!("clipboard_monitor: RegisterClassW failed (err={})", GetLastError());
+            }
 
             let hwnd = CreateWindowExW(
                 0,
@@ -422,7 +431,11 @@ pub fn start_clipboard_monitor(app: &AppHandle, state: ClipboardMonitorState) {
             );
 
             if !hwnd.is_null() {
-                AddClipboardFormatListener(hwnd);
+                if AddClipboardFormatListener(hwnd) == 0 {
+                    // Listener registration failed: the message loop below
+                    // would spin forever receiving nothing. Log it loudly.
+                    eprintln!("clipboard_monitor: AddClipboardFormatListener failed (err={})", GetLastError());
+                }
 
                 let mut msg: MSG = std::mem::zeroed();
                 while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {

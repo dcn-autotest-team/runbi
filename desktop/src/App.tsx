@@ -695,6 +695,15 @@ export const App: React.FC = () => {
         setActiveStyle('translate');
       } else {
         translationPanelRef.current = false;
+        if (mode === 'polish') {
+          let targetStyle = lastPolishStyleRef.current || 'polished';
+          if (targetStyle === 'reply' || targetStyle === 'translate') targetStyle = 'polished';
+          stateRef.current.activeStyle = targetStyle;
+          setActiveStyle(targetStyle);
+        } else if (mode === 'reply') {
+          stateRef.current.activeStyle = 'reply';
+          setActiveStyle('reply');
+        }
       }
       clearCapsuleTimers();
       capsuleActionRef.current = 'expanding';
@@ -731,6 +740,8 @@ export const App: React.FC = () => {
       if (revision !== capsuleRevisionRef.current) return;
       capsuleActionRef.current = null;
       if (mode === 'agent') {
+        setShowAgent(true);
+        stateRef.current.showAgent = true;
         setUiMode('panel');
         setCapsule(null);
         setShowEpoch((n) => n + 1);
@@ -744,6 +755,8 @@ export const App: React.FC = () => {
         stateRef.current.handleSwitchToAgent();
       } else if (mode === 'reply') {
         // The expanded capsule is the same main window as the shortcut panel.
+        setShowAgent(false);
+        stateRef.current.showAgent = false;
         setUiMode('panel');
         setCapsule(null);
         setShowEpoch((n) => n + 1);
@@ -756,38 +769,14 @@ export const App: React.FC = () => {
         setActiveStyle('reply');
         stateRef.current.activeStyle = 'reply';
         stateRef.current.handleStartTextReplyAnalysis(info.text);
-      } else if (mode === 'translate' || stateRef.current.activeStyle === 'translate') {
+      } else if (mode === 'translate') {
         // Translation is intentionally routed through the same canonical entry
         // used by the header and shortcut paths.
         activateTranslate(info.text, info.screenshot);
-      } else if (stateRef.current.autoMode) {
-        setUiMode('panel');
-        setCapsule(null);
-        setShowEpoch((n) => n + 1);
-        setCurrentScreenshot(info.screenshot);
-        stateRef.current.currentScreenshot = info.screenshot;
-        setScreenReplyAnalysis(null);
-        stateRef.current.screenReplyAnalysis = null;
-        setOriginalText(info.text);
-        stateRef.current.originalText = info.text;
-        const cls = classifyContext({
-          text: info.text,
-          sourceApp: info.sourceApp,
-          windowTitle: info.windowTitle,
-        });
-        stateRef.current.activeStyle = cls.style;
-        setActiveStyle(cls.style);
-        if (cls.confidence >= 0.7 && cls.style !== 'polished') {
-          showToast(`已智能识别【${STYLE_NAMES[cls.style]}】(${cls.reason})`);
-        }
-        if (cls.style === 'reply') {
-          stateRef.current.handleStartTextReplyAnalysis(info.text);
-        } else if (cls.style === 'translate') {
-          stateRef.current.activateTranslate(info.text, info.screenshot, undefined, true);
-        } else {
-          stateRef.current.handleStartPolish(info.text, cls.style, undefined, info.screenshot);
-        }
       } else {
+        setShowAgent(false);
+        stateRef.current.showAgent = false;
+        translationPanelRef.current = false;
         setUiMode('panel');
         setCapsule(null);
         setShowEpoch((n) => n + 1);
@@ -797,7 +786,26 @@ export const App: React.FC = () => {
         stateRef.current.screenReplyAnalysis = null;
         setOriginalText(info.text);
         stateRef.current.originalText = info.text;
-        stateRef.current.handleStartPolish(info.text, stateRef.current.activeStyle, undefined, info.screenshot);
+        let targetStyle = lastPolishStyleRef.current || 'polished';
+        if (targetStyle === 'reply' || targetStyle === 'translate') {
+          targetStyle = 'polished';
+        }
+        if (stateRef.current.autoMode) {
+          const cls = classifyContext({
+            text: info.text,
+            sourceApp: info.sourceApp,
+            windowTitle: info.windowTitle,
+          });
+          if (cls.style !== 'reply' && cls.style !== 'translate') {
+            targetStyle = cls.style;
+            if (cls.confidence >= 0.7 && cls.style !== 'polished') {
+              showToast(`已智能识别【${STYLE_NAMES[cls.style]}】(${cls.reason})`);
+            }
+          }
+        }
+        stateRef.current.activeStyle = targetStyle;
+        setActiveStyle(targetStyle);
+        stateRef.current.handleStartPolish(info.text, targetStyle, undefined, info.screenshot);
       }
     },
     [activateTranslate, isTauri, showToast]
@@ -2109,6 +2117,30 @@ export const App: React.FC = () => {
           } else if (capsuleAction === 'translate') {
             // Keep the capsule path identical to the header/shortcut path.
             stateRef.current.activateTranslate(captured, screenshot);
+          } else if (capsuleAction === 'polish') {
+            setShowAgent(false);
+            stateRef.current.showAgent = false;
+            translationPanelRef.current = false;
+            setScreenReplyAnalysis(null);
+            stateRef.current.screenReplyAnalysis = null;
+            let targetStyle = lastPolishStyleRef.current || 'polished';
+            if (targetStyle === 'reply' || targetStyle === 'translate') targetStyle = 'polished';
+            if (stateRef.current.autoMode) {
+              const cls = classifyContext({
+                text: captured,
+                sourceApp: event.payload.sourceApp,
+                windowTitle: event.payload.windowTitle,
+              });
+              if (cls.style !== 'reply' && cls.style !== 'translate') {
+                targetStyle = cls.style;
+                if (cls.confidence >= 0.7 && cls.style !== 'polished') {
+                  showToast(`已智能识别【${STYLE_NAMES[cls.style]}】(${cls.reason})`);
+                }
+              }
+            }
+            stateRef.current.activeStyle = targetStyle;
+            setActiveStyle(targetStyle);
+            stateRef.current.handleStartPolish(captured, targetStyle, undefined, screenshot);
           // 智能模式：AI 依据文字/窗口自动判断风格与行业；手动模式：沿用用户固定的风格
           } else if (stateRef.current.autoMode) {
             if (stateRef.current.activeStyle === 'translate') {
@@ -2346,6 +2378,13 @@ export const App: React.FC = () => {
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
   }, [recording]);
+
+  // Synchronize agent active state to Rust selection monitor so an in-panel or external
+  // mouse selection gesture does not shrink-wrap the window into a capsule and dismiss the agent.
+  useEffect(() => {
+    if (!isTauri) return;
+    invoke('set_agent_active', { active: Boolean(showAgent) }).catch(() => {});
+  }, [showAgent, isTauri]);
 
   // Stop Generation
   const handleStop = () => {

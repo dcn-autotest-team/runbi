@@ -401,6 +401,7 @@ fn main() {
             commands::load_app_config,
             commands::save_app_config,
             commands::set_auto_popup_enabled,
+            commands::set_agent_active,
             commands::position::record_panel_size,
             commands::feishu_copilot::capture_feishu_multi_turn_context,
             commands::feishu_copilot::send_to_feishu_input,

@@ -27,6 +27,7 @@ use tauri::ipc::Channel;
 pub enum AgentEvent {
     ThinkingChunk { delta: String },
     ContentChunk { delta: String },
+    ContentReset { reason: Option<String> },
     ToolProposed {
         call_id: String,
         name: String,
@@ -40,6 +41,7 @@ pub enum AgentEvent {
         exit_code: Option<i32>,
     },
     MemoryCompacted { hints: String },
+    PersonaUpdated { reflection: String },
     Status { message: String },
     Done { success: bool, total_tokens: usize },
     Error { message: String },
@@ -74,20 +76,28 @@ fn ensure_approval_map() {
 
 pub struct RepeatSuffixChecker {
     min_unit_len: usize,
+    max_unit_len: usize,
     base: i64,
     modulo: i64,
     prefix_hash: Vec<i64>,
     pow_base: Vec<i64>,
+    current_line: String,
+    last_line: String,
+    consecutive_same_lines: usize,
 }
 
 impl RepeatSuffixChecker {
     pub fn new(min_unit_len: usize) -> Self {
         Self {
-            min_unit_len,
+            min_unit_len: min_unit_len.max(4),
+            max_unit_len: 200,
             base: 91_138_233,
             modulo: 1_000_000_007,
             prefix_hash: vec![0],
             pow_base: vec![1],
+            current_line: String::new(),
+            last_line: String::new(),
+            consecutive_same_lines: 0,
         }
     }
 
@@ -103,6 +113,25 @@ impl RepeatSuffixChecker {
     }
 
     pub fn add_char(&mut self, ch: char) -> bool {
+        // Line-level repetition check: catches repeated lines like "任务状态: 任务已完成\n"
+        if ch == '\n' || ch == '\r' {
+            let line = self.current_line.trim().to_string();
+            self.current_line.clear();
+            if line.chars().count() >= 4 {
+                if line == self.last_line {
+                    self.consecutive_same_lines += 1;
+                    if self.consecutive_same_lines >= 3 {
+                        return true;
+                    }
+                } else {
+                    self.last_line = line;
+                    self.consecutive_same_lines = 1;
+                }
+            }
+        } else {
+            self.current_line.push(ch);
+        }
+
         let last_pow = *self.pow_base.last().unwrap();
         self.pow_base.push((last_pow * self.base) % self.modulo);
 
@@ -111,13 +140,23 @@ impl RepeatSuffixChecker {
         self.prefix_hash.push(new_hash);
 
         let n = self.prefix_hash.len() - 1;
-        if n < 2 * self.min_unit_len || n % self.min_unit_len != 0 {
-            return false;
-        }
+        let max_l = (n / 2).min(self.max_unit_len);
+        let min_l = self.min_unit_len;
 
-        for unit_len in (self.min_unit_len..=(n / 2)).rev() {
-            if self.get_hash(n - 2 * unit_len, n - unit_len) == self.get_hash(n - unit_len, n) {
-                return true;
+        if n >= 2 * min_l {
+            for unit_len in (min_l..=max_l).rev() {
+                if self.get_hash(n - 2 * unit_len, n - unit_len) == self.get_hash(n - unit_len, n) {
+                    if unit_len < 16 {
+                        if n >= 3 * unit_len
+                            && self.get_hash(n - 3 * unit_len, n - 2 * unit_len)
+                                == self.get_hash(n - 2 * unit_len, n - unit_len)
+                        {
+                            return true;
+                        }
+                    } else {
+                        return true;
+                    }
+                }
             }
         }
         false
@@ -234,7 +273,17 @@ fn check_tool_version(tool: &str) -> Option<String> {
         .stderr(std::process::Stdio::null()).spawn().ok()?;
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
     loop {
-        if child.try_wait().ok()?.is_some() { break; }
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {}
+            Err(_) => {
+                // try_wait failed: the handle is unusable. Kill best-effort
+                // so the spawned process never leaks unwaited.
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
         if std::time::Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
@@ -408,9 +457,36 @@ pub fn save_memory_hints(project_dir: &Path, hints: &str) -> std::io::Result<()>
     std::fs::write(runbi_dir.join("hints.md"), hints)
 }
 
+pub fn global_persona_path() -> Option<PathBuf> {
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        Some(PathBuf::from(appdata).join("com.runbi.desktop").join("user_persona.md"))
+    } else if let Ok(home) = std::env::var("HOME") {
+        Some(PathBuf::from(home).join(".runbi").join("user_persona.md"))
+    } else {
+        None
+    }
+}
+
+pub fn read_global_persona() -> String {
+    global_persona_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .unwrap_or_default()
+}
+
+pub fn save_global_persona(persona: &str) -> std::io::Result<()> {
+    if let Some(p) = global_persona_path() {
+        if let Some(parent) = p.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        std::fs::write(p, persona)?;
+    }
+    Ok(())
+}
+
 pub fn build_system_prompt(project_dir: &Path) -> String {
     let env_info = collect_env_info(project_dir);
     let hints = read_memory_hints(project_dir);
+    let persona = read_global_persona();
     let knowledge = std::fs::read_to_string(project_dir.join(".runbi").join("knowledge.md"))
         .unwrap_or_else(|_| "无".to_string());
 
@@ -426,6 +502,11 @@ pub fn build_system_prompt(project_dir: &Path) -> String {
 二、当前工作空间是：{}
 三、当前环境信息如下：
 {}
+
+# 用户全局画像与核心偏好（跨项目持久化记忆）
+<user_persona>
+{}
+</user_persona>
 
 # 固化的知识及规则
 <knowledge_and_rules>
@@ -443,11 +524,17 @@ pub fn build_system_prompt(project_dir: &Path) -> String {
 三、任务完成后，向用户汇报明确的最终结果与产出。
 四、run_cli 以无窗口方式后台执行，输出只会回传给你、用户看不见。当任务需要用户在自己屏幕上看到持续效果（动画／图形／交互窗口）时，直接用 Start-Process 拉起一个可见窗口来承载它，不要因为“用户看不到输出”而反复纠结。
 五、不要重复执行同一条命令，也不要反复试探同一个信息。命令的输出不会因为你再问一次而改变；连续两次探测都没有获得新信息时，说明方向有误，应立即换一种手段，或直接向用户汇报当前结论。
+
+# 自主反思与主动画像演化准则
+一、深度理解用户：你面对的是一位追求极致工程实效、注重代码极简与实测自测的资深技术专家（详见 <user_persona>）。沟通必须直截了当、直击根因、重事实与数据，拒绝空洞套话。
+二、主动画像演化（evolve_user_persona）：在与用户的交互、任务推进或纠错反馈中，观察并提炼用户展现出的新偏好、工程约束、特殊习惯或业务特征。一旦有重要新认知，主动调用 `evolve_user_persona` 工具，将反思融入更新后的全局画像中，实现记忆的自我演进。
+三、项目经验沉淀（leave_memory_hints）：在当前项目中发现关键架构、特殊命令、环境踩坑等经验时，主动调用 `leave_memory_hints` 将记忆沉淀到当前项目的 `.runbi/hints.md`。
 "#,
         os_name,
         shell_name,
         project_dir.display(),
         env_info,
+        if persona.is_empty() { "暂无全局画像" } else { &persona },
         knowledge,
         if hints.is_empty() { "无" } else { &hints }
     )
@@ -676,6 +763,19 @@ impl CommandLedger {
     }
 }
 
+fn evaluate_finish_reason(raw: Option<&Value>) -> Result<bool, String> {
+    if let Some(reason) = raw.and_then(|v| v.as_str()) {
+        let reason = reason.trim();
+        if !reason.is_empty() && reason != "null" {
+            if reason != "stop" && reason != "tool_calls" {
+                return Err(format!("模型未完成响应（{}），请缩小任务后重试", reason));
+            }
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 async fn run_agent_task(params: StartAgentTaskParams, channel: &Channel<AgentEvent>) -> Result<(), String> {
 
     let project_dir = params
@@ -734,6 +834,21 @@ async fn run_agent_task(params: StartAgentTaskParams, channel: &Channel<AgentEve
                     "required": ["hints"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "evolve_user_persona",
+                "description": "基于本次交互观察和反思，主动更新并演化全局用户画像（用户偏好、习惯、工作模式、沟通风格等），使后续所有会话更懂用户。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "reflection": { "type": "string", "description": "本次反思的具体洞察：用户展现出了什么偏好、习惯或提出了什么原则约束" },
+                        "persona": { "type": "string", "description": "更新后的完整用户画像（Markdown 格式，保留原有核心并融入新反思）" }
+                    },
+                    "required": ["reflection", "persona"]
+                }
+            }
         }
     ]);
 
@@ -782,6 +897,8 @@ async fn run_agent_task(params: StartAgentTaskParams, channel: &Channel<AgentEve
             "tools": tools,
             "stream": true,
             "temperature": 0.6,
+            "frequency_penalty": 0.3,
+            "presence_penalty": 0.1,
             "thinking": { "type": "enabled" },
             "chat_template_kwargs": { "enable_thinking": true }
         });
@@ -814,8 +931,10 @@ async fn run_agent_task(params: StartAgentTaskParams, channel: &Channel<AgentEve
         let mut full_content = String::new();
         let mut full_reasoning = String::new();
         let mut tool_calls_map: HashMap<usize, (String, String, String)> = HashMap::new();
-        let mut repeat_checker = RepeatSuffixChecker::new(80);
+        let mut reasoning_checker = RepeatSuffixChecker::new(6);
+        let mut content_checker = RepeatSuffixChecker::new(6);
         let mut reasoning_suppressed = false;
+        let mut content_suppressed = false;
         let mut received_completion = false;
         let mut response_bytes = 0usize;
 
@@ -852,11 +971,7 @@ async fn run_agent_task(params: StartAgentTaskParams, channel: &Channel<AgentEve
                 if let Ok(chunk) = serde_json::from_str::<Value>(payload_str) {
                     if let Some(choices) = chunk.get("choices").and_then(|c| c.as_array()) {
                         if let Some(first) = choices.first() {
-                            if first.get("finish_reason").is_some_and(|reason| !reason.is_null()) {
-                                let reason = first["finish_reason"].as_str().unwrap_or("");
-                                if reason != "stop" && reason != "tool_calls" {
-                                    return Err(format!("模型未完成响应（{}），请缩小任务后重试", reason));
-                                }
+                            if evaluate_finish_reason(first.get("finish_reason"))? {
                                 received_completion = true;
                             }
                             let delta = first.get("delta").unwrap_or(&Value::Null);
@@ -873,7 +988,7 @@ async fn run_agent_task(params: StartAgentTaskParams, channel: &Channel<AgentEve
                                     // `any` short-circuits, so the checker stops being fed the
                                     // moment the loop is spotted instead of re-firing on every char.
                                     reasoning_suppressed =
-                                        reasoning.chars().any(|ch| repeat_checker.add_char(ch));
+                                        reasoning.chars().any(|ch| reasoning_checker.add_char(ch));
                                     if reasoning_suppressed {
                                         let _ = channel.send(AgentEvent::Status {
                                             message: "检测到思考内容陷入重复循环，已中断本轮思考并重新规划…"
@@ -891,9 +1006,23 @@ async fn run_agent_task(params: StartAgentTaskParams, channel: &Channel<AgentEve
                             let content = delta.get("content").and_then(|c| c.as_str()).unwrap_or("");
                             if !content.is_empty() {
                                 full_content.push_str(content);
-                                let _ = channel.send(AgentEvent::ContentChunk {
-                                    delta: content.to_string(),
-                                });
+                                if !content_suppressed {
+                                    content_suppressed =
+                                        content.chars().any(|ch| content_checker.add_char(ch));
+                                    if content_suppressed {
+                                        let _ = channel.send(AgentEvent::Status {
+                                            message: "检测到模型输出陷入重复循环，已拦截并重新规划…"
+                                                .to_string(),
+                                        });
+                                        let _ = channel.send(AgentEvent::ContentReset {
+                                            reason: Some("loop_detected".to_string()),
+                                        });
+                                        break 'response;
+                                    }
+                                    let _ = channel.send(AgentEvent::ContentChunk {
+                                        delta: content.to_string(),
+                                    });
+                                }
                             }
 
                             // Tool calls delta accumulation
@@ -927,20 +1056,25 @@ async fn run_agent_task(params: StartAgentTaskParams, channel: &Channel<AgentEve
 
         total_tokens += full_content.len() / 4 + full_reasoning.len() / 4;
 
-        if reasoning_suppressed {
+        if reasoning_suppressed || content_suppressed {
             suppressed_turns += 1;
             if thinking_loop_exhausted(suppressed_turns) {
-                return Err("检测到思考重复循环，已停止，请重新描述任务".into());
+                return Err("检测到输出重复循环，已停止，请重新描述任务".into());
             }
+            let retry_prompt = if content_suppressed {
+                "你上一轮的回复陷入了机械重复循环（反复输出相同的语句或状态）。请立刻停止重复，不要输出任何状态标头或模板文字：直接调用 run_cli 执行一条最简可行的命令，或直接给出最终结论。"
+            } else {
+                "你上一轮的思考陷入了重复循环，已被中断。请立刻停止反复推敲与自我怀疑：直接给出下一步——调用 run_cli 执行一条最简可行的命令，或直接给出最终结论。"
+            };
             messages.push(json!({
                 "role": "user",
-                "content": "你上一轮的思考陷入了重复循环，已被中断。请立刻停止反复推敲与自我怀疑：直接给出下一步——调用 run_cli 执行一条最简可行的命令，或直接给出最终结论。"
+                "content": retry_prompt
             }));
             continue;
         }
         suppressed_turns = 0;
 
-        if !received_completion {
+        if !received_completion && full_content.is_empty() && tool_calls_map.is_empty() {
             return Err("模型响应意外中断，请重试".into());
         }
 
@@ -1106,6 +1240,38 @@ async fn run_agent_task(params: StartAgentTaskParams, channel: &Channel<AgentEve
                     "name": name,
                     "content": res_msg
                 }));
+            } else if name == "evolve_user_persona" {
+                let args_json: Value = serde_json::from_str(args_str).map_err(|e| format!("画像参数无效: {}", e))?;
+                let reflection = args_json
+                    .get("reflection")
+                    .and_then(|r| r.as_str())
+                    .unwrap_or("更新用户偏好画像")
+                    .to_string();
+                let persona = args_json
+                    .get("persona")
+                    .and_then(|p| p.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                save_global_persona(&persona).map_err(|e| format!("保存用户画像失败: {}", e))?;
+                let _ = channel.send(AgentEvent::PersonaUpdated {
+                    reflection: reflection.clone(),
+                });
+
+                let res_msg = format!("已成功沉淀自主反思，并持久化演化全局用户画像: {}", reflection);
+                let _ = channel.send(AgentEvent::ToolExecuted {
+                    call_id: call_id.clone(),
+                    name: name.clone(),
+                    output: res_msg.clone(),
+                    exit_code: Some(0),
+                });
+
+                messages.push(json!({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "name": name,
+                    "content": res_msg
+                }));
             } else {
                 return Err(format!("模型请求了不支持的工具: {}", name));
             }
@@ -1158,7 +1324,8 @@ async fn finalize_without_tools(
         "model": model,
         "messages": request_messages,
         "stream": false,
-        "temperature": 0.3
+        "temperature": 0.3,
+        "frequency_penalty": 0.3
     });
 
     let response = client
@@ -1248,6 +1415,44 @@ mod tests {
             }
         }
         assert!(!detected, "RepeatSuffixChecker should not flag diverse prose");
+    }
+
+    #[test]
+    fn test_repeat_suffix_checker_detects_repeated_status_lines() {
+        let mut checker = RepeatSuffixChecker::new(6);
+        let line = "任务状态: 任务已完成\n";
+        let mut detected = false;
+        for _ in 0..5 {
+            for c in line.chars() {
+                if checker.add_char(c) {
+                    detected = true;
+                    break;
+                }
+            }
+            if detected {
+                break;
+            }
+        }
+        assert!(detected, "RepeatSuffixChecker must intercept repeated status line loops");
+    }
+
+    #[test]
+    fn test_repeat_suffix_checker_detects_repeated_cjk_phrase_without_newlines() {
+        let mut checker = RepeatSuffixChecker::new(6);
+        let phrase = "任务状态任务已完成";
+        let mut detected = false;
+        for _ in 0..5 {
+            for c in phrase.chars() {
+                if checker.add_char(c) {
+                    detected = true;
+                    break;
+                }
+            }
+            if detected {
+                break;
+            }
+        }
+        assert!(detected, "RepeatSuffixChecker must intercept repeated CJK phrases without newlines");
     }
 
     #[test]
@@ -1381,5 +1586,26 @@ mod tests {
         assert!(info.contains("=== 今天日期 ==="));
         assert!(info.contains("=== 系统 ==="));
         assert!(info.contains("=== 已安装工具 ==="));
+    }
+
+    #[test]
+    fn test_evaluate_finish_reason_allows_empty_and_null() {
+        assert_eq!(evaluate_finish_reason(None), Ok(false));
+        assert_eq!(evaluate_finish_reason(Some(&Value::Null)), Ok(false));
+        assert_eq!(evaluate_finish_reason(Some(&json!(""))), Ok(false));
+        assert_eq!(evaluate_finish_reason(Some(&json!("   "))), Ok(false));
+        assert_eq!(evaluate_finish_reason(Some(&json!("null"))), Ok(false));
+        assert_eq!(evaluate_finish_reason(Some(&json!("stop"))), Ok(true));
+        assert_eq!(evaluate_finish_reason(Some(&json!("tool_calls"))), Ok(true));
+        assert!(evaluate_finish_reason(Some(&json!("length"))).is_err());
+    }
+
+    #[test]
+    fn test_global_persona_roundtrip_and_injection() {
+        let temp_dir = std::env::temp_dir();
+        let prompt = build_system_prompt(&temp_dir);
+        assert!(prompt.contains("<user_persona>"));
+        assert!(prompt.contains("自主反思与主动画像演化准则"));
+        assert!(prompt.contains("evolve_user_persona"));
     }
 }
