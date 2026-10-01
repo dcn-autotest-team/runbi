@@ -36,50 +36,32 @@
    cargo test
    ```
 
-3. 在 `desktop` 目录构建并生成 updater 签名。以下脚本不会输出私钥或密码：
+3. 一键构建并生成 updater 签名与 `latest.json`：
 
    ```powershell
-   $keyPath = 'C:\Users\54191\.tauri\runbi-updater.key'
-   $passwordPath = 'C:\Users\54191\.tauri\runbi-updater.password.clixml'
-   $securePassword = Import-Clixml -LiteralPath $passwordPath
-   $passwordPtr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePassword)
-   try {
-     $env:TAURI_SIGNING_PRIVATE_KEY = Get-Content -LiteralPath $keyPath -Raw
-     $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($passwordPtr)
-     npx tauri build --bundles nsis
-   } finally {
-     [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($passwordPtr)
-     Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY -ErrorAction SilentlyContinue
-     Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD -ErrorAction SilentlyContinue
-   }
+   # 仅打包并自动生成签名与 latest.json 清单：
+   powershell -ExecutionPolicy Bypass -File scripts/build-release.ps1
+
+   # 或全流程一键打包、生成清单并直接发布到 GitHub 更新分发仓库：
+   powershell -ExecutionPolicy Bypass -File scripts/build-release.ps1 -Publish -Notes "本版本更新说明。"
    ```
 
-4. 确认构建产物（版本以 `1.0.3` 为例）：
+4. 产物确认：
 
    ```text
-desktop/src-tauri/target/release/bundle/nsis/Runbi_1.0.3_x64-setup.exe
-desktop/src-tauri/target/release/bundle/nsis/Runbi_1.0.3_x64-setup.exe.sig
+   desktop/src-tauri/target/release/bundle/nsis/Runbi_<version>_x64-setup.exe
+   desktop/src-tauri/target/release/bundle/nsis/Runbi_<version>_x64-setup.exe.sig
+   desktop/src-tauri/target/release/bundle/nsis/latest.json
    ```
 
-5. 在同一目录创建 `latest.json`。当前产品仅支持 Windows，可用动态清单：
-
-   ```json
-   {
-    "version": "1.0.3",
-     "notes": "本版本更新说明。",
-     "pub_date": "2026-08-29T12:00:00Z",
-    "url": "https://github.com/dcn-autotest-team/runbi-updates/releases/download/v1.0.3/Runbi_1.0.3_x64-setup.exe",
-    "signature": "完整复制 Runbi_1.0.3_x64-setup.exe.sig 的内容"
-   }
-   ```
-
-6. 发布到公开分发仓库：
+5. 若未使用 `-Publish` 参数，可手动发布到公开分发仓库：
 
    ```powershell
-   gh release create v1.0.3 --repo dcn-autotest-team/runbi-updates --target main `
-     --title 'Runbi 1.0.3' --notes '本版本更新说明。' --latest `
-     .\Runbi_1.0.3_x64-setup.exe `
-     .\Runbi_1.0.3_x64-setup.exe.sig `
+   cd desktop/src-tauri/target/release/bundle/nsis
+   gh release create v<version> --repo dcn-autotest-team/runbi-updates --target main `
+     --title 'Runbi <version>' --notes '本版本更新说明。' --latest `
+     .\Runbi_<version>_x64-setup.exe `
+     .\Runbi_<version>_x64-setup.exe.sig `
      .\latest.json
    ```
 

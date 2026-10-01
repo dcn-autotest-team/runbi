@@ -308,24 +308,20 @@ fn check_tool_version(tool: &str) -> Option<String> {
 
 pub fn is_readonly_command(cmd: &str) -> bool {
     let lower = cmd.trim().to_lowercase();
-    // Shell syntax and substitutions require review, even after a read-only prefix.
-    if lower.contains([';', '|', '&', '$', '`', '\n', '\r', '(', ')', '{', '}', '>', '<']) {
+    // Dangerous shell metacharacters: chaining (;), background (&), substitution ($ `), subshells (( ) { }), redirects (> <), newlines
+    if lower.contains([';', '&', '$', '`', '\n', '\r', '(', ')', '{', '}', '>', '<']) || lower.contains("||") {
         return false;
     }
-    // Typical read-only commands
-    let safe_prefixes = [
-        "git status", "git log", "git diff", "git show",
-        "ls", "dir", "cat", "type", "pwd", "cd", "echo", "head", "tail",
-        "grep", "rg", "where", "which", "get-childitem", "get-content",
-        "test-path", "whoami", "uname", "hostname",
-    ];
 
     // Modifying keywords that immediately disqualify
     let dangerous_tokens = [
         "rm ", "del ", "rmdir", "remove-item", "erase", "mkfs", "dd ",
-        ">", ">>", "git push", "git commit", "git reset", "git clean",
-        "npm install", "npm i ", "yarn add", "pnpm add", "cargo build",
+        "git push", "git commit", "git reset", "git clean", "git checkout",
+        "git restore", "git rebase", "git merge",
+        "npm install", "npm i ", "yarn add", "pnpm add", "cargo build", "cargo run",
         "kill", "stop-process", "shutdown", "reboot", "format",
+        "set-content", "add-content", "out-file", "new-item", "copy-item",
+        "move-item", "rename-item", "start-process", "invoke-expression", "iex ",
     ];
 
     for danger in &dangerous_tokens {
@@ -334,16 +330,94 @@ pub fn is_readonly_command(cmd: &str) -> bool {
         }
     }
 
-    for safe in &safe_prefixes {
-        if (lower == *safe || lower.strip_prefix(safe).is_some_and(|rest| rest.starts_with(' ')))
-            && !lower.contains("--output") && !lower.contains("--exec")
-            && !lower.contains("--ext-diff") && !lower.contains("--textconv")
-            && !lower.contains("--pre") && !lower.contains("-outfile") {
-            return true;
+    let safe_prefixes = [
+        "git status", "git log", "git diff", "git show",
+        "ls", "dir", "cat", "type", "pwd", "cd", "echo", "head", "tail",
+        "grep", "rg", "where", "which", "get-childitem", "get-content",
+        "test-path", "whoami", "uname", "hostname",
+        "findstr", "wc", "sort", "more",
+        "select-object", "select-string", "measure-object", "out-string",
+        "format-table", "format-list", "ft", "fl",
+    ];
+
+    let is_segment_safe = |seg: &str| -> bool {
+        let s = seg.trim();
+        if s.is_empty() { return false; }
+        for safe in &safe_prefixes {
+            if (s == *safe || s.strip_prefix(safe).is_some_and(|rest| rest.starts_with(' ')))
+                && !s.contains("--output") && !s.contains("--exec")
+                && !s.contains("--ext-diff") && !s.contains("--textconv")
+                && !s.contains("--pre") && !s.contains("-outfile") {
+                return true;
+            }
         }
+        false
+    };
+
+    if lower.contains('|') {
+        let segments: Vec<&str> = lower.split('|').collect();
+        return !segments.is_empty() && segments.iter().all(|seg| is_segment_safe(seg));
     }
 
-    false
+    is_segment_safe(&lower)
+}
+
+pub fn execute_read_file(
+    project_dir: &Path,
+    path_str: &str,
+    start_line: Option<usize>,
+    end_line: Option<usize>,
+) -> (String, Option<i32>) {
+    let raw_path = PathBuf::from(path_str);
+    let full_path = if raw_path.is_absolute() {
+        raw_path
+    } else {
+        project_dir.join(raw_path)
+    };
+
+    if !full_path.exists() {
+        return (format!("错误: 文件不存在: {}", path_str), Some(1));
+    }
+    if full_path.is_dir() {
+        return (format!("错误: 指定路径是目录，不是文件: {}", path_str), Some(1));
+    }
+
+    match std::fs::read(&full_path) {
+        Ok(bytes) => {
+            let text = String::from_utf8_lossy(&bytes);
+            let lines: Vec<&str> = text.lines().collect();
+            let total_lines = lines.len();
+
+            if total_lines == 0 {
+                return ("(空文件)".to_string(), Some(0));
+            }
+
+            let s_line = start_line.unwrap_or(1).max(1);
+            let e_line = end_line.unwrap_or(total_lines).min(total_lines);
+
+            if s_line > total_lines {
+                return (
+                    format!("文件共有 {} 行，请求的起始行 {} 超出范围", total_lines, s_line),
+                    Some(0),
+                );
+            }
+
+            let start_idx = s_line - 1;
+            let end_idx = e_line.max(s_line);
+
+            let selected = &lines[start_idx..end_idx];
+            let mut output = String::new();
+            for (idx, line) in selected.iter().enumerate() {
+                let line_num = s_line + idx;
+                output.push_str(&format!("{:4}: {}\n", line_num, line));
+            }
+            if e_line < total_lines {
+                output.push_str(&format!("... [共 {} 行，已截取显示第 {}..{} 行]\n", total_lines, s_line, e_line));
+            }
+            (truncate_output(&output), Some(0))
+        }
+        Err(e) => (format!("读取文件失败: {}", e), Some(1)),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -498,7 +572,7 @@ pub fn build_system_prompt(project_dir: &Path) -> String {
 你是 Runbi Agent，一个运行在桌面环境中的自主智能体。
 
 # 你在哪
-一、你正处在一个 **{}** 环境中，可以通过 run_cli 工具来执行任意 {} 命令，包括读写文件、执行脚本、查看系统状态等。
+一、你正处在一个 **{}** 环境中，可以通过 read_file 原生读取文件，通过 run_cli 工具来执行任意 {} 命令，包括修改文件、执行脚本、查看系统状态等。优先使用 read_file 查看文件内容，免审批且快速。
 二、当前工作空间是：{}
 三、当前环境信息如下：
 {}
@@ -520,7 +594,7 @@ pub fn build_system_prompt(project_dir: &Path) -> String {
 
 # 你要做什么
 一、帮助用户完成指定的目标任务。结果要保证可靠与可验证，必要时主动调用命令进行验证。
-二、必须以工具调用的形式执行操作。纯只读命令会自动放行，涉及修改/执行的操作会提请用户审核。
+二、必须以工具调用的形式执行操作。优先调用 read_file 读取文件（纯只读免审批且带行号切片）；纯只读命令会自动放行，涉及修改/执行的操作会提请用户审核。
 三、任务完成后，向用户汇报明确的最终结果与产出。
 四、run_cli 以无窗口方式后台执行，输出只会回传给你、用户看不见。当任务需要用户在自己屏幕上看到持续效果（动画／图形／交互窗口）时，直接用 Start-Process 拉起一个可见窗口来承载它，不要因为“用户看不到输出”而反复纠结。
 五、不要重复执行同一条命令，也不要反复试探同一个信息。命令的输出不会因为你再问一次而改变；连续两次探测都没有获得新信息时，说明方向有误，应立即换一种手段，或直接向用户汇报当前结论。
@@ -641,6 +715,47 @@ fn bounded_history(history: Vec<AgentHistoryItem>) -> Result<Vec<Value>, String>
         pairs.push(vec![json!({"role": "user", "content": contents[0]}), json!({"role": "assistant", "content": contents[1]})]);
     }
     Ok(pairs.into_iter().rev().flatten().collect())
+}
+
+pub fn compact_earlier_tool_messages(messages: &[Value], preserve_last_n_tools: usize) -> Vec<Value> {
+    let tool_indices: Vec<usize> = messages
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.get("role").and_then(|r| r.as_str()) == Some("tool"))
+        .map(|(i, _)| i)
+        .collect();
+
+    let total_tools = tool_indices.len();
+    if total_tools <= preserve_last_n_tools {
+        return messages.to_vec();
+    }
+
+    let cut_point = total_tools - preserve_last_n_tools;
+    let old_tool_indices: std::collections::HashSet<usize> = tool_indices[..cut_point].iter().copied().collect();
+
+    messages
+        .iter()
+        .enumerate()
+        .map(|(idx, msg)| {
+            if old_tool_indices.contains(&idx) {
+                if let Some(content) = msg.get("content").and_then(|c| c.as_str()) {
+                    if content.chars().count() > 300 {
+                        let lines: Vec<&str> = content.lines().collect();
+                        let first_lines = lines.iter().take(4).copied().collect::<Vec<_>>().join("\n");
+                        let compacted = format!(
+                            "{}\n... [较早工具输出已折叠，共 {} 行，保留前 4 行摘要] ...",
+                            first_lines,
+                            lines.len()
+                        );
+                        let mut new_msg = msg.clone();
+                        new_msg["content"] = json!(compacted);
+                        return new_msg;
+                    }
+                }
+            }
+            msg.clone()
+        })
+        .collect()
 }
 
 #[derive(Debug, Deserialize)]
@@ -809,6 +924,22 @@ async fn run_agent_task(params: StartAgentTaskParams, channel: &Channel<AgentEve
         {
             "type": "function",
             "function": {
+                "name": "read_file",
+                "description": "原生读取工作空间下的文件内容。支持起始/结束行号切片，零进程启动开销且纯只读免审批。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "相对工作空间的相对路径或绝对路径" },
+                        "start_line": { "type": "integer", "description": "起始行号（可选，1-indexed，包含此行）" },
+                        "end_line": { "type": "integer", "description": "结束行号（可选，1-indexed，包含此行）" }
+                    },
+                    "required": ["path"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "run_cli",
                 "description": "在工作空间执行命令行命令，读取或修改项目内容、运行脚本或检查状态。",
                 "parameters": {
@@ -875,7 +1006,7 @@ async fn run_agent_task(params: StartAgentTaskParams, channel: &Channel<AgentEve
         let remaining_turns = max_turns - turn;
         let must_finalize = remaining_turns == 1;
 
-        let mut request_messages = messages.clone();
+        let mut request_messages = compact_earlier_tool_messages(&messages, 2);
         if must_finalize {
             request_messages.push(json!({
                 "role": "user",
@@ -1200,6 +1331,64 @@ async fn run_agent_task(params: StartAgentTaskParams, channel: &Channel<AgentEve
 
                 // Execute the command
                 let (output, exit_code) = run_cli_command(&command, &project_dir, timeout).await;
+                let _ = channel.send(AgentEvent::ToolExecuted {
+                    call_id: call_id.clone(),
+                    name: name.clone(),
+                    output: output.clone(),
+                    exit_code,
+                });
+
+                messages.push(json!({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "name": name,
+                    "content": output
+                }));
+            } else if name == "read_file" {
+                let args_json: Value = serde_json::from_str(args_str).unwrap_or(json!({}));
+                let path = args_json.get("path").and_then(|p| p.as_str()).unwrap_or("").to_string();
+                let start_line = args_json.get("start_line").and_then(|v| v.as_u64()).map(|v| v as usize);
+                let end_line = args_json.get("end_line").and_then(|v| v.as_u64()).map(|v| v as usize);
+
+                let summary = match (start_line, end_line) {
+                    (Some(s), Some(e)) => format!("read_file: {} (lines {}..{})", path, s, e),
+                    (Some(s), None) => format!("read_file: {} (lines {}..)", path, s),
+                    (None, Some(e)) => format!("read_file: {} (lines 1..{})", path, e),
+                    (None, None) => format!("read_file: {}", path),
+                };
+
+                if ledger.is_repeat(&summary) {
+                    let hint = ledger.repeat_hint();
+                    let _ = channel.send(AgentEvent::ToolProposed {
+                        call_id: call_id.clone(),
+                        name: name.clone(),
+                        command: summary.clone(),
+                        requires_approval: false,
+                    });
+                    let _ = channel.send(AgentEvent::ToolExecuted {
+                        call_id: call_id.clone(),
+                        name: name.clone(),
+                        output: hint.clone(),
+                        exit_code: Some(1),
+                    });
+                    messages.push(json!({
+                        "role": "tool",
+                        "tool_call_id": call_id,
+                        "name": name,
+                        "content": hint
+                    }));
+                    continue;
+                }
+
+                let _ = channel.send(AgentEvent::ToolProposed {
+                    call_id: call_id.clone(),
+                    name: name.clone(),
+                    command: summary.clone(),
+                    requires_approval: false,
+                });
+
+                let (output, exit_code) = execute_read_file(&project_dir, &path, start_line, end_line);
+
                 let _ = channel.send(AgentEvent::ToolExecuted {
                     call_id: call_id.clone(),
                     name: name.clone(),
@@ -1607,5 +1796,74 @@ mod tests {
         assert!(prompt.contains("<user_persona>"));
         assert!(prompt.contains("自主反思与主动画像演化准则"));
         assert!(prompt.contains("evolve_user_persona"));
+    }
+
+    #[test]
+    fn test_execute_read_file_slices_and_errors() {
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join(format!("runbi-read-test-{}.txt", std::process::id()));
+        let content = "line 1\nline 2\nline 3\nline 4\nline 5\n";
+        std::fs::write(&test_file, content).unwrap();
+
+        let filename = test_file.file_name().unwrap().to_str().unwrap();
+
+        // Full read
+        let (out, code) = execute_read_file(&temp_dir, filename, None, None);
+        assert_eq!(code, Some(0));
+        assert!(out.contains("   1: line 1"));
+        assert!(out.contains("   5: line 5"));
+
+        // Slice read: lines 2..4
+        let (out_slice, code_slice) = execute_read_file(&temp_dir, filename, Some(2), Some(4));
+        assert_eq!(code_slice, Some(0));
+        assert!(!out_slice.contains("   1: line 1"));
+        assert!(out_slice.contains("   2: line 2"));
+        assert!(out_slice.contains("   4: line 4"));
+        assert!(!out_slice.contains("   5: line 5"));
+        assert!(out_slice.contains("已截取显示第 2..4 行"));
+
+        // Non-existent file
+        let (out_missing, code_missing) = execute_read_file(&temp_dir, "non-existent-12345.xyz", None, None);
+        assert_eq!(code_missing, Some(1));
+        assert!(out_missing.contains("不存在"));
+
+        let _ = std::fs::remove_file(test_file);
+    }
+
+    #[test]
+    fn test_is_readonly_pipeline_support() {
+        assert!(is_readonly_command("git log -n 5 | head -n 3"));
+        assert!(is_readonly_command("dir | findstr rs"));
+        assert!(is_readonly_command("Get-ChildItem -Path . | Select-Object -First 10"));
+        assert!(is_readonly_command("cat Cargo.toml | grep version"));
+
+        // Dangerous or modifying piped commands must still be rejected
+        assert!(!is_readonly_command("cat file.txt | rm -rf"));
+        assert!(!is_readonly_command("git log | Out-File evil.txt"));
+        assert!(!is_readonly_command("dir | Set-Content evil.txt"));
+        assert!(!is_readonly_command("cat file.txt || rm -rf"));
+        assert!(!is_readonly_command("git log | "));
+    }
+
+    #[test]
+    fn test_compact_earlier_tool_messages() {
+        let msgs = vec![
+            json!({"role": "system", "content": "sys"}),
+            json!({"role": "user", "content": "do task"}),
+            json!({"role": "assistant", "content": "calling tool 1"}),
+            json!({"role": "tool", "content": "line 1\nline 2\nline 3\nline 4\nline 5\n".repeat(20)}), // tool 1 (long)
+            json!({"role": "assistant", "content": "calling tool 2"}),
+            json!({"role": "tool", "content": "recent tool output 2"}), // tool 2
+            json!({"role": "assistant", "content": "calling tool 3"}),
+            json!({"role": "tool", "content": "recent tool output 3"}), // tool 3
+        ];
+
+        // Preserve last 2 tools (tool 2 and 3 kept full, tool 1 compacted)
+        let compacted = compact_earlier_tool_messages(&msgs, 2);
+        assert_eq!(compacted.len(), msgs.len());
+        let tool1_content = compacted[3]["content"].as_str().unwrap();
+        assert!(tool1_content.contains("较早工具输出已折叠"));
+        assert_eq!(compacted[5]["content"], "recent tool output 2");
+        assert_eq!(compacted[7]["content"], "recent tool output 3");
     }
 }

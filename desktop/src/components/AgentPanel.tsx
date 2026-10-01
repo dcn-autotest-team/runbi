@@ -570,7 +570,9 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
         </details>}
         {turn.toolCalls.map((tool, idx) => <div className="agent-tool" key={`${tool.callId}-${idx}`}>
           <details open={tool.pendingApproval || undefined}>
-            <summary><Terminal size={14} /><span>{tool.name === 'run_cli' ? '终端命令' : '项目记忆'}</span>
+            <summary>
+              {tool.name === 'run_cli' ? <Terminal size={14} /> : tool.name === 'read_file' ? <FileText size={14} /> : <Terminal size={14} />}
+              <span>{tool.name === 'run_cli' ? '终端命令' : tool.name === 'read_file' ? '读取文件' : '项目记忆'}</span>
               <code>{tool.command}</code><span className="agent-tool-state">{tool.pendingApproval ? '等待批准' : tool.output !== undefined ? (tool.exitCode === 0 ? '已完成' : '请检查结果') : isLive ? '执行中' : '未确认'}</span><ChevronDown size={13} />
             </summary>
             <pre>{tool.command}</pre>
