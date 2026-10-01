@@ -27,7 +27,7 @@
   --runbi-text-muted: #64748B;
 
   /* Product UI */
-  --runbi-window-bg: rgba(15, 23, 25, 0.96);
+  --runbi-window-bg: #0f1719;
   --runbi-panel-bg: #162023;
   --runbi-control-bg: rgba(2, 8, 10, 0.55);
   --runbi-control-hover: rgba(255, 255, 255, 0.08);
@@ -539,7 +539,7 @@ html[data-theme='light'] {
   --runbi-text-primary: #1f2937;
   --runbi-text-secondary: #6b7280;
   --runbi-text-muted: #9ca3af;
-  --runbi-window-bg: rgba(255, 255, 255, 0.94);
+  --runbi-window-bg: #ffffff;
   --runbi-panel-bg: #ffffff;
   --runbi-control-bg: rgba(17, 24, 39, 0.04);
   --runbi-control-hover: rgba(17, 24, 39, 0.07);
@@ -564,7 +564,7 @@ html[data-theme='light'] {
 }
 
 html[data-theme='light'] .runbi-window {
-  background: rgba(255, 255, 255, 0.94);
+  background: #ffffff;
   border: 1px solid rgba(17, 24, 39, 0.10);
   box-shadow: 0 24px 60px -15px rgba(17, 24, 39, 0.25),
               0 0 0 1px rgba(17, 24, 39, 0.04) inset,
@@ -729,7 +729,7 @@ html[data-theme='light'] .border-rose-400\/30 { border-color: rgba(225, 29, 72, 
    视觉变化只有 6%,用户感知"没生效"。给浅色窗面降不透明度,
    让窗口级 alpha 与内容透明度可感知叠加。 */
 html[data-theme='light'] .runbi-window {
-  background: rgba(255, 255, 255, 0.82);
+  background: #ffffff;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -753,12 +753,12 @@ html {
 
 /* macOS 深色材质: 窗面层次更接近 NSVisualEffectView 的 dark 材质 */
 html:not([data-theme='light']) .runbi-window {
-  background: rgba(28, 28, 30, 0.92);
+  background: #1c1c1e;
   border: 1px solid rgba(255, 255, 255, 0.10);
 }
 
 html:not([data-theme='light']) {
-  --runbi-window-bg: rgba(28, 28, 30, 0.94);
+  --runbi-window-bg: #1c1c1e;
   --runbi-panel-bg: #1C1C1E;
 }
 
