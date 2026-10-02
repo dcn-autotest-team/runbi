@@ -122,7 +122,7 @@ export async function streamRealCompletions(
       body: JSON.stringify({
         model: config.model || 'deepseek-chat',
         messages: [
-          { role: 'system', content: buildSystemPrompt(config.style, config.customPrompt, config.userInstruction, config.personaPrompt, config.packPrompt, config.glossaryPrompt, config.styleSamplesPrompt, config.appStylePrompt, config.latexGuard) },
+          { role: 'system', content: buildSystemPrompt(config.style, config.skillPrompt || config.customPrompt, config.userInstruction, config.personaPrompt, config.packPrompt, config.glossaryPrompt, config.styleSamplesPrompt, config.appStylePrompt, config.latexGuard) },
           { role: 'user', content: userPrompt },
         ],
         stream: true,
@@ -257,7 +257,7 @@ export async function streamMockCompletions(
   signal: AbortSignal
 ): Promise<void> {
   try {
-    const iterator = generateMockStreamMessages(text, config.style, signal, {
+    const iterator = generateMockStreamMessages(text, config.skillId || config.style, signal, {
       userInstruction: config.userInstruction,
     });
     for await (const msg of iterator) {
