@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import type { PolishStyle } from '../types/stream';
-import type { ScreenReplyAnalysis } from '../core/prompts';
+import type { PolishStyle, SceneSkill } from '../types/stream';
+import { type ScreenReplyAnalysis, type TranslateTargetId, SCENE_SKILLS } from '../core/prompts';
 import StyleTabs from './StyleTabs';
 import StreamingView from './StreamingView';
 import DiffViewer from './DiffViewer';
@@ -8,7 +8,6 @@ import ActionBar from './ActionBar';
 import Toast from './Toast';
 import InstructionInput, { type AttachedFileContext, type QuickReplyTag } from './InstructionInput';
 import TranslateBar from './TranslateBar';
-import type { TranslateTargetId } from '../core/prompts';
 
 /** Fallback quick tags for reply mode (no industry pack, no clarify_options). */
 export const REPLY_QUICK_TAGS: QuickReplyTag[] = [
@@ -86,6 +85,12 @@ export interface PolishPanelProps {
   /** 重新截屏：传入才在屏幕上下文场景显示按钮(桌面端)。 */
   onRecapture?: () => void;
   isRecapturing?: boolean;
+  /** 当前生效的场景 Skill id */
+  activeSkillId?: string | null;
+  /** 切换或清除场景 Skill 回调 */
+  onSelectSkill?: (skill: SceneSkill | null) => void;
+  /** 自定义或覆盖的场景 Skills 列表（默认使用内置 SCENE_SKILLS） */
+  sceneSkills?: SceneSkill[];
 }
 
 /** 细线警示图标(替代 emoji,单色跟随文字颜色) */
@@ -153,9 +158,14 @@ export const PolishPanel: React.FC<PolishPanelProps> = ({
   onTranslateTargetChange,
   onRecapture,
   isRecapturing = false,
+  activeSkillId = null,
+  onSelectSkill,
+  sceneSkills = SCENE_SKILLS,
 }) => {
   const [isCollapsed, setIsCollapsed] = useState(defaultCollapsed);
   const [showConvSummary, setShowConvSummary] = useState(false);
+
+  const currentSkill = activeSkillId ? sceneSkills.find((s) => s.id === activeSkillId) ?? null : null;
 
   // Keyboard shortcut listener for Attitude/Intent chips (1, 2, 3...)
   useEffect(() => {
@@ -309,18 +319,76 @@ export const PolishPanel: React.FC<PolishPanelProps> = ({
           {activeStyle !== 'reply' && activeStyle !== 'translate' && (
             <div className="flex items-center justify-between">
               <span className="text-[11px] font-medium text-slate-400">
-                {expert ? '处理方式 · 专家' : autoMode ? '润色方式 · AI 自动' : '润色方式'}
+                {currentSkill
+                  ? `场景 Skill · ${currentSkill.name}`
+                  : expert
+                  ? '处理方式 · 专家'
+                  : autoMode
+                  ? '润色方式 · AI 自动'
+                  : '润色方式'}
               </span>
               <StyleTabs
                 activeStyle={activeStyle}
-                onStyleChange={onStyleChange}
+                onStyleChange={(s) => {
+                  if (currentSkill && onSelectSkill) onSelectSkill(null);
+                  onStyleChange(s);
+                }}
                 disabled={isGenerating}
-                autoMode={autoMode}
+                autoMode={autoMode && !currentSkill}
                 onAutoMode={onAutoMode}
                 expert={expert}
                 onClearExpert={onClearExpert}
                 onOpenExperts={onOpenExperts}
               />
+            </div>
+          )}
+
+          {/* 场景 Skills 快捷开关栏（降维成高频场景开关：会议纪要、工作汇报、项目推进、营销文案、邮件润色、Vibe Coding） */}
+          {activeStyle !== 'reply' && activeStyle !== 'translate' && (
+            <div className="flex flex-col gap-1.5" role="toolbar" aria-label="场景 Skills 快捷开关">
+              <div className="flex items-center justify-between text-[11px]">
+                <div className="flex items-center gap-1.5">
+                  <span className="font-medium text-slate-400">场景 Skills</span>
+                  {currentSkill && (
+                    <span className="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-teal-500/15 text-teal-600 dark:text-teal-300 border border-teal-500/30">
+                      已启用 {currentSkill.name}
+                    </span>
+                  )}
+                </div>
+                {currentSkill && onSelectSkill && (
+                  <button
+                    type="button"
+                    onClick={() => onSelectSkill(null)}
+                    className="text-[10px] text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer transition-colors"
+                  >
+                    还原通用
+                  </button>
+                )}
+              </div>
+              <div className="flex items-center gap-1.5 overflow-x-auto runbi-scrollbar py-0.5 -mx-0.5 px-0.5">
+                {sceneSkills.map((skill) => {
+                  const isSelected = currentSkill?.id === skill.id;
+                  return (
+                    <button
+                      key={skill.id}
+                      type="button"
+                      data-skill={skill.id}
+                      aria-pressed={isSelected}
+                      title={`${skill.name}：${skill.description}`}
+                      onClick={() => onSelectSkill?.(isSelected ? null : skill)}
+                      disabled={isGenerating}
+                      className={`runbi-focus-ring flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium cursor-pointer transition-all duration-150 ${
+                        isSelected
+                          ? 'bg-teal-500/20 text-teal-700 dark:text-teal-300 border border-teal-500/50 shadow-xs'
+                          : 'bg-slate-100/90 hover:bg-slate-200/90 text-slate-600 dark:bg-white/[0.05] dark:hover:bg-white/[0.1] dark:text-slate-300 border border-white/5'
+                      } ${isGenerating ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    >
+                      <span className="text-xs leading-none">{skill.icon}</span>
+                      <span>{skill.shortName}</span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           )}
 

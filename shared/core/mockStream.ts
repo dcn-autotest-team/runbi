@@ -17,7 +17,7 @@ export interface MockStreamOptions {
 /**
  * Preset deterministic transform templates for offline testing and mock mode.
  */
-export const MOCK_POLISH_RULES: Record<PolishStyle, (text: string) => string> = {
+export const MOCK_POLISH_RULES: Record<string, (text: string) => string> = {
   polished: (t: string) =>
     `经过润色与调整后，${t}在逻辑连贯性与表达精度上得到了显著提升。`,
   academic: (t: string) =>
@@ -33,6 +33,18 @@ export const MOCK_POLISH_RULES: Record<PolishStyle, (text: string) => string> = 
   reply: (t: string) =>
     `关于您提及的“${t}”，我们已收到并仔细评估。非常感谢您的反馈与沟通，后续我们将按照既定方向跟进落实。`,
   translate: (t: string) => `Translated: "${t}" (mock translation, configure an API key for real output)`,
+  meeting: (t: string) =>
+    `【会议纪要】\n• 会议主题：围绕“${t}”的讨论与对齐\n• 核心决议：明确推进方向与责任分工\n• 待办事项：责任人本周内完成交付并提交复盘。`,
+  work_report: (t: string) =>
+    `【工作汇报】\n1. 重点进展：已推进“${t}”核心链路\n2. 业务成效：达成阶段性关键里程碑\n3. 下步规划：持续跟进交付与协同。`,
+  project_push: (t: string) =>
+    `【项目推进对齐】\n各位伙伴，关于“${t}”目前处于关键执行阶段，请各责任人对照里程碑时间表全力推进，如有卡点请及时同步。`,
+  marketing_copy: (t: string) =>
+    `🔥 还在为痛点发愁？聚焦“${t}”，全新解决方案重磅上线！打破边界，立即体验 🚀`,
+  email_polish: (t: string) =>
+    `主题：关于“${t}”的沟通与推进建议\n\n您好，\n\n针对“${t}”，特此向您同步具体考量与建议，请查阅并反馈意见。\n\n顺祝商祺！`,
+  vibe_coding: (t: string) =>
+    `### Role & Objective\n作为高级软件架构师，实现以下功能需求：\n\n### Requirements\n${t}\n\n### Constraints\n遵循既有代码库规范，补齐单元测试并处理边界异常。`,
 };
 
 /**

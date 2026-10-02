@@ -56,7 +56,7 @@ export class ChromePortLLMTransport implements ILLMTransport {
     try {
       const iterator = generateMockStreamMessages(
         request.text,
-        request.config.style,
+        request.config.skillId || request.config.style,
         signal,
         { userInstruction: request.config.userInstruction }
       );

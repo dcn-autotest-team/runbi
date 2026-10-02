@@ -55,7 +55,7 @@ export class TauriIPCLLMTransport implements ILLMTransport {
     const apiKey = config.apiKey?.trim();
     if (!apiKey) {
       try {
-        const stream = generateMockStreamMessages(text, config.style, signal, {
+        const stream = generateMockStreamMessages(text, config.skillId || config.style, signal, {
           userInstruction: config.userInstruction,
         });
         let totalTokens = 0;
@@ -98,6 +98,8 @@ export class TauriIPCLLMTransport implements ILLMTransport {
     const hasVisionContext = Boolean(config.imageDataUrl);
     const systemPrompt = buildSystemPrompt({
       style: config.style,
+      skillId: config.skillId,
+      skillPrompt: config.skillPrompt,
       userInstruction: config.userInstruction,
       customPromptOverride: config.customPrompt,
       personaPrompt: config.personaPrompt,
