@@ -18,6 +18,18 @@ export type PolishStyle =
   | 'translate';
 
 /**
+ * 针对性场景 Skill 技能定义
+ */
+export interface SceneSkill {
+  id: string;
+  name: string;
+  shortName: string;
+  description: string;
+  icon: string;
+  systemPrompt: string;
+}
+
+/**
  * Supported LLM Provider Types.
  */
 export type ProviderType = 'deepseek' | 'openai' | 'siliconflow' | 'ollama' | 'custom';
@@ -35,6 +47,8 @@ export interface StreamConfig {
   baseUrl?: string;
   model?: string;
   style: PolishStyle;
+  skillId?: string;
+  skillPrompt?: string;
   customPrompt?: string;
   userInstruction?: string;
   personaPrompt?: string;
