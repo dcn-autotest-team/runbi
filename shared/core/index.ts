@@ -17,3 +17,4 @@ export * from './scriptLibrary';
 export * from './expertAgents';
 export * from './localModels';
 export * from './jsonParser';
+export * from './senseAudioVoice';

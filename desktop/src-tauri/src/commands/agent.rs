@@ -6,6 +6,7 @@
 //! - Safe CLI execution (read-only auto-approval vs human-in-the-loop gate)
 //! - Memory hint persistence and context compaction (leave_memory_hints)
 //! - Polynomial rolling hash repetition checker (suppresses thinking loops)
+//! - Re-plans a turn that ended with only thinking and no reply, instead of declaring success
 
 use futures_util::StreamExt;
 use reqwest::Client;
@@ -815,6 +816,13 @@ fn thinking_loop_exhausted(suppressed_turns: usize) -> bool {
     suppressed_turns >= MAX_SUPPRESSED_TURNS
 }
 
+/// True when a stream ended normally but produced neither a reply nor tool calls: the model spent
+/// its whole output inside the thinking channel and the turn must be re-planned instead of being
+/// declared a success that ships a thinking panel with no answer.
+fn is_thought_only_turn(received_completion: bool, has_tool_calls: bool, content: &str) -> bool {
+    received_completion && !has_tool_calls && content.trim().is_empty()
+}
+
 /// Repeated probes tolerated before the reply tells the model to abandon its current approach
 /// entirely instead of merely skipping the duplicate command.
 const MAX_REPEATED_COMMANDS: usize = 2;
@@ -1207,6 +1215,21 @@ async fn run_agent_task(params: StartAgentTaskParams, channel: &Channel<AgentEve
 
         if !received_completion && full_content.is_empty() && tool_calls_map.is_empty() {
             return Err("模型响应意外中断，请重试".into());
+        }
+
+        if is_thought_only_turn(received_completion, !tool_calls_map.is_empty(), &full_content) {
+            suppressed_turns += 1;
+            if thinking_loop_exhausted(suppressed_turns) {
+                return Err("模型只输出了思考过程，没有给出最终回答，重试后仍然如此。请重试或更换模型".into());
+            }
+            let _ = channel.send(AgentEvent::Status {
+                message: "模型只输出了思考过程，没有给出回答，正在要求其直接给出结论…".to_string(),
+            });
+            messages.push(json!({
+                "role": "user",
+                "content": "你上一轮只输出了思考过程就结束了回合，没有给出任何正式回答。请立刻停止推敲，直接输出最终结论，不要再输出新的思考过程。"
+            }));
+            continue;
         }
 
         // If no tool calls, task reached textual completion
@@ -1787,6 +1810,16 @@ mod tests {
         assert_eq!(evaluate_finish_reason(Some(&json!("stop"))), Ok(true));
         assert_eq!(evaluate_finish_reason(Some(&json!("tool_calls"))), Ok(true));
         assert!(evaluate_finish_reason(Some(&json!("length"))).is_err());
+    }
+
+    #[test]
+    fn test_thought_only_turn_is_never_a_success() {
+        // 截图回归：模型把全部输出花在思考里，流正常结束后不能被当作任务成功。
+        assert!(is_thought_only_turn(true, false, ""));
+        assert!(is_thought_only_turn(true, false, "  \n "));
+        assert!(!is_thought_only_turn(false, false, ""), "流中断走“意外中断”错误，不走重规划");
+        assert!(!is_thought_only_turn(true, true, ""), "有工具调用则继续执行工具");
+        assert!(!is_thought_only_turn(true, false, "结论：……"), "有正文即正常完成");
     }
 
     #[test]

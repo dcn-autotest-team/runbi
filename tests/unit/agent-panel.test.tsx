@@ -643,4 +643,74 @@ describe('Autonomous AgentPanel', () => {
     });
     expect(host.textContent).toContain('保留的历史会话');
   });
+  it('renders voice input button and warns when API key is missing', () => {
+    let toastMessage = '';
+    act(() => {
+      root.render(
+        <AgentPanel
+          endpoint="https://api.senseaudio.cn/v1"
+          apiKey=""
+          model="senseaudio-s2"
+          onToast={(msg) => { toastMessage = msg; }}
+        />
+      );
+    });
+
+    const micBtn = host.querySelector<HTMLButtonElement>('[aria-label="语音输入"]');
+    expect(micBtn).not.toBeNull();
+    expect(micBtn?.getAttribute('title')).toContain('语音输入');
+
+    act(() => {
+      micBtn?.click();
+    });
+
+    expect(toastMessage).toContain('请先在「设置」中配置商汤 API Key');
+  });
+
+  it('renders TTS voice readout button on completed turns and warns when API key is missing', () => {
+    const mockSessions = [
+      {
+        id: 'sess-tts',
+        title: 'TTS 会话',
+        createdAt: 1000,
+        updatedAt: 2000,
+        projectDir: '.',
+        turns: [
+          {
+            id: 't-tts-1',
+            prompt: '朗读测试',
+            projectDir: '.',
+            status: 'done' as const,
+            thinking: '',
+            toolCalls: [],
+            finalContent: '这是一段测试回复文本。',
+          },
+        ],
+      },
+    ];
+    window.localStorage.setItem(STORAGE_KEY_SESSIONS, JSON.stringify(mockSessions));
+    window.localStorage.setItem(STORAGE_KEY_ACTIVE_ID, 'sess-tts');
+
+    let toastMessage = '';
+    act(() => {
+      root.render(
+        <AgentPanel
+          endpoint="https://api.senseaudio.cn/v1"
+          apiKey=""
+          model="senseaudio-s2"
+          onToast={(msg) => { toastMessage = msg; }}
+        />
+      );
+    });
+
+    const ttsBtn = host.querySelector<HTMLButtonElement>('[aria-label="语音朗读"]');
+    expect(ttsBtn).not.toBeNull();
+    expect(ttsBtn?.textContent).toContain('朗读');
+
+    act(() => {
+      ttsBtn?.click();
+    });
+
+    expect(toastMessage).toContain('请先在「设置」中配置商汤 API Key');
+  });
 });

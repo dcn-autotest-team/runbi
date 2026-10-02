@@ -70,6 +70,19 @@ describe('Desktop selection-to-polish flow', () => {
     vi.useRealTimers();
   });
 
+  it('places the agent first and preserves window size when switching normal tabs', async () => {
+    await act(async () => root.render(<App />));
+    const tabs = () => Array.from(host.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+    expect(tabs().map((tab) => tab.textContent?.trim())).toEqual(['智能体', '润色', '回复', '翻译']);
+    const invoke = (window as any).__TAURI_INTERNALS__.invoke;
+    invoke.mockClear();
+    for (const name of ['智能体', '润色', '智能体', '回复', '智能体', '翻译', '智能体']) {
+      await act(async () => tabs().find((tab) => tab.textContent?.trim() === name)!.click());
+      expect(tabs().find((tab) => tab.getAttribute('aria-selected') === 'true')?.textContent?.trim()).toBe(name);
+    }
+    expect(invoke.mock.calls.filter(([cmd]: [string]) => cmd.includes('set_size') || cmd === 'position_window_at_cursor')).toHaveLength(0);
+  });
+
   it('keeps the agent visible on blur and leaves Enter to agent controls', async () => {
     await act(async () => { root.render(<App />); });
     const agentTab = host.querySelector<HTMLButtonElement>('[role="tab"][title="智能体：自主感知与执行任务"]')

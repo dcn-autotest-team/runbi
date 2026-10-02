@@ -29,9 +29,15 @@ import {
   X,
   Clock,
   MessageSquare,
+  Mic,
+  MicOff,
+  Volume2,
+  VolumeX,
 } from 'lucide-react';
 import { MarkdownRenderer } from '@runbi/shared/components';
+import { transcribeAudio, synthesizeSpeech } from '@runbi/shared/core';
 import { estimateTokens } from '@runbi/shared/types';
+import { startAudioRecording, type ActiveRecorder } from '../utils/audioRecorder';
 import {
   AgentSession,
   loadSavedSessions,
@@ -551,6 +557,140 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
     }
   };
 
+  // Voice Input (SenseAudio Token Plan ASR)
+  const [recordingState, setRecordingState] = useState<'idle' | 'recording' | 'transcribing'>('idle');
+  const [recordingDuration, setRecordingDuration] = useState(0);
+  const activeRecorderRef = useRef<ActiveRecorder | null>(null);
+  const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const cancelRecording = useCallback(() => {
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+    if (activeRecorderRef.current) {
+      activeRecorderRef.current.cancel();
+      activeRecorderRef.current = null;
+    }
+    setRecordingState('idle');
+    setRecordingDuration(0);
+  }, []);
+
+  const handleToggleVoiceInput = async () => {
+    if (recordingState === 'recording') {
+      if (recordingTimerRef.current) {
+        clearInterval(recordingTimerRef.current);
+        recordingTimerRef.current = null;
+      }
+      const recorder = activeRecorderRef.current;
+      activeRecorderRef.current = null;
+      if (!recorder) {
+        setRecordingState('idle');
+        return;
+      }
+      setRecordingState('transcribing');
+      try {
+        const blob = await recorder.stop();
+        if (!blob || blob.size < 100) {
+          onToast?.('录音时长过短');
+          setRecordingState('idle');
+          return;
+        }
+        const text = await transcribeAudio(blob, { endpoint, apiKey });
+        if (text) {
+          setTaskPrompt((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text));
+          inputRef.current?.focus();
+          onToast?.('语音已转写');
+        } else {
+          onToast?.('未识别出有效语音文本');
+        }
+      } catch (err: any) {
+        onToast?.(err.message || '语音识别失败');
+      } finally {
+        setRecordingState('idle');
+        setRecordingDuration(0);
+      }
+    } else if (recordingState === 'idle') {
+      if (!apiKey?.trim()) {
+        onToast?.('请先在「设置」中配置商汤 API Key，以便使用语音识别服务');
+        return;
+      }
+      try {
+        const recorder = await startAudioRecording();
+        activeRecorderRef.current = recorder;
+        setRecordingState('recording');
+        setRecordingDuration(0);
+        recordingTimerRef.current = setInterval(() => {
+          setRecordingDuration((d) => d + 1);
+        }, 1000);
+      } catch (err: any) {
+        onToast?.(`无法启动录音: ${err.message || err}`);
+      }
+    }
+  };
+
+  // Voice Readout (SenseAudio Token Plan TTS)
+  const [speakingTurnId, setSpeakingTurnId] = useState<string | null>(null);
+  const [isTtsLoading, setIsTtsLoading] = useState(false);
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
+  const currentAudioUrlRef = useRef<string | null>(null);
+
+  const stopCurrentAudio = useCallback(() => {
+    if (currentAudioRef.current) {
+      currentAudioRef.current.pause();
+      currentAudioRef.current = null;
+    }
+    if (currentAudioUrlRef.current) {
+      URL.revokeObjectURL(currentAudioUrlRef.current);
+      currentAudioUrlRef.current = null;
+    }
+    setSpeakingTurnId(null);
+    setIsTtsLoading(false);
+  }, []);
+
+  const handleToggleSpeak = async (turnId: string, text: string) => {
+    if (speakingTurnId === turnId) {
+      stopCurrentAudio();
+      return;
+    }
+    stopCurrentAudio();
+
+    if (!apiKey?.trim()) {
+      onToast?.('请先在「设置」中配置商汤 API Key，以便使用语音朗读服务');
+      return;
+    }
+
+    setSpeakingTurnId(turnId);
+    setIsTtsLoading(true);
+
+    try {
+      const blob = await synthesizeSpeech(text, { endpoint, apiKey });
+      const audioUrl = URL.createObjectURL(blob);
+      currentAudioUrlRef.current = audioUrl;
+      const audio = new Audio(audioUrl);
+      currentAudioRef.current = audio;
+      audio.onended = () => {
+        stopCurrentAudio();
+      };
+      audio.onerror = () => {
+        onToast?.('音频播放失败');
+        stopCurrentAudio();
+      };
+      setIsTtsLoading(false);
+      await audio.play();
+    } catch (err: any) {
+      onToast?.(err.message || '语音朗读失败');
+      stopCurrentAudio();
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      cancelRecording();
+      stopCurrentAudio();
+    };
+  }, [cancelRecording, stopCurrentAudio]);
+
   const renderTurn = (turn: AgentTurn, isLive: boolean, turnIdx: number) => (
     <article key={turn.id} className="agent-turn">
       <div className="agent-user-message">
@@ -588,6 +728,24 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
         {turn.finalContent && <div className="agent-answer"><MarkdownRenderer content={sanitizeTurnContent(turn.finalContent)} isGenerating={isLive} /></div>}
         {!isLive && <div className="agent-response-actions">
           {turn.finalContent && <button type="button" onClick={() => handleCopy(sanitizeTurnContent(turn.finalContent))} title="复制回复" aria-label="复制回复"><Copy size={13} />复制回复</button>}
+          {turn.finalContent && (
+            <button
+              type="button"
+              onClick={() => handleToggleSpeak(turn.id, sanitizeTurnContent(turn.finalContent))}
+              title={speakingTurnId === turn.id ? '停止朗读' : '语音朗读 (SenseAudio TTS)'}
+              aria-label={speakingTurnId === turn.id ? '停止朗读' : '语音朗读'}
+              className={speakingTurnId === turn.id ? 'agent-tts-active' : ''}
+            >
+              {speakingTurnId === turn.id && isTtsLoading ? (
+                <Loader2 size={13} className="animate-spin" />
+              ) : speakingTurnId === turn.id ? (
+                <VolumeX size={13} />
+              ) : (
+                <Volume2 size={13} />
+              )}
+              {speakingTurnId === turn.id ? (isTtsLoading ? '合成中…' : '停止朗读') : '朗读'}
+            </button>
+          )}
           {(turn.status === 'error' || turn.status === 'aborted') && <button type="button" onClick={() => { setTaskPrompt(turn.prompt); inputRef.current?.focus(); }}><RefreshCw size={13} />重新编辑</button>}
         </div>}
       </div>
@@ -843,8 +1001,55 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
               </button>
             </div>
 
-            {/* Right controls: Keyboard shortcut hint + Run/Stop button */}
-            <div className="flex items-center gap-2 shrink-0">
+            {/* Right controls: Voice Input + Run/Stop button */}
+            <div className="flex items-center gap-1.5 shrink-0">
+              {recordingState === 'recording' && (
+                <button
+                  type="button"
+                  onClick={cancelRecording}
+                  className="agent-mic-cancel"
+                  title="取消录音"
+                  aria-label="取消录音"
+                >
+                  <X size={14} />
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={handleToggleVoiceInput}
+                disabled={isRunning || recordingState === 'transcribing'}
+                className={`agent-mic ${
+                  recordingState === 'recording'
+                    ? 'agent-mic-recording'
+                    : recordingState === 'transcribing'
+                    ? 'agent-mic-transcribing'
+                    : ''
+                }`}
+                title={
+                  recordingState === 'recording'
+                    ? '点击停止并转写语音'
+                    : recordingState === 'transcribing'
+                    ? '正在识别语音…'
+                    : '语音输入 (商汤 SenseAudio ASR)'
+                }
+                aria-label="语音输入"
+              >
+                {recordingState === 'recording' ? (
+                  <>
+                    <MicOff size={15} />
+                    <span className="font-mono text-[10px]">
+                      {Math.floor(recordingDuration / 60)
+                        .toString()
+                        .padStart(2, '0')}
+                      :{(recordingDuration % 60).toString().padStart(2, '0')}
+                    </span>
+                  </>
+                ) : recordingState === 'transcribing' ? (
+                  <Loader2 size={15} className="animate-spin" />
+                ) : (
+                  <Mic size={15} />
+                )}
+              </button>
 
               {isRunning ? (
                 <button
@@ -860,7 +1065,7 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
                 <button
                   type="button"
                   onClick={handleStartTask}
-                  disabled={!taskPrompt.trim() || isBrowsingFolder}
+                  disabled={!taskPrompt.trim() || isBrowsingFolder || recordingState === 'recording'}
                   className="agent-send"
                   aria-label="执行任务"
                 >

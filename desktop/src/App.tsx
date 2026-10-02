@@ -2595,7 +2595,7 @@ export const App: React.FC = () => {
     stopAllParallel();
     setShowParallel(false);
     setParallelSessions([]);
-    applyParallelWindowSize(false);
+    if (stateRef.current.showParallel) applyParallelWindowSize(false);
   }, [stopAllParallel, applyParallelWindowSize]);
 
   const handleSwitchToAgent = useCallback(() => {
@@ -3209,6 +3209,20 @@ export const App: React.FC = () => {
               <button
                 type="button"
                 role="tab"
+                aria-selected={showAgent}
+                title="智能体：自主感知与执行任务"
+                onClick={handleSwitchToAgent}
+                className={`runbi-mode-tab rounded-full px-2 py-0.5 text-[10px] font-medium cursor-pointer ${
+                  showAgent
+                    ? 'bg-indigo-500/25 text-indigo-300 border border-indigo-500/40 shadow-xs'
+                    : 'text-slate-500 hover:text-slate-300'
+                }`}
+              >
+                智能体
+              </button>
+              <button
+                type="button"
+                role="tab"
                 aria-selected={!showAgent && renderedPanelStyle !== 'reply' && renderedPanelStyle !== 'translate' && !screenReplyAnalysis}
                 title="润色：改写我自己的文字"
                 onClick={handleSwitchToPolish}
@@ -3247,20 +3261,6 @@ export const App: React.FC = () => {
                 }`}
               >
                 翻译
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={showAgent}
-                title="智能体：自主感知与执行任务"
-                onClick={handleSwitchToAgent}
-                className={`runbi-mode-tab rounded-full px-2 py-0.5 text-[10px] font-medium cursor-pointer ${
-                  showAgent
-                    ? 'bg-indigo-500/25 text-indigo-300 border border-indigo-500/40 shadow-xs'
-                    : 'text-slate-500 hover:text-slate-300'
-                }`}
-              >
-                智能体
               </button>
             </div>
           </div>
