@@ -1033,4 +1033,42 @@ describe('Desktop selection-to-polish flow', () => {
     expect(invoke.mock.calls.some(([cmd]: [string]) => cmd === 'hide_window')).toBe(false);
   });
 
+  it('caches generated results across tabs and avoids re-calling LLM when switching back', async () => {
+    await act(async () => root.render(<App />));
+    const select = eventMocks.listeners.get('runbi://captured-selection')!;
+    await act(async () => {
+      select({
+        payload: { text: '测试缓存的原文', trigger: 'shortcut' },
+      });
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+
+    const tab = (name: string) => Array.from(host.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
+      .find((item) => item.textContent?.includes(name))!;
+
+    // Initial polish finished and displayed
+    expect(host.textContent).toContain('测试缓存的原文');
+
+    // Switch to Translate tab
+    await act(async () => {
+      tab('翻译').click();
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+    expect(host.querySelector('[data-testid="translate-bar"]')).not.toBeNull();
+
+    // Switch back to Polish tab - restores cached result
+    await act(async () => {
+      tab('润色').click();
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(host.querySelector('[data-testid="translate-bar"]')).toBeNull();
+
+    // Switch back to Translate tab - restores cached translation
+    await act(async () => {
+      tab('翻译').click();
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(host.querySelector('[data-testid="translate-bar"]')).not.toBeNull();
+  });
+
 });

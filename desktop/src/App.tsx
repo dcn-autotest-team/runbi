@@ -634,8 +634,15 @@ export const App: React.FC = () => {
     stateRef.current.translateTarget = target;
     setTranslateTarget(target);
     adapters.storageProvider.set('translateTarget', target).catch(() => {});
-    stateRef.current.handleStartPolish(text, 'translate', undefined, screenshot);
-  }, [adapters.storageProvider]);
+    const cacheKey = resultCacheKey(text, 'translate');
+    const cached = resultCacheGet(cacheKey);
+    if (cached) {
+      setPolishedText(cached.text);
+      setIsGenerating(false);
+      return;
+    }
+    stateRef.current.handleStartPolish(text, 'translate', undefined, screenshot, undefined, cacheKey);
+  }, [adapters.storageProvider, resultCacheGet, resultCacheKey]);
 
   // Keep one runtime signature for the two user-visible translation entries.
   // This is intentionally sampled after React commits so a native capsule
@@ -1052,6 +1059,12 @@ export const App: React.FC = () => {
 
     if (style !== 'reply' && style !== 'translate') lastPolishStyleRef.current = style;
 
+    const resolvedCacheKey = cacheKey || (
+      !customInstruction
+        ? resultCacheKey(text, style === 'translate' ? 'translate' : style === 'reply' ? 'reply' : 'polish')
+        : undefined
+    );
+
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
@@ -1189,7 +1202,7 @@ export const App: React.FC = () => {
               }
               setPolishedText((finalText) => {
                 if (finalText && finalText.trim()) {
-                  if (cacheKey) resultCacheSet(cacheKey, { text: finalText });
+                  if (resolvedCacheKey) resultCacheSet(resolvedCacheKey, { text: finalText });
                   addHistoryRecord({
                     // refine 路径传入的 text 是整段 prompt,历史"原文"要显示真实对话原文
                     originalText: historyOriginalText?.trim() || text,
@@ -1282,7 +1295,7 @@ export const App: React.FC = () => {
         }
       }
     }
-  }, [adapters, apiKey, endpoint, model, glossaryPromptText, styleSamples]);
+  }, [adapters, apiKey, endpoint, model, glossaryPromptText, styleSamples, resultCacheKey, resultCacheSet]);
 
   // Global shortcut and mouse-selection listeners are registered once. Keep the
   // callback they invoke fresh instead of leaving the initial no-op placeholder.
@@ -1465,6 +1478,8 @@ export const App: React.FC = () => {
     abortControllerRef.current = abortController;
     const currentSignal = abortController.signal;
 
+    const resolvedCacheKey = cacheKey || resultCacheKey(messageText, 'reply');
+
     setIsGenerating(true);
     setError(null);
     setPolishedText('正在构思回复...');
@@ -1489,6 +1504,7 @@ export const App: React.FC = () => {
         };
         setScreenReplyAnalysis(rememberConversation(mockAnalysis));
         setPolishedText(mockAnalysis.draft_reply);
+        if (resolvedCacheKey) resultCacheSet(resolvedCacheKey, { text: mockAnalysis.draft_reply, screenReplyAnalysis: mockAnalysis });
         setOriginalText(targetMsg);
         stateRef.current.originalText = targetMsg;
         if (abortControllerRef.current === abortController) {
@@ -1541,8 +1557,11 @@ export const App: React.FC = () => {
               setScreenReplyAnalysis(rememberConversation(parsed));
               const draft = parsed.draft_reply || rawOutput.trim();
               setPolishedText(draft);
-              if (cacheKey) resultCacheSet(cacheKey, { text: draft, screenReplyAnalysis: parsed });
+              if (resolvedCacheKey) resultCacheSet(resolvedCacheKey, { text: draft, screenReplyAnalysis: parsed });
               const targetMsg = parsed.last_message_from_other || messageText;
+              if (targetMsg !== messageText) {
+                resultCacheSet(resultCacheKey(targetMsg, 'reply'), { text: draft, screenReplyAnalysis: parsed });
+              }
               setOriginalText(targetMsg);
               stateRef.current.originalText = targetMsg;
               if (draft) {
@@ -1580,7 +1599,7 @@ export const App: React.FC = () => {
         setError(String(e?.message || e));
       }
     }
-  }, [adapters, apiKey, endpoint, model, rememberConversation]);
+  }, [adapters, apiKey, endpoint, model, rememberConversation, resultCacheKey, resultCacheSet]);
 
   stateRef.current.handleStartTextReplyAnalysis = handleStartTextReplyAnalysis;
 
@@ -1599,8 +1618,9 @@ export const App: React.FC = () => {
     const historyOriginal = analysis?.last_message_from_other
       || conversation.filter((c) => c.sender === 'other').slice(-1)[0]?.text
       || undefined;
-    handleStartPolish(refinePrompt, 'reply', chipText, undefined, historyOriginal);
-  }, [handleStartPolish, attachedFiles, activePersonaPrompt, activePackPrompt, glossaryPromptText]);
+    const replyCacheKey = resultCacheKey(stateRef.current.originalText, 'reply');
+    handleStartPolish(refinePrompt, 'reply', chipText, undefined, historyOriginal, replyCacheKey);
+  }, [handleStartPolish, attachedFiles, activePersonaPrompt, activePackPrompt, glossaryPromptText, resultCacheKey]);
 
   // 飞书智能应答追踪循环（多模态视口滚动 + 双模式应答）
   useEffect(() => {
@@ -2081,6 +2101,9 @@ export const App: React.FC = () => {
           // A new text selection is never the previous screen-reply session.
           // Clear that context before handling capsule actions so translation
           // and text-reply entries cannot inherit the old context UI.
+          if (captured.trim() !== stateRef.current.originalText?.trim()) {
+            resultCacheClear();
+          }
           setScreenReplyAnalysis(null);
           stateRef.current.screenReplyAnalysis = null;
           setCurrentScreenshot(screenshot);
@@ -2400,6 +2423,9 @@ export const App: React.FC = () => {
     if (activeStyle === 'translate') {
       resultCacheRef.current.delete(resultCacheKey(originalText, 'translate'));
       activateTranslate(originalText, currentScreenshot, translateTarget);
+    } else if (activeStyle === 'reply') {
+      resultCacheRef.current.delete(resultCacheKey(originalText, 'reply'));
+      stateRef.current.handleStartTextReplyAnalysis(originalText, resultCacheKey(originalText, 'reply'));
     } else {
       resultCacheRef.current.delete(resultCacheKey(originalText, 'polish'));
       handleStartPolish(originalText, activeStyle, undefined, currentScreenshot);
@@ -2430,92 +2456,112 @@ export const App: React.FC = () => {
   const handleSwitchToPolish = useCallback(() => {
     const wasAgent = stateRef.current.showAgent;
     if (wasAgent) {
-      // 只切内容:四个 tab 共用同一套窗口几何,切 tab 不改窗口尺寸(改尺寸由 Rust
-      // 的 PANEL_SIZE 统一负责)。以前这里会把窗口缩回 560×520,于是点一下 tab
-      // 窗口就跳一次大小。
       setShowAgent(false);
+      if (stateRef.current.activeStyle !== 'reply' && stateRef.current.activeStyle !== 'translate' && !stateRef.current.screenReplyAnalysis) {
+        return;
+      }
+    } else if (stateRef.current.activeStyle !== 'reply' && stateRef.current.activeStyle !== 'translate' && !stateRef.current.screenReplyAnalysis) {
+      return;
     }
-    if (!wasAgent && stateRef.current.activeStyle !== 'reply' && stateRef.current.activeStyle !== 'translate' && !stateRef.current.screenReplyAnalysis) return;
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
     translationPanelRef.current = false;
     stateRef.current.activeExpert = null;
     setActiveExpert(null);
     setScreenReplyAnalysis(null);
+    stateRef.current.screenReplyAnalysis = null;
     const target = lastPolishStyleRef.current;
     stateRef.current.activeStyle = target;
     setActiveStyle(target);
     const text = stateRef.current.originalText;
     if (text.trim()) {
-      // 同 (原文, 模式) 已有结果：直接复用，不发重复请求
-      const cached = resultCacheGet(resultCacheKey(text, 'polish'));
+      const cacheKey = resultCacheKey(text, 'polish');
+      const cached = resultCacheGet(cacheKey);
       if (cached) {
         setPolishedText(cached.text);
         setIsGenerating(false);
         return;
       }
-      handleStartPolish(text, target, undefined, undefined, undefined, resultCacheKey(text, 'polish'));
+      handleStartPolish(text, target, undefined, undefined, undefined, cacheKey);
     }
-  }, [handleStartPolish, isTauri, resultCacheGet, resultCacheKey]);
+  }, [handleStartPolish, resultCacheGet, resultCacheKey]);
 
-  // 翻译模式语言条：切换目标语言 → 持久化并对当前原文立即重译
+  // 翻译模式语言条：切换目标语言 → 持久化并对当前原文立即重译（若有缓存直接复用）
   const handleTranslateTargetChange = useCallback((id: TranslateTargetId) => {
     setTranslateTarget(id);
     stateRef.current.translateTarget = id;
     adapters.storageProvider.set('translateTarget', id).catch(() => {});
-    if (stateRef.current.activeStyle === 'translate' && stateRef.current.originalText.trim()) {
-      stateRef.current.handleStartPolish(stateRef.current.originalText, 'translate', undefined, currentScreenshot);
+    const text = stateRef.current.originalText;
+    if (stateRef.current.activeStyle === 'translate' && text.trim()) {
+      const cacheKey = resultCacheKey(text, 'translate');
+      const cached = resultCacheGet(cacheKey);
+      if (cached) {
+        setPolishedText(cached.text);
+        setIsGenerating(false);
+        return;
+      }
+      stateRef.current.handleStartPolish(text, 'translate', undefined, currentScreenshot, undefined, cacheKey);
     }
-  }, [adapters.storageProvider, currentScreenshot]);
+  }, [adapters.storageProvider, currentScreenshot, resultCacheGet, resultCacheKey]);
 
   const handleSwitchToReply = useCallback(() => {
-    if (stateRef.current.showAgent) {
-      // 同 handleSwitchToPolish:切 tab 不改窗口尺寸。
+    const wasAgent = stateRef.current.showAgent;
+    if (wasAgent) {
       setShowAgent(false);
+      if (stateRef.current.activeStyle === 'reply') {
+        return;
+      }
     } else if (stateRef.current.activeStyle === 'reply') {
       return;
     }
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
     translationPanelRef.current = false;
     setScreenReplyAnalysis(null);
+    stateRef.current.screenReplyAnalysis = null;
     stateRef.current.activeStyle = 'reply';
     setActiveStyle('reply');
     const text = stateRef.current.originalText;
     if (text.trim()) {
-      // 同 (原文, 模式) 已有结果：直接复用，不发重复请求
-      const cached = resultCacheGet(resultCacheKey(text, 'reply'));
+      const cacheKey = resultCacheKey(text, 'reply');
+      const cached = resultCacheGet(cacheKey);
       if (cached) {
         setPolishedText(cached.text);
         if (cached.screenReplyAnalysis) setScreenReplyAnalysis(cached.screenReplyAnalysis);
         setIsGenerating(false);
         return;
       }
-      stateRef.current.handleStartTextReplyAnalysis(text, resultCacheKey(text, 'reply'));
+      stateRef.current.handleStartTextReplyAnalysis(text, cacheKey);
     }
-  }, [isTauri, resultCacheGet, resultCacheKey]);
+  }, [resultCacheGet, resultCacheKey]);
 
   const handleSwitchToTranslate = useCallback(() => {
-    if (stateRef.current.showAgent) {
-      // 同 handleSwitchToPolish:切 tab 不改窗口尺寸。
+    const wasAgent = stateRef.current.showAgent;
+    if (wasAgent) {
       setShowAgent(false);
+      if (stateRef.current.activeStyle === 'translate' && translationPanelRef.current) {
+        return;
+      }
+    } else if (stateRef.current.activeStyle === 'translate' && translationPanelRef.current) {
+      return;
+    }
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
     }
     const text = stateRef.current.originalText;
     if (text.trim()) {
-      // 同 (原文, 模式) 已有结果：只切 UI 状态，不发重复请求
-      const cached = resultCacheGet(resultCacheKey(text, 'translate'));
-      if (cached) {
-        styleOverrideRef.current = true;
-        translationPanelRef.current = true;
-        setUiMode('panel');
-        stateRef.current.activeStyle = 'translate';
-        setActiveStyle('translate');
-        setPolishedText(cached.text);
-        setIsGenerating(false);
-        return;
-      }
       activateTranslate(text, null);
     } else {
       setActiveStyle('translate');
       stateRef.current.activeStyle = 'translate';
+      translationPanelRef.current = true;
     }
-  }, [activateTranslate, isTauri, resultCacheGet, resultCacheKey]);
+  }, [activateTranslate]);
 
   // ---- 多专家并行：同一输入并发发给 2-4 位专家，各自独立流式 ----
   // 并行对比是唯一会临时改窗口尺寸的模式（要横向铺 2-4 列）；退出时回到基准尺寸。
