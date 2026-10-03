@@ -20,6 +20,8 @@ export interface StreamConfig {
   baseUrl?: string;
   model?: string;
   style: PolishStyle;
+  skillId?: string;
+  skillPrompt?: string;
   customPrompt?: string;
   userInstruction?: string;
   personaPrompt?: string;

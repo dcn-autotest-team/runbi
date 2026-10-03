@@ -419,6 +419,13 @@ pub fn hide_window(window: WebviewWindow, only_if_unfocused: Option<bool>) -> Re
         return Ok(false);
     }
     if only_if_unfocused.unwrap_or(false) {
+        // If the window was shown within the last 1000ms, do not dismiss on initial focus transition
+        let now = crate::commands::mouse_hook::current_time_ms();
+        let last_show = crate::commands::position::last_show_time_ms();
+        if now.saturating_sub(last_show) < 1000 {
+            return Ok(false);
+        }
+
         #[cfg(windows)]
         {
             use windows_sys::Win32::UI::WindowsAndMessaging::{

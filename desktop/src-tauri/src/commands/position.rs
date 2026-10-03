@@ -116,20 +116,68 @@ fn release_geometry_lock() {
     WINDOW_GEOMETRY_LOCK.store(false, std::sync::atomic::Ordering::SeqCst);
 }
 
-/// 显示面板的统一入口：先把几何归一成 PANEL_SIZE，再 show + focus。
+pub static LAST_SHOW_TIME_MS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+pub fn record_last_show_time() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    LAST_SHOW_TIME_MS.store(now, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn last_show_time_ms() -> u64 {
+    LAST_SHOW_TIME_MS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg(windows)]
+pub fn force_foreground(window: &WebviewWindow) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        BringWindowToTop, GetForegroundWindow, GetWindowThreadProcessId, SetForegroundWindow,
+        ShowWindow, SW_RESTORE,
+    };
+    use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+
+    if let Ok(hwnd) = window.hwnd() {
+        let hwnd = hwnd.0;
+        unsafe {
+            let _ = ShowWindow(hwnd, SW_RESTORE);
+            let fg_hwnd = GetForegroundWindow();
+            let fg_thread = GetWindowThreadProcessId(fg_hwnd, std::ptr::null_mut());
+            let cur_thread = GetCurrentThreadId();
+            if fg_thread != 0 && fg_thread != cur_thread {
+                AttachThreadInput(cur_thread, fg_thread, 1);
+                SetForegroundWindow(hwnd);
+                BringWindowToTop(hwnd);
+                AttachThreadInput(cur_thread, fg_thread, 0);
+            } else {
+                SetForegroundWindow(hwnd);
+                BringWindowToTop(hwnd);
+            }
+        }
+    }
+}
+
+#[cfg(not(windows))]
+pub fn force_foreground(_window: &WebviewWindow) {}
+
+/// 显示面板的统一入口：恢复最小化、归一尺寸、居中，再 show + 强激活置顶。
 ///
-/// 托盘「显示／设置」、单实例二次启动、手动启动这三条路径原先只 show 不设尺寸，
-/// 于是窗口会以上一次的尺寸出现 —— 划词胶囊刚被收起时甚至只有 196×44。
-/// 所有这些入口都必须走这里，尺寸才有唯一出口。
+/// 托盘「显示／设置」、单实例二次启动、手动启动这三条路径必须走这里，
+/// 确保窗口可靠弹出在屏幕中央并获得前台焦点。
 pub fn show_panel(window: &WebviewWindow) -> Result<(), String> {
+    record_last_show_time();
+    let _ = window.unminimize();
     // 归一几何要和其他几何写者串行，避免并发 set_size 触发 WebView2 堆破坏。
-    // 拿不到锁就只 show 不改尺寸：下次定位会纠正，比把窗口显示失败好。
     if acquire_geometry_lock() {
         let _ = apply_panel_geometry(window);
         release_geometry_lock();
     }
+    let _ = window.center();
     window.show().map_err(|e| e.to_string())?;
     let _ = window.set_focus();
+    force_foreground(window);
     Ok(())
 }
 

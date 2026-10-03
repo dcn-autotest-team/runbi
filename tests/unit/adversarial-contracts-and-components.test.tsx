@@ -698,8 +698,9 @@ describe('Adversarial Shared React UI Components', () => {
       expect(container.textContent).toContain('38 Tokens');
 
       // Click Stop button
-      const stopBtn = container.querySelector('button[type="button"] span:last-child');
-      const stopButtonElement = stopBtn?.closest('button');
+      const stopButtonElement = Array.from(container.querySelectorAll('button')).find((b) =>
+        b.textContent?.includes('停止')
+      );
       if (stopButtonElement) {
         await act(async () => {
           stopButtonElement.click();

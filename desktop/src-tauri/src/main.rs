@@ -109,6 +109,12 @@ fn resolve_sentry_dsn() -> Option<String> {
 
 fn main() {
     #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{AllowSetForegroundWindow, ASFW_ANY};
+        AllowSetForegroundWindow(ASFW_ANY);
+    }
+
+    #[cfg(windows)]
     {
         // Purge stale WebView2 HTTP disk cache and V8 bytecode cache to ensure updated assets load immediately
         if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
@@ -352,12 +358,7 @@ fn main() {
             let is_silent = std::env::args().any(|arg| arg == "--autostart" || arg == "--silent");
             if !is_silent {
                 if let Some(window) = app.get_webview_window("main") {
-                    // 先按统一面板尺寸归一,再居中 —— 反过来的话居中使用的是旧尺寸,
-                    // 窗口会偏出屏幕中央(tauri.conf 里的初始尺寸只用于首帧)。
-                    let _ = commands::position::apply_panel_geometry(&window);
-                    let _ = window.center();
-                    let _ = window.show();
-                    let _ = window.set_focus();
+                    let _ = commands::position::show_panel(&window);
                 }
             }
 

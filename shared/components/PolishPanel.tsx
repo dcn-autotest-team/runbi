@@ -345,7 +345,7 @@ export const PolishPanel: React.FC<PolishPanelProps> = ({
 
           {/* 场景 Skills 快捷开关栏（降维成高频场景开关：会议纪要、工作汇报、项目推进、营销文案、邮件润色、Vibe Coding） */}
           {activeStyle !== 'reply' && activeStyle !== 'translate' && (
-            <div className="flex flex-col gap-1.5" role="toolbar" aria-label="场景 Skills 快捷开关">
+            <div className="flex flex-col gap-1.5" aria-label="场景 Skills 快捷开关">
               <div className="flex items-center justify-between text-[11px]">
                 <div className="flex items-center gap-1.5">
                   <span className="font-medium text-slate-400">场景 Skills</span>

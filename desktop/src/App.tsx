@@ -5,7 +5,7 @@
  */
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import type { PolishStyle, StreamConfig, PersonaType, HistoryRecord, DraftSnapshot, LastReplacementSnapshot, CustomAction, ScriptTemplate, ExpertAgent, GlossaryRule } from '@runbi/shared/types';
+import type { PolishStyle, StreamConfig, PersonaType, HistoryRecord, DraftSnapshot, LastReplacementSnapshot, CustomAction, ScriptTemplate, ExpertAgent, GlossaryRule, SceneSkill } from '@runbi/shared/types';
 import { PERSONA_PRESETS, INDUSTRY_PACKS, detectIndustryPack, estimateTokens, trialRemainingTokens, TRIAL_PROXY_BASE_URL } from '@runbi/shared/types';
 import { PolishPanel, HistoryDrawer, Toast, ScriptLibraryModal, ExpertPickerModal, type AttachedFileContext } from '@runbi/shared/components';
 import { invoke } from '@tauri-apps/api/core';
@@ -56,6 +56,7 @@ import {
   hasLatexMarkers,
   findLatexViolations,
   TRANSLATE_TARGETS,
+  SCENE_SKILLS,
   parseModelJson,
   resolveEndpoint,
   globalChatMemory,
@@ -206,6 +207,7 @@ export const App: React.FC = () => {
   const [showExpertPicker, setShowExpertPicker] = useState<boolean>(false);
   const [contextHint, setContextHint] = useState<string>('');
   const [activeExpert, setActiveExpert] = useState<ExpertAgent | null>(null);
+  const [activeSkill, setActiveSkill] = useState<SceneSkill | null>(null);
   const [showParallel, setShowParallel] = useState<boolean>(false);
   const [parallelSessions, setParallelSessions] = useState<ParallelSession[]>([]);
   const parallelControllersRef = useRef<Map<string, AbortController>>(new Map());
@@ -247,6 +249,7 @@ export const App: React.FC = () => {
   const capsuleArmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const capsuleFadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const panelBlurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastSummonTimeRef = useRef<number>(Date.now());
   const capsuleActionRef = useRef<'expanding' | 'copying' | null>(null);
   const capsuleTransitionRef = useRef<{ text: string; generation?: number; until: number } | null>(null);
   const capsuleRevisionRef = useRef(0);
@@ -392,6 +395,7 @@ export const App: React.FC = () => {
     activePack: INDUSTRY_PACKS[0],
     activePackPrompt: '',
     activeExpert: null as ExpertAgent | null,
+    activeSkill: null as SceneSkill | null,
     showParallel: false,
     parallelRunning: false,
     showScriptLibrary: false,
@@ -406,7 +410,7 @@ export const App: React.FC = () => {
     armCapsule: (_info: CapsuleInfo) => {},
     hideCapsule: (_immediate?: boolean, _nativeAlreadyHidden?: boolean) => {},
     handleCapsuleAction: (_action: CapsuleAction) => {},
-    handleStartPolish: (_t: string, _s: PolishStyle, _c?: string, _img?: string | null, _h?: string, _k?: string) => {},
+    handleStartPolish: (_t: string, _s: PolishStyle, _c?: string, _img?: string | null, _h?: string, _k?: string, _sk?: SceneSkill | null) => {},
     activateTranslate: (_t: string, _img?: string | null, _target?: TranslateTargetId, _preserveAutoMode?: boolean) => {},
     handleStartScreenReplyAnalysis: (_hint?: string) => {},
     handleStartTextReplyAnalysis: (_msg: string, _k?: string) => {},
@@ -431,6 +435,7 @@ export const App: React.FC = () => {
   stateRef.current.activePack = activePack;
   stateRef.current.activePackPrompt = activePackPrompt;
   stateRef.current.activeExpert = activeExpert;
+  stateRef.current.activeSkill = activeSkill;
   stateRef.current.showParallel = showParallel;
   stateRef.current.parallelRunning = parallelRunning;
   stateRef.current.showScriptLibrary = showScriptLibrary;
@@ -1053,7 +1058,8 @@ export const App: React.FC = () => {
     customInstruction?: string,
     screenshotUrl?: string | null,
     historyOriginalText?: string,
-    cacheKey?: string
+    cacheKey?: string,
+    skillOverride?: SceneSkill | null
   ) => {
     if (!text || text.trim().length === 0) return;
 
@@ -1123,8 +1129,12 @@ export const App: React.FC = () => {
       }
     }
 
+    const activeSkillObj = skillOverride !== undefined ? skillOverride : stateRef.current.activeSkill;
+
     const streamConfig: StreamConfig = {
       style,
+      skillId: activeSkillObj?.id,
+      skillPrompt: activeSkillObj?.systemPrompt,
       userInstruction: customInstruction,
       personaPrompt: stateRef.current.activePersonaPrompt || undefined,
       packPrompt: stateRef.current.activePackPrompt || undefined,
@@ -1133,12 +1143,14 @@ export const App: React.FC = () => {
       styleSamplesPrompt: buildStyleSamplesPrompt(styleSamples),
       appStylePrompt: buildAppStylePrompt(stateRef.current.lastChatApp),
       latexGuard: hasLatexMarkers(text),
-      // 翻译模式：目标语言逐次注入系统提示词（专家提示词与翻译互斥，翻译优先）
-      customPrompt: style === 'translate'
-        ? buildTranslateSystemPrompt(stateRef.current.translateTarget, text)
-        : stateRef.current.activeExpert
-          ? buildExpertSystemPrompt(stateRef.current.activeExpert)
-          : undefined,
+      // 场景 Skill > 翻译 > 专家提示词 > 普通润色
+      customPrompt: activeSkillObj
+        ? activeSkillObj.systemPrompt
+        : style === 'translate'
+          ? buildTranslateSystemPrompt(stateRef.current.translateTarget, text)
+          : stateRef.current.activeExpert
+            ? buildExpertSystemPrompt(stateRef.current.activeExpert)
+            : undefined,
       apiKey: usedTrial ? 'trial' : currentApiKey || undefined,
       baseUrl: usedTrial ? `${TRIAL_PROXY_BASE_URL.replace(/\/+$/, '')}/chat/completions` : currentEndpoint || undefined,
       model: currentModel || undefined,
@@ -2031,6 +2043,7 @@ export const App: React.FC = () => {
         setShowHistory(false);
         setShowAgent(false);
         adapters.storageProvider.set('onboardingDone', true).catch(() => {});
+        lastSummonTimeRef.current = Date.now();
         setShowEpoch((n) => n + 1); // remount panel container → replay enter animation
         invoke('append_log', { msg: 'frontend: epoch bumped' }).catch(() => {});
         // 新抓取覆盖内置库浮层与并行对比视图
@@ -2229,6 +2242,7 @@ export const App: React.FC = () => {
 
       // Tray "设置" menu → show window & open the settings form
       unlistens.push(listen('runbi://open-settings', () => {
+        lastSummonTimeRef.current = Date.now();
         setShowEpoch((n) => n + 1);
         setShowSettings(true);
       }).then((un) => un, (e) => { console.warn('listen open-settings failed:', e); return undefined; }));
@@ -2443,6 +2457,10 @@ export const App: React.FC = () => {
       stateRef.current.activeExpert = null;
       setActiveExpert(null);
     }
+    if (stateRef.current.activeSkill) {
+      stateRef.current.activeSkill = null;
+      setActiveSkill(null);
+    }
     setAutoMode(false);
     stateRef.current.autoMode = false;
     if (newStyle !== 'reply') lastPolishStyleRef.current = newStyle;
@@ -2470,6 +2488,8 @@ export const App: React.FC = () => {
     translationPanelRef.current = false;
     stateRef.current.activeExpert = null;
     setActiveExpert(null);
+    stateRef.current.activeSkill = null;
+    setActiveSkill(null);
     setScreenReplyAnalysis(null);
     stateRef.current.screenReplyAnalysis = null;
     const target = lastPolishStyleRef.current;
@@ -2803,6 +2823,8 @@ export const App: React.FC = () => {
   const handleClearExpert = useCallback(() => {
     stateRef.current.activeExpert = null;
     setActiveExpert(null);
+    stateRef.current.activeSkill = null;
+    setActiveSkill(null);
     showToast('已恢复默认润色风格');
   }, [showToast]);
 
@@ -2810,6 +2832,8 @@ export const App: React.FC = () => {
   const handleAutoMode = useCallback(() => {
     stateRef.current.activeExpert = null;
     setActiveExpert(null);
+    stateRef.current.activeSkill = null;
+    setActiveSkill(null);
     setAutoMode(true);
     stateRef.current.autoMode = true;
     showToast('智能模式：AI 自动判断风格与行业场景');
@@ -2821,6 +2845,32 @@ export const App: React.FC = () => {
       handleStartPolish(text, cls.style, undefined);
     }
   }, [showToast, handleStartPolish]);
+
+  // 场景 Skills：降维成场景开关（会议纪要、工作汇报、项目推进、营销文案、邮件润色、Vibe Coding）
+  const handleSelectSkill = useCallback(
+    (skill: SceneSkill | null) => {
+      stateRef.current.activeSkill = skill;
+      setActiveSkill(skill);
+      if (skill) {
+        stateRef.current.activeExpert = null;
+        setActiveExpert(null);
+        setAutoMode(false);
+        stateRef.current.autoMode = false;
+        showToast(`已启用场景 Skill【${skill.name}】`);
+        const text = stateRef.current.originalText;
+        if (text.trim() && !stateRef.current.screenReplyAnalysis) {
+          handleStartPolish(text, stateRef.current.activeStyle, undefined, stateRef.current.currentScreenshot, undefined, undefined, skill);
+        }
+      } else {
+        showToast('已还原通用润色');
+        const text = stateRef.current.originalText;
+        if (text.trim() && !stateRef.current.screenReplyAnalysis) {
+          handleStartPolish(text, stateRef.current.activeStyle, undefined, stateRef.current.currentScreenshot, undefined, undefined, null);
+        }
+      }
+    },
+    [showToast, handleStartPolish]
+  );
 
   // 重新截屏：后台无焦点重抓最近聊天窗口的截图，重跑当前屏幕分析/润色流程。
   // 供面板按钮、面板快捷键 R、全局快捷键 F9(经 runbi://recapture 事件)共用。
@@ -3093,6 +3143,7 @@ export const App: React.FC = () => {
       // 由悬停离开/空闲淡出/Esc 负责(Raycast 式失焦即隐藏只适用面板)。
       if (panelBlurTimerRef.current) clearTimeout(panelBlurTimerRef.current);
       if (isMouseDown) return;
+      if (Date.now() - lastSummonTimeRef.current < 1000) return;
       // The native capsule can activate the WebView when clicked. Its
       // captured-selection event can still arrive just after blur; defer the
       // panel-only hide so blur cannot hide a newly shown capsule.
@@ -3100,6 +3151,7 @@ export const App: React.FC = () => {
         panelBlurTimerRef.current = null;
         const current = stateRef.current;
         if (current.uiMode === 'capsule' || current.showAgent || current.dragging) return;
+        if (Date.now() - lastSummonTimeRef.current < 1000) return;
         if (!current.isPinned && !current.isGenerating && !current.showSettings && !current.showHistory && !current.screenReplyAnalysis && !current.showParallel && !current.parallelRunning) {
           if (isTauri) {
             try {
@@ -4011,6 +4063,8 @@ export const App: React.FC = () => {
             expert={activeExpert ? { name: activeExpert.name, emoji: activeExpert.emoji } : null}
             onClearExpert={handleClearExpert}
             onOpenExperts={() => setShowExpertPicker(true)}
+            activeSkillId={activeSkill?.id ?? null}
+            onSelectSkill={handleSelectSkill}
             packName={activePack.id !== 'general' ? activePack.name : undefined}
             replyQuickTags={replyQuickTags.length > 0 ? replyQuickTags : undefined}
             extraIntentChips={customActionTags.length > 0 ? customActionTags : undefined}

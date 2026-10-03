@@ -7,7 +7,7 @@
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import type { SelectionInfo, PositionCoordinates } from '@runbi/shared/types/selection';
-import type { PolishStyle, StreamConfig } from '@runbi/shared/types/stream';
+import type { PolishStyle, StreamConfig, SceneSkill } from '@runbi/shared/types/stream';
 import type {
   ISelectionProvider,
   ITextReplacer,
@@ -73,6 +73,7 @@ export const App: React.FC<AppProps> = ({
 
   // Stream & Polishing States
   const [activeStyle, setActiveStyle] = useState<PolishStyle>('polished');
+  const [activeSkill, setActiveSkill] = useState<SceneSkill | null>(null);
   const [translateTarget, setTranslateTarget] = useState<TranslateTargetId | null>(null);
   const translateTargetRef = useRef<TranslateTargetId | null>(null);
   const [currentInstruction, setCurrentInstruction] = useState<string>('');
@@ -133,7 +134,7 @@ export const App: React.FC<AppProps> = ({
 
   // Start or restart stream generation for current selection and style
   const startStream = useCallback(
-    async (text: string, style: PolishStyle, userInstruction?: string, targetOverride?: TranslateTargetId) => {
+    async (text: string, style: PolishStyle, userInstruction?: string, targetOverride?: TranslateTargetId, skillOverride?: SceneSkill | null) => {
       cleanupStream();
 
       setPolishedText('');
@@ -171,15 +172,20 @@ export const App: React.FC<AppProps> = ({
           }
         }
 
-        const promptOverride = style === 'translate'
-          ? buildTranslateSystemPrompt(effectiveTranslateTarget, text)
-          : (storedCustomPrompts?.[style] || storedCustomPrompt);
+        const effectiveSkill = skillOverride !== undefined ? skillOverride : activeSkill;
+        const promptOverride = effectiveSkill
+          ? effectiveSkill.systemPrompt
+          : style === 'translate'
+            ? buildTranslateSystemPrompt(effectiveTranslateTarget, text)
+            : (storedCustomPrompts?.[style] || storedCustomPrompt);
 
         const config: StreamConfig = {
           apiKey: storedApiKey || undefined,
           baseUrl: storedBaseUrl || undefined,
           model: storedModel || undefined,
           style,
+          skillId: effectiveSkill?.id,
+          skillPrompt: effectiveSkill?.systemPrompt,
           customPrompt: promptOverride || undefined,
           userInstruction,
         };
@@ -254,13 +260,25 @@ export const App: React.FC<AppProps> = ({
   const handleStyleChange = useCallback(
     (style: PolishStyle) => {
       setActiveStyle(style);
+      setActiveSkill(null);
       setCurrentInstruction('');
       if (selection) {
         const target = style === 'translate' ? resolveTranslateTarget(selection.text) : undefined;
-        startStream(selection.text, style, undefined, target);
+        startStream(selection.text, style, undefined, target, null);
       }
     },
     [selection, startStream]
+  );
+
+  // Scene skill switch
+  const handleSelectSkill = useCallback(
+    (skill: SceneSkill | null) => {
+      setActiveSkill(skill);
+      if (selection) {
+        startStream(selection.text, activeStyle, currentInstruction, undefined, skill);
+      }
+    },
+    [selection, activeStyle, currentInstruction, startStream]
   );
 
   // Translate target language change
@@ -476,6 +494,8 @@ export const App: React.FC<AppProps> = ({
       toastVisible={toastVisible}
       translateTarget={translateTarget ?? undefined}
       onTranslateTargetChange={handleTranslateTargetChange}
+      activeSkillId={activeSkill?.id ?? null}
+      onSelectSkill={handleSelectSkill}
       onClose={handleDismiss}
       onStyleChange={handleStyleChange}
       onToggleDiff={handleToggleDiff}
