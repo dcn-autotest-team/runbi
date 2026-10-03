@@ -448,5 +448,30 @@ describe('Personal Moat Prompt Builders (词库/文风样本/宿主适配/LaTeX 
       expect(prompt).not.toContain('直接输出润色后的终稿内容');
       expect(prompt).toContain('必须输出【简体中文】译文');
     });
+
+    it('buildSystemPrompt for translate style ignores scene skills and pack/persona prompts', () => {
+      const prompt = buildSystemPrompt({
+        style: 'translate',
+        skillId: 'meeting',
+        skillPrompt: '你是一名专业的高级会议纪要整理专家',
+        personaPrompt: '幽默风趣',
+        packPrompt: '客服行业规范',
+        customPromptOverride: buildTranslateSystemPrompt('en', '这是一个需要翻译的句子'),
+      });
+      expect(prompt).not.toContain('会议纪要');
+      expect(prompt).not.toContain('幽默风趣');
+      expect(prompt).not.toContain('客服行业规范');
+      expect(prompt).toContain('必须输出【英文】译文');
+    });
+
+    it('buildSystemPrompt for reply style ignores scene skills', () => {
+      const prompt = buildSystemPrompt({
+        style: 'reply',
+        skillId: 'meeting',
+        skillPrompt: '你是一名专业的高级会议纪要整理专家',
+      });
+      expect(prompt).not.toContain('会议纪要');
+      expect(prompt).toContain('真人感铁律');
+    });
   });
 });

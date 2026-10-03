@@ -378,15 +378,18 @@ export interface UserPromptOptions {
 export function buildSystemPrompt(options: PromptBuildOptions): string {
   const { style, customPromptOverride, skillId, skillPrompt, userInstruction, hasVisionContext, personaPrompt, packPrompt } = options;
 
+  const isPolishStyle = style !== 'reply' && style !== 'translate';
   const resolvedSkillPrompt =
-    skillPrompt && skillPrompt.trim()
-      ? skillPrompt.trim()
-      : skillId
-        ? getSceneSkill(skillId)?.systemPrompt
-        : undefined;
+    isPolishStyle && (
+      skillPrompt && skillPrompt.trim()
+        ? skillPrompt.trim()
+        : skillId
+          ? getSceneSkill(skillId)?.systemPrompt
+          : undefined
+    );
 
   let base =
-    resolvedSkillPrompt ||
+    (isPolishStyle && resolvedSkillPrompt) ||
     (customPromptOverride && customPromptOverride.trim()
       ? customPromptOverride.trim()
       : DEFAULT_STYLE_PROMPTS[style] || DEFAULT_STYLE_PROMPTS.polished);
@@ -400,20 +403,22 @@ export function buildSystemPrompt(options: PromptBuildOptions): string {
     base += REPLY_GUARDRAILS;
   }
 
-  if (personaPrompt && personaPrompt.trim()) {
-    base += `\n【用户人设风格偏好】：${personaPrompt.trim()}\n生成时请深度契合此人设特征。`;
-  }
+  if (style !== 'translate') {
+    if (personaPrompt && personaPrompt.trim()) {
+      base += `\n【用户人设风格偏好】：${personaPrompt.trim()}\n生成时请深度契合此人设特征。`;
+    }
 
-  if (packPrompt && packPrompt.trim()) {
-    base += `\n【行业场景规则】：\n${packPrompt.trim()}`;
-  }
+    if (packPrompt && packPrompt.trim()) {
+      base += `\n【行业场景规则】：\n${packPrompt.trim()}`;
+    }
 
-  if (options.appStylePrompt && options.appStylePrompt.trim()) {
-    base += options.appStylePrompt;
-  }
+    if (options.appStylePrompt && options.appStylePrompt.trim()) {
+      base += options.appStylePrompt;
+    }
 
-  if (options.styleSamplesPrompt && options.styleSamplesPrompt.trim()) {
-    base += options.styleSamplesPrompt;
+    if (options.styleSamplesPrompt && options.styleSamplesPrompt.trim()) {
+      base += options.styleSamplesPrompt;
+    }
   }
 
   // 词库硬约束放在最靠近 userInstruction 的位置：越靠后优先级越高，压过风格/行业规则。

@@ -172,11 +172,14 @@ export const App: React.FC<AppProps> = ({
           }
         }
 
-        const effectiveSkill = skillOverride !== undefined ? skillOverride : activeSkill;
-        const promptOverride = effectiveSkill
-          ? effectiveSkill.systemPrompt
-          : style === 'translate'
-            ? buildTranslateSystemPrompt(effectiveTranslateTarget, text)
+        const isPolish = style !== 'reply' && style !== 'translate';
+        const effectiveSkill = isPolish
+          ? (skillOverride !== undefined ? skillOverride : activeSkill)
+          : null;
+        const promptOverride = style === 'translate'
+          ? buildTranslateSystemPrompt(effectiveTranslateTarget, text)
+          : effectiveSkill
+            ? effectiveSkill.systemPrompt
             : (storedCustomPrompts?.[style] || storedCustomPrompt);
 
         const config: StreamConfig = {

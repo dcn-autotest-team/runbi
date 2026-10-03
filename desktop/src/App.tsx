@@ -630,6 +630,8 @@ export const App: React.FC = () => {
     setError(null);
     stateRef.current.activeExpert = null;
     setActiveExpert(null);
+    stateRef.current.activeSkill = null;
+    setActiveSkill(null);
     setScreenReplyAnalysis(null);
     stateRef.current.screenReplyAnalysis = null;
     if (!preserveAutoMode) {
@@ -715,6 +717,10 @@ export const App: React.FC = () => {
         // panel, but a late config/selection render cannot fall back to polish.
         styleOverrideRef.current = true;
         translationPanelRef.current = true;
+        stateRef.current.activeExpert = null;
+        setActiveExpert(null);
+        stateRef.current.activeSkill = null;
+        setActiveSkill(null);
         stateRef.current.activeStyle = 'translate';
         setActiveStyle('translate');
       } else {
@@ -1141,25 +1147,27 @@ export const App: React.FC = () => {
       }
     }
 
-    const activeSkillObj = skillOverride !== undefined ? skillOverride : stateRef.current.activeSkill;
+    const isPolish = style !== 'reply' && style !== 'translate';
+    const activeSkillObj = isPolish
+      ? (skillOverride !== undefined ? skillOverride : stateRef.current.activeSkill)
+      : null;
 
     const streamConfig: StreamConfig = {
       style,
       skillId: activeSkillObj?.id,
       skillPrompt: activeSkillObj?.systemPrompt,
       userInstruction: customInstruction,
-      personaPrompt: stateRef.current.activePersonaPrompt || undefined,
-      packPrompt: stateRef.current.activePackPrompt || undefined,
+      personaPrompt: isPolish ? (stateRef.current.activePersonaPrompt || undefined) : undefined,
+      packPrompt: isPolish ? (stateRef.current.activePackPrompt || undefined) : undefined,
       // 缺陷5/6/8:个人词库硬约束 + 文风标杆 few-shot + 宿主应用细粒度适配 + LaTeX 保护
       glossaryPrompt: glossaryPromptText,
-      styleSamplesPrompt: buildStyleSamplesPrompt(styleSamples),
-      appStylePrompt: buildAppStylePrompt(stateRef.current.lastChatApp),
+      styleSamplesPrompt: isPolish ? buildStyleSamplesPrompt(styleSamples) : undefined,
+      appStylePrompt: isPolish ? buildAppStylePrompt(stateRef.current.lastChatApp) : undefined,
       latexGuard: hasLatexMarkers(text),
-      // 场景 Skill > 翻译 > 专家提示词 > 普通润色
-      customPrompt: activeSkillObj
-        ? activeSkillObj.systemPrompt
-        : style === 'translate'
-          ? buildTranslateSystemPrompt(stateRef.current.translateTarget, text)
+      customPrompt: style === 'translate'
+        ? buildTranslateSystemPrompt(stateRef.current.translateTarget, text)
+        : activeSkillObj
+          ? activeSkillObj.systemPrompt
           : stateRef.current.activeExpert
             ? buildExpertSystemPrompt(stateRef.current.activeExpert)
             : undefined,
@@ -2448,15 +2456,16 @@ export const App: React.FC = () => {
 
   // Regenerate
   const handleRegenerate = () => {
-    if (activeStyle === 'translate') {
+    const currentStyle = translationPanelRef.current ? 'translate' : activeStyle;
+    if (currentStyle === 'translate') {
       resultCacheRef.current.delete(resultCacheKey(originalText, 'translate'));
       activateTranslate(originalText, currentScreenshot, translateTarget);
-    } else if (activeStyle === 'reply') {
+    } else if (currentStyle === 'reply') {
       resultCacheRef.current.delete(resultCacheKey(originalText, 'reply'));
       stateRef.current.handleStartTextReplyAnalysis(originalText, resultCacheKey(originalText, 'reply'));
     } else {
       resultCacheRef.current.delete(resultCacheKey(originalText, 'polish'));
-      handleStartPolish(originalText, activeStyle, undefined, currentScreenshot);
+      handleStartPolish(originalText, currentStyle, undefined, currentScreenshot);
     }
   };
 
@@ -2555,6 +2564,10 @@ export const App: React.FC = () => {
       abortControllerRef.current = null;
     }
     translationPanelRef.current = false;
+    stateRef.current.activeExpert = null;
+    setActiveExpert(null);
+    stateRef.current.activeSkill = null;
+    setActiveSkill(null);
     setScreenReplyAnalysis(null);
     stateRef.current.screenReplyAnalysis = null;
     stateRef.current.activeStyle = 'reply';
@@ -2587,6 +2600,10 @@ export const App: React.FC = () => {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
     }
+    stateRef.current.activeExpert = null;
+    setActiveExpert(null);
+    stateRef.current.activeSkill = null;
+    setActiveSkill(null);
     const text = stateRef.current.originalText;
     if (text.trim()) {
       activateTranslate(text, null);
@@ -4118,7 +4135,7 @@ export const App: React.FC = () => {
                   || undefined;
                 handleStartPolish(refinePrompt, 'reply', inst, undefined, historyOriginal);
               } else {
-                handleStartPolish(originalText, activeStyle, customPrompt);
+                handleStartPolish(originalText, renderedPanelStyle, customPrompt);
               }
             }}
             onToastDismiss={() => setToastVisible(false)}
