@@ -250,6 +250,7 @@ export const App: React.FC = () => {
   const capsuleFadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const panelBlurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSummonTimeRef = useRef<number>(Date.now());
+  const hasGainedFocusRef = useRef(false);
   const capsuleActionRef = useRef<'expanding' | 'copying' | null>(null);
   const capsuleTransitionRef = useRef<{ text: string; generation?: number; until: number } | null>(null);
   const capsuleRevisionRef = useRef(0);
@@ -2044,6 +2045,7 @@ export const App: React.FC = () => {
         setShowAgent(false);
         adapters.storageProvider.set('onboardingDone', true).catch(() => {});
         lastSummonTimeRef.current = Date.now();
+        hasGainedFocusRef.current = false;
         setShowEpoch((n) => n + 1); // remount panel container → replay enter animation
         invoke('append_log', { msg: 'frontend: epoch bumped' }).catch(() => {});
         // 新抓取覆盖内置库浮层与并行对比视图
@@ -2243,6 +2245,7 @@ export const App: React.FC = () => {
       // Tray "设置" menu → show window & open the settings form
       unlistens.push(listen('runbi://open-settings', () => {
         lastSummonTimeRef.current = Date.now();
+        hasGainedFocusRef.current = false;
         setShowEpoch((n) => n + 1);
         setShowSettings(true);
       }).then((un) => un, (e) => { console.warn('listen open-settings failed:', e); return undefined; }));
@@ -3143,6 +3146,8 @@ export const App: React.FC = () => {
       // 由悬停离开/空闲淡出/Esc 负责(Raycast 式失焦即隐藏只适用面板)。
       if (panelBlurTimerRef.current) clearTimeout(panelBlurTimerRef.current);
       if (isMouseDown) return;
+      // 如果窗口从未获得过焦点(如开机启动或后台唤醒中途)，绝不能误杀隐藏
+      if (!hasGainedFocusRef.current) return;
       if (Date.now() - lastSummonTimeRef.current < 1000) return;
       // The native capsule can activate the WebView when clicked. Its
       // captured-selection event can still arrive just after blur; defer the
@@ -3151,6 +3156,7 @@ export const App: React.FC = () => {
         panelBlurTimerRef.current = null;
         const current = stateRef.current;
         if (current.uiMode === 'capsule' || current.showAgent || current.dragging) return;
+        if (!hasGainedFocusRef.current) return;
         if (Date.now() - lastSummonTimeRef.current < 1000) return;
         if (!current.isPinned && !current.isGenerating && !current.showSettings && !current.showHistory && !current.screenReplyAnalysis && !current.showParallel && !current.parallelRunning) {
           if (isTauri) {
@@ -3165,6 +3171,7 @@ export const App: React.FC = () => {
     };
 
     const onFocus = () => {
+      hasGainedFocusRef.current = true;
       if (panelBlurTimerRef.current) {
         clearTimeout(panelBlurTimerRef.current);
         panelBlurTimerRef.current = null;
