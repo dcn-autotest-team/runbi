@@ -33,6 +33,7 @@ export interface PolishPanelProps {
   modelName?: string;
   toastMessage?: string;
   toastVisible?: boolean;
+  toastType?: 'success' | 'error' | 'info';
   showOriginalPreview?: boolean;
   defaultCollapsed?: boolean;
   screenReplyAnalysis?: ScreenReplyAnalysis | null;
@@ -121,6 +122,7 @@ export const PolishPanel: React.FC<PolishPanelProps> = ({
   modelName = 'DeepSeek-V3',
   toastMessage = '已复制到剪贴板',
   toastVisible = false,
+  toastType = 'success',
   showOriginalPreview = false,
   defaultCollapsed = false,
   screenReplyAnalysis,
@@ -237,6 +239,7 @@ export const PolishPanel: React.FC<PolishPanelProps> = ({
       <Toast
         message={toastMessage}
         visible={toastVisible}
+        type={toastType}
         durationMs={1500}
         onDismiss={onToastDismiss}
       />

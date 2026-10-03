@@ -3,7 +3,7 @@
  * SenseAudio (商汤 Token Plan) ASR 语音识别与 TTS 语音合成测试
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import {
   DEFAULT_SENSEAUDIO_ASR_MODEL,
   DEFAULT_SENSEAUDIO_TTS_MODEL,
@@ -15,7 +15,7 @@ import {
   transcribeAudio,
   synthesizeSpeech,
 } from '@runbi/shared/core';
-import { audioBufferToWav } from '../../desktop/src/utils/audioRecorder';
+import { audioBufferToWav, startAudioRecording } from '../../desktop/src/utils/audioRecorder';
 
 async function blobToArrayBuffer(blob: Blob): Promise<ArrayBuffer> {
   if (typeof blob.arrayBuffer === 'function') {
@@ -232,3 +232,64 @@ describe('audioBufferToWav', () => {
     expect(view.getUint16(34, true)).toBe(16);
   });
 });
+
+describe('startAudioRecording error translation', () => {
+  const originalMediaDevices = navigator.mediaDevices;
+
+  afterEach(() => {
+    Object.defineProperty(navigator, 'mediaDevices', {
+      value: originalMediaDevices,
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  it('translates NotFoundError / Requested device not found into friendly Chinese message', async () => {
+    Object.defineProperty(navigator, 'mediaDevices', {
+      value: {
+        getUserMedia: async () => {
+          const err = new Error('Requested device not found');
+          err.name = 'NotFoundError';
+          throw err;
+        },
+      },
+      configurable: true,
+      writable: true,
+    });
+
+    await expect(startAudioRecording()).rejects.toThrow('未检测到麦克风音频输入设备，请连接麦克风后重试');
+  });
+
+  it('translates NotAllowedError / Permission denied into friendly Chinese message', async () => {
+    Object.defineProperty(navigator, 'mediaDevices', {
+      value: {
+        getUserMedia: async () => {
+          const err = new Error('Permission denied');
+          err.name = 'NotAllowedError';
+          throw err;
+        },
+      },
+      configurable: true,
+      writable: true,
+    });
+
+    await expect(startAudioRecording()).rejects.toThrow('麦克风权限未开启，请在系统设置中允许应用访问麦克风');
+  });
+
+  it('translates NotReadableError into friendly Chinese message', async () => {
+    Object.defineProperty(navigator, 'mediaDevices', {
+      value: {
+        getUserMedia: async () => {
+          const err = new Error('Device in use');
+          err.name = 'NotReadableError';
+          throw err;
+        },
+      },
+      configurable: true,
+      writable: true,
+    });
+
+    await expect(startAudioRecording()).rejects.toThrow('麦克风正被其他应用占用，无法启动录音');
+  });
+});
+

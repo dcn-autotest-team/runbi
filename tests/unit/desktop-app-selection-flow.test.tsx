@@ -1014,6 +1014,7 @@ describe('Desktop selection-to-polish flow', () => {
     invoke.mockClear();
 
     await act(async () => {
+      window.dispatchEvent(new Event('focus'));
       window.dispatchEvent(new Event('blur'));
     });
     await act(async () => vi.advanceTimersByTimeAsync(200));

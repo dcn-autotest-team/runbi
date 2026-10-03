@@ -59,7 +59,46 @@ export async function startAudioRecording(): Promise<ActiveRecorder> {
     throw new Error('当前环境不支持录音（未找到麦克风设备或权限受限）');
   }
 
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  let stream: MediaStream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (err: unknown) {
+    const error = err as { name?: string; message?: string } | null;
+    const name = error?.name || '';
+    const message = error?.message || '';
+
+    if (
+      name === 'NotFoundError' ||
+      name === 'DevicesNotFoundError' ||
+      message.includes('Requested device not found') ||
+      message.toLowerCase().includes('device not found')
+    ) {
+      throw new Error('未检测到麦克风音频输入设备，请连接麦克风后重试');
+    }
+    if (
+      name === 'NotAllowedError' ||
+      name === 'PermissionDeniedError' ||
+      message.toLowerCase().includes('permission denied')
+    ) {
+      throw new Error('麦克风权限未开启，请在系统设置中允许应用访问麦克风');
+    }
+    if (
+      name === 'NotReadableError' ||
+      name === 'TrackStartError' ||
+      message.toLowerCase().includes('in use') ||
+      message.toLowerCase().includes('could not start')
+    ) {
+      throw new Error('麦克风正被其他应用占用，无法启动录音');
+    }
+    if (name === 'OverconstrainedError') {
+      throw new Error('未找到符合要求的麦克风设备');
+    }
+    if (name === 'SecurityError') {
+      throw new Error('录音受安全策略限制，无法启动');
+    }
+
+    throw new Error(`无法启动录音：${message || '请检查音频输入设置'}`);
+  }
   const mimeType = typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
     ? 'audio/webm;codecs=opus'
     : typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported('audio/webm')

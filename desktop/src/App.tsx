@@ -151,6 +151,7 @@ export const App: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string>('');
   const [toastVisible, setToastVisible] = useState<boolean>(false);
+  const [toastType, setToastType] = useState<'success' | 'error' | 'info'>('success');
   const [isPinned, setIsPinned] = useState<boolean>(false);
   const [showSettings, setShowSettings] = useState<boolean>(false);
 
@@ -512,15 +513,25 @@ export const App: React.FC = () => {
   // Show Toast
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const showToast = useCallback((msg: string, durationMs = 2000) => {
-    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-    setToastMessage(msg);
-    setToastVisible(true);
-    toastTimerRef.current = setTimeout(() => {
-      setToastVisible(false);
-      toastTimerRef.current = null;
-    }, durationMs);
-  }, []);
+  const showToast = useCallback(
+    (
+      msg: string,
+      durationOrType: number | 'success' | 'error' | 'info' = 2000,
+      maybeType?: 'success' | 'error' | 'info'
+    ) => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+      const durationMs = typeof durationOrType === 'number' ? durationOrType : 2000;
+      const type = typeof durationOrType === 'string' ? durationOrType : (maybeType ?? 'success');
+      setToastMessage(msg);
+      setToastType(type);
+      setToastVisible(true);
+      toastTimerRef.current = setTimeout(() => {
+        setToastVisible(false);
+        toastTimerRef.current = null;
+      }, durationMs);
+    },
+    []
+  );
 
   useEffect(() => () => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
@@ -2908,7 +2919,7 @@ export const App: React.FC = () => {
       }
     } catch (e) {
       console.warn('recapture failed:', e);
-      showToast('重新截屏失败，请确认目标窗口未最小化', 3000);
+      showToast('重新截屏失败，请确认目标窗口未最小化', 3000, 'error');
     } finally {
       setIsRecapturing(false);
     }
@@ -2952,9 +2963,9 @@ export const App: React.FC = () => {
     } else if (res.fallbackCopied) {
       // 缺陷3:贴回失败但文本已在剪贴板——弹常驻浮条(手动关闭);3.5s Toast 容易错过
       setPasteFallbackBar(true);
-      showToast('贴回失败，已复制到剪贴板', 2000);
+      showToast('贴回失败，已复制到剪贴板', 2000, 'info');
     } else {
-      showToast(res.error || '替换失败', 3500);
+      showToast(res.error || '替换失败', 3500, 'error');
     }
   };
 
@@ -3939,7 +3950,7 @@ export const App: React.FC = () => {
                   onOpenReleaseHistory={() => {
                     invoke('open_url', {
                       url: 'https://github.com/dcn-autotest-team/runbi-updates/releases',
-                    }).catch(() => showToast('未能打开发布记录'));
+                    }).catch(() => showToast('未能打开发布记录', 'error'));
                   }}
                 />
                 <p className="px-1 text-[10px] leading-4 text-slate-500">
@@ -4057,6 +4068,7 @@ export const App: React.FC = () => {
             modelName={apiKey ? model : 'DeepSeek-Mock'}
             toastMessage={toastMessage}
             toastVisible={toastVisible}
+            toastType={toastType}
             showOriginalPreview={!screenReplyAnalysis}
             screenReplyAnalysis={screenReplyAnalysis}
             onSelectClarifyChip={handleSelectClarifyChip}
@@ -4131,7 +4143,7 @@ export const App: React.FC = () => {
             model={model}
             onModelChange={(newModel) => {
               setModel(newModel);
-              void adapters.storageProvider.set('model', newModel).catch(() => showToast('模型已切换，但保存失败，请重试'));
+              void adapters.storageProvider.set('model', newModel).catch(() => showToast('模型已切换，但保存失败，请重试', 'error'));
             }}
             modelList={modelList}
             onRefreshModels={handleFetchModels}
@@ -4204,6 +4216,7 @@ export const App: React.FC = () => {
         <Toast
           visible={toastVisible}
           message={toastMessage}
+          type={toastType}
           onDismiss={() => setToastVisible(false)}
         />
 

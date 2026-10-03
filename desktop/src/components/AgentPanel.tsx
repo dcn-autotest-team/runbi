@@ -58,7 +58,7 @@ export interface AgentPanelProps {
   onRefreshModels?: () => Promise<void>;
   modelsLoading?: boolean;
   modelListError?: string;
-  onToast?: (msg: string) => void;
+  onToast?: (msg: string, type?: 'success' | 'error' | 'info') => void;
   initialPrompt?: string;
 }
 
@@ -241,7 +241,7 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
         setProjectDir(chosen.trim());
       }
     } catch (err: any) {
-      onToast?.(`选择目录失败: ${err?.message || err}`);
+      onToast?.(`选择目录失败: ${err?.message || err}`, 'error');
     } finally {
       browsingRef.current = false;
       if (mountedRef.current) setIsBrowsingFolder(false);
@@ -270,7 +270,7 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
 
   const handleNewSession = useCallback(() => {
     if (runningRef.current) {
-      onToast?.('请先停止当前正在运行的任务');
+      onToast?.('请先停止当前正在运行的任务', 'info');
       return;
     }
     setTurns([]);
@@ -286,7 +286,7 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
 
   const handleSwitchSession = useCallback((sessionId: string) => {
     if (runningRef.current) {
-      onToast?.('请先停止当前正在运行的任务再切换会话');
+      onToast?.('请先停止当前正在运行的任务再切换会话', 'info');
       return;
     }
     const target = sessions.find((s) => s.id === sessionId);
@@ -325,7 +325,7 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
     const trimmed = taskPrompt.trim();
     if (!trimmed) return;
     if (!endpoint.trim() || !model.trim()) {
-      onToast?.('请先在设置中配置模型和服务地址');
+      onToast?.('请先在设置中配置模型和服务地址', 'info');
       return;
     }
     const directory = projectDir.trim() || '.';
@@ -493,7 +493,7 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
           case 'Error':
             finish('error', `任务失败: ${payload.message}`);
             setTaskPrompt((draft) => draft || trimmed);
-            onToast?.(`任务失败: ${payload.message}`);
+            onToast?.(`任务失败: ${payload.message}`, 'error');
             break;
         }
       };
@@ -515,7 +515,7 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
       if (!mountedRef.current) return;
       setTaskPrompt((draft) => draft || trimmed);
       finish('error', `任务失败: ${err?.message || err}`);
-      onToast?.(`任务失败: ${err?.message || err}`);
+      onToast?.(`任务失败: ${err?.message || err}`, 'error');
     } finally {
       pauseSpeed();
       runningRef.current = false;
@@ -531,7 +531,7 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
     try {
       await invoke('abort_agent_task');
     } catch (err: any) {
-      onToast?.(`中止失败: ${err?.message || err}`);
+      onToast?.(`中止失败: ${err?.message || err}`, 'error');
     }
   }, [onToast]);
 
@@ -544,16 +544,16 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
         toolCalls: turn.toolCalls.map((tool) => tool.callId === callId ? { ...tool, pendingApproval: false } : tool),
       } : turn));
     } catch (err: any) {
-      onToast?.(`操作失败: ${err?.message || err}`);
+      onToast?.(`操作失败: ${err?.message || err}`, 'error');
     }
   }, [onToast]);
 
   const handleCopy = async (text: string) => {
     try {
       await navigator.clipboard.writeText(text);
-      onToast?.('已复制到剪贴板');
+      onToast?.('已复制到剪贴板', 'success');
     } catch {
-      onToast?.('复制失败，请选中文字手动复制');
+      onToast?.('复制失败，请选中文字手动复制', 'error');
     }
   };
 
@@ -592,7 +592,7 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
       try {
         const blob = await recorder.stop();
         if (!blob || blob.size < 100) {
-          onToast?.('录音时长过短');
+          onToast?.('录音时长过短', 'info');
           setRecordingState('idle');
           return;
         }
@@ -600,19 +600,19 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
         if (text) {
           setTaskPrompt((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text));
           inputRef.current?.focus();
-          onToast?.('语音已转写');
+          onToast?.('语音已转写', 'success');
         } else {
-          onToast?.('未识别出有效语音文本');
+          onToast?.('未识别出有效语音文本', 'info');
         }
       } catch (err: any) {
-        onToast?.(err.message || '语音识别失败');
+        onToast?.(err?.message || '语音识别失败', 'error');
       } finally {
         setRecordingState('idle');
         setRecordingDuration(0);
       }
     } else if (recordingState === 'idle') {
       if (!apiKey?.trim()) {
-        onToast?.('请先在「设置」中配置商汤 API Key，以便使用语音识别服务');
+        onToast?.('请先在「设置」中配置商汤 API Key，以便使用语音识别服务', 'info');
         return;
       }
       try {
@@ -624,7 +624,7 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
           setRecordingDuration((d) => d + 1);
         }, 1000);
       } catch (err: any) {
-        onToast?.(`无法启动录音: ${err.message || err}`);
+        onToast?.(err?.message || '未检测到麦克风音频输入设备，请连接麦克风后重试', 'error');
       }
     }
   };
@@ -656,7 +656,7 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
     stopCurrentAudio();
 
     if (!apiKey?.trim()) {
-      onToast?.('请先在「设置」中配置商汤 API Key，以便使用语音朗读服务');
+      onToast?.('请先在「设置」中配置商汤 API Key，以便使用语音朗读服务', 'info');
       return;
     }
 
@@ -673,13 +673,13 @@ export const AgentPanel: React.FC<AgentPanelProps> = ({
         stopCurrentAudio();
       };
       audio.onerror = () => {
-        onToast?.('音频播放失败');
+        onToast?.('音频播放失败', 'error');
         stopCurrentAudio();
       };
       setIsTtsLoading(false);
       await audio.play();
     } catch (err: any) {
-      onToast?.(err.message || '语音朗读失败');
+      onToast?.(err?.message || '语音朗读失败', 'error');
       stopCurrentAudio();
     }
   };

@@ -51,7 +51,13 @@ export const Toast: React.FC<ToastProps> = ({
       role="status"
       aria-live="polite"
       id="runbi-toast"
-      className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[2147483647] flex items-center gap-1.5 px-4 py-2 bg-slate-900/90 dark:bg-slate-950/95 text-white text-xs font-medium rounded-full shadow-xl border border-slate-700/50 backdrop-blur-md pointer-events-none select-none ${
+      className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[2147483647] flex items-center gap-1.5 px-4 py-2 bg-slate-900/90 dark:bg-slate-950/95 text-xs font-medium rounded-full shadow-xl border backdrop-blur-md pointer-events-none select-none ${
+        type === 'error'
+          ? 'border-rose-500/50 text-rose-100 shadow-rose-950/30'
+          : type === 'info'
+          ? 'border-sky-500/50 text-sky-100 shadow-sky-950/30'
+          : 'border-slate-700/50 text-white'
+      } ${
         visible ? 'animate-toast-in' : 'animate-toast-out'
       } ${className}`}
     >
